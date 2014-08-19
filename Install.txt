@@ -1,0 +1,22 @@
+To run this game, you'll need to download the file oregontrail.js, and create a new folder called "ortrail" in your xtrn directory.
+
+To run the game, you use the same specifiers that you would any javascript file you want to make into an External Program, but in case you aren't familiar with what that would look like here are the settings I use :
+
+Name                       Oregon Trail
+Internal Code              OREGONTR
+Start-up Directory         ../xtrn/ortrail
+Command Line               ?oregontrail.js
+Clean-up Command Line
+Execution Cost             None
+Access Requirements
+Execution Requirements
+Multiple Concurrent Users  Yes
+Intercept Standard I/O     No
+Native (32-bit) Executable No
+Modify User Data           No
+Execute on Event           No
+BBS Drop File Type         None
+Place Drop File In         Node Directory
+
+No configuration is needed for InterBBS play as the database is hosted at Futureland.  If you would like to set up your own local server, it only requires changing one variable and then setting it up the JSON service, however, because I think it makes the game more fun, I'm not including those instructions with the documentation.  You are welcome to run your own server, and I'll begrudgingly tell you how if you get in contact with me, or if you understand the code you should be able to figure it out.
+
