@@ -1,10 +1,18 @@
+var root = js.exec_dir;
+var server_file = new File(file_cfgname(root, "server.ini"));
+server_file.open('r',true);
+//var autoUpdate=server_file.iniGetValue(null,"autoUpdate");
+var serverAddr=server_file.iniGetValue(null,"host","localhost");
+var serverPort=server_file.iniGetValue(null,"port",10088);
+server_file.close();
+
 //The official and most updated version of this game can be found at
 //https://github.com/chairmanmow/synchro_trail
 
 load("sbbsdefs.js");
 //somewhat faithfully version adapted by "larry lagomorph" from 1977 basic code @ http://deserthat.files.wordpress.com/2010/11/oregon1.doc (you can find traces of the BASIC left in this document)
 //contact grudgemirror@gmail.com re:oregontrail with any bug reports (there probably are some i haven't found)
-var version = "0.2";
+var version = "0.2.1b";
 console.putmsg("\r\n\r\n\1y                    OREGON TRAIL \1wversion no " + version + "\r\n\r\n\1h\1cby Larry Lagomorph of Futureland BBS \1yvisit us @ futureland.grudgemirror.com\r\n");
 console.putmsg("\r\n\r\n                       updated August 2014\r\n");
 console.pause();
@@ -14,7 +22,7 @@ return Math.floor(Math.random() * (max - min +1))+ min;  //keep
 }
 load("json-client.js");
 
-var db = new JSONClient("futureland.grudgemirror.com",10088);
+var db = new JSONClient(serverAddr,serverPort);
 
 var highScores = db.read("TRAIL","TRAIL.SCORES",1);
 db.cycle();
@@ -121,6 +129,7 @@ var riderHostilityFactor = 0;
 var deadFlag = 0;
 var illnessFlag = 0;
 var causeOfDeath = "";
+var outOfAmmoToggle = new Boolean;
 
 
 firstPrompt();  // finds out what your shooting level is 
@@ -692,7 +701,7 @@ console.putmsg("\1mYOU RAN OUT OF BULLETS AND GOT MASSACRED BY THE RIDERS");
 //nsole.putmsg("\1yammoAMT var : \1h\1r  " + ammoAMT);
 causeOfDeath = "got massacred";
 formalities();
-return;  //another one that might not be necessary but comes after death
+//return;  //another one that might not be necessary but comes after death
 }
 else {
 eventSelector();
@@ -846,16 +855,17 @@ fortAMT = 0;
 	}
 }
 function shotInLeg() { 
-	if(bangResponse <= 35) { 
+	if(bangResponse <= 35 && ammoAMT > 1  && outOfAmmoToggle != true) { 
 	quickestDraw();
 	}
 	else {
 	console.putmsg("\r\n\1h\1yYOU GOT \1rSHOT \1yIN THE LEG AND THEY TOOK ONE OF YOUR \1wOXEN");
 	woundedFlag = 1;
-console.putmsg("\r\nBETTER HAVE A DOC LOOK AT YOUR WOUND");
-supplyAMT=supplyAMT-5;
-animalsAMT=animalsAMT-20;
-	 mountains();
+	console.putmsg("\r\nBETTER HAVE A DOC LOOK AT YOUR WOUND");
+	supplyAMT=supplyAMT-5;
+	animalsAMT=animalsAMT-20;
+	outOfAmmoToggle = false;
+	mountains();
 	 }
 	 }
 function eventSelector() {
@@ -941,6 +951,7 @@ if(eventNo == 8) {
 	else {
 	console.putmsg("\1rYOU RAN OUT OF BULLETS---THEY GET LOTS OF CASH");
 	 cashInitialPurchase=cashInitialPurchase/3;
+	outOfAmmoToggle = true;
 	shotInLeg();
 	}
 }
@@ -1280,7 +1291,7 @@ function newHighScore(){
     console.putmsg("\1h\1yYOUR NAME HAS BEEN ADDED TO THE HIGH SCORE LIST!!!");
 	this.fromBBS = system.name;
     this.score = Score();
-	this.score = this.score * (21 - turnNumber);
+	this.score = this.score * (22 - turnNumber) * (6 - choiceShootingExptLvl);
 	console.putmsg("\r\n\1h\1mYour score was \1w" + this.score + "\r\n");
     this.corpseName = user.alias;
 	this.deathDate = system.datestr();
