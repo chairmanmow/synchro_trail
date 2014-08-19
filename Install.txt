@@ -1,4 +1,4 @@
-To run this game, you'll need to download the file oregontrail.js, and create a new folder called "ortrail" in your xtrn directory.
+To run this game, you'll need to download the file oregontrail.js, and create a new folder called "ortrail" in your xtrn directory.  For interbbs play or local configuration, you should also download the file "server.ini" from this directory, and place it in the 'ortrail' folder.  
 
 To run the game, you use the same specifiers that you would any javascript file you want to make into an External Program, but in case you aren't familiar with what that would look like here are the settings I use :
 
@@ -18,5 +18,8 @@ Execute on Event           No
 BBS Drop File Type         None
 Place Drop File In         Node Directory
 
-No configuration is needed for InterBBS play as the database is hosted at Futureland.  If you would like to set up your own local server, it only requires changing one variable and then setting it up the JSON service, however, because I think it makes the game more fun, I'm not including those instructions with the documentation.  You are welcome to run your own server, and I'll begrudgingly tell you how if you get in contact with me, or if you understand the code you should be able to figure it out.
+The server.ini contains information to connect to a centralized player database.  If you would like to create your own db, simply edit the server.ini file where it says host and point to your BBS.  Then you should go and edit sbbs/ctrl/json-service.ini, and add this information to the end of the file:
+
+[TRAIL]
+dir=../xtrn/ortrail/
 
