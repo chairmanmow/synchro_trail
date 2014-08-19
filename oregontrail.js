@@ -1,12 +1,97 @@
+//The official and most updated version of this game can be found at
+//https://github.com/chairmanmow/synchro_trail
 
+load("sbbsdefs.js");
 //somewhat faithfully version adapted by "larry lagomorph" from 1977 basic code @ http://deserthat.files.wordpress.com/2010/11/oregon1.doc (you can find traces of the BASIC left in this document)
 //contact grudgemirror@gmail.com re:oregontrail with any bug reports (there probably are some i haven't found)
-  
+var version = "0.2";
+console.putmsg("\r\n\r\n\1y                    OREGON TRAIL \1wversion no " + version + "\r\n\r\n\1h\1cby Larry Lagomorph of Futureland BBS \1yvisit us @ futureland.grudgemirror.com\r\n");
+console.putmsg("\r\n\r\n                       updated August 2014\r\n");
+console.pause();
+console.clear();
+function getRandomInt(min,max){
+return Math.floor(Math.random() * (max - min +1))+ min;  //keep
+}
+load("json-client.js");
+
+var db = new JSONClient("futureland.grudgemirror.com",10088);
+
+var highScores = db.read("TRAIL","TRAIL.SCORES",1);
+db.cycle();
+
+if(highScores == undefined){
+    console.putmsg("Creating High Score File");
+    var blankArray = [];
+    db.write("TRAIL","TRAIL.SCORES",blankArray,2);
+    db.cycle();
+}
+highScores = db.read("TRAIL","TRAIL.SCORES",1);
+db.cycle;
+console.putmsg("\1g        THESE SAVVY ADVENTURERS HAVE SAFELY ARRIVED IN OREGON CITY! \r\n\r\n");
+function displayScores(){
+if(highScores.length == 0) {
+console.putmsg("\1h\1w    No one has conquered the trail yet!  Be the \1rfirst \1wname on the list!!! \r\n\r\n");
+console.pause();
+console.clear();
+return;
+} else {
+var ct = 0;
+for(i = 0; i < highScores.length; i++){
+var highScore = highScores[i];
+console.putmsg("\1h\1y" + highScore["date"] + "\1w ---\1w " + highScore["name"] + "\1g traveled from \1w" + highScore["bbs"] + "\1g scoring \1w" + highScore["score"] + " \1gpoints!\r\n");
+ct += 2;
+}
+console.pause();
+console.clear();
+return;  // do not erase
+
+}
+}
+displayScores();
+
+var tombStones = db.read("TRAIL","TRAIL.GRAVES",1);
+db.cycle();
+if(tombStones == undefined){
+    console.putmsg("Creating Grave File");
+    var blankArray = [];
+    db.write("TRAIL","TRAIL.GRAVES",blankArray,2);
+    db.cycle();
+}
+
+tombStones = db.read("TRAIL","TRAIL.GRAVES",1);
+db.cycle();
+
+tombStones = tombStones.reverse();
+
+console.putmsg("\1h\1r       THESE ARE THE MOST RECENT TRAVELERS TO PERISH ON THE TRAIL \r\n\1w                            \1h\1y\1i***\1w\1n[\1h\R.I.P.\1n]\1h\1y\1i***\r\n");
+function displayGraves(){
+var rowsMinusOne = console.screen_rows - 4;
+var ct = 0;
+
+for(i = 0; i < tombStones.length && ct < rowsMinusOne; i++){
+var tombStone = tombStones[i];
+console.putmsg("\1h\1b" +tombStone["date"] + "\1n\1w**\1h" + tombStone["name"] + " \1n\1w" + tombStone["cause"] + "\1c,\1h\1w " + tombStone["score"] + "\1n miles from \1h\1w" + tombStone["bbs"] + "\r\n");
+console.putmsg("\1h\1y-\1c" + tombStone["engraving"] + "\r\n");
+ct += 2;
+}
+return;  // do not erase
+
+}
+displayGraves();
+console.pause();
+console.clear();
+
+
+// game start
+
+function OregonTrail(){
+function Score(){
+    return totalMileage + animalsAMT + foodAMT + clothingAMT + supplyAMT;  //do not erase
+}
 
 
 
-var version = "0.1"
-console.putmsg("OREGON TRAIL\r\nversion no " + version + "\r\n\r\n");
+
 var yesNo = new String;
 var choiceShootingExptLvl = new Number;
 var animalsAMT = new Number;
@@ -35,6 +120,8 @@ var tacticChoice = 0;
 var riderHostilityFactor = 0;
 var deadFlag = 0;
 var illnessFlag = 0;
+var causeOfDeath = "";
+
 
 firstPrompt();  // finds out what your shooting level is 
 initialPurchase();
@@ -227,7 +314,6 @@ function doctorVisit() {
 	cantAffordDoctor();
 	}
 	}
-
 function turnStart(){
 	inventoryCheck();
 	//console.putmsg("\r\nTurn \1m" + turnNumber + "\1w Start.\r\n\1gIllness Flag = " + illnessFlag + "\r\n\1rWounded Flag = " + woundedFlag + "\r\n\1bActual Mileage = " + totalMileage + "\r\n\1mSouth Pass Flag normal[mile] = " + southPassFlag + "/" + mileSouthPassFlag + "\r\n");
@@ -313,8 +399,9 @@ if(turnNumber == 19) {
 		 if(turnNumber == 20) {
 		console.putmsg("\1h\1wYOU HAVE BEEN ON THE TRAIL TOO LONG  ------ \r\n");
 		console.putmsg("\1h\1wYOUR FAMILY DIES IN THE FIRST BLIZZARD OF WINTER");
+		causeOfDeath = "got too tired";
 		formalities();
-		return; 
+		return; //this might be okay since it should exit the function after the end of the game, maybe take out
 		//console.crlf();
 		}
 		console.putmsg(" 1847\r\n");
@@ -324,7 +411,6 @@ else {
 finalTurn();
 }
 }
-
 function cantAffordDoctor() {
  cashInitialPurchase=0
  console.putmsg("YOU CAN'T AFFORD A DOCTOR");
@@ -379,10 +465,9 @@ function fortHuntContinue(){
 		{
 		console.putmsg("\1i\1r[Invalid Selection]\1n");
 		fortHuntContinue();
-		return;
+		//return;
 }
 }
-
 function fortBuy(){
 console.putmsg("\1h\1gENTER WHAT YOU WISH TO SPEND ON THE FOLLOWING\r\n");
 
@@ -394,7 +479,6 @@ supplyFortCycle();
 totalMileage = totalMileage-45;
 checkFoodAMT();
 }
-
 function goHunting() {
 if(ammoAMT<39) {
 	console.putmsg("TOUGH---YOU NEED MORE BULLETS TO GO HUNTING");
@@ -425,9 +509,7 @@ checkFoodAMT();
 }
 }
 //the following function is my own helper function for returning a random integer for selecting a bang word
-function getRandomInt(min,max){
-return Math.floor(Math.random() * (max - min +1))+ min;
-}
+
 function shootingSub() {
 var variationsOfShootingWord = new Array;
 variationsOfShootingWord[0]="BANG"
@@ -462,7 +544,7 @@ function checkFoodAMT(){
 	//console.putmsg("checkFoodAMT function");
 	 if(foodAMT <= 13) {
 		 starve();
-		 return;
+		 return;  //this should be okay 
 		} 
 		else
 	
@@ -480,7 +562,7 @@ else if(choiceEat > 3 || choiceEat < 1) {
 	console.crlf();
 	console.putmsg("YOU CAN'T EAT THAT WELL");
 	eatChoice();
-	return;
+	//return;  this may need to be put back in
 	
 }	
 else
@@ -504,7 +586,6 @@ function actionEvaluate()  {
 			fortBuy();
 		} 
 }
-
 function riders() {
 //console.putmsg("riders function beginning");
 if(Math.random() * 10 < ((Math.pow(totalMileage/100-4),27)+72)/(((Math.pow(totalMileage/100-4),2)+12)-1) ){
@@ -573,7 +654,7 @@ attackRiders();
 }
 }
 }
-// was miles.Plus.Fifteen
+
 function milesAfterRiders() {
  if(tacticChoice == 1) { //RUN milesMinusFive(); 
 totalMileage=totalMileage+15;
@@ -609,8 +690,9 @@ console.beep();
  if(ammoAMT <= 0) {
 console.putmsg("\1mYOU RAN OUT OF BULLETS AND GOT MASSACRED BY THE RIDERS");
 //nsole.putmsg("\1yammoAMT var : \1h\1r  " + ammoAMT);
+causeOfDeath = "got massacred";
 formalities();
-return;
+return;  //another one that might not be necessary but comes after death
 }
 else {
 eventSelector();
@@ -642,8 +724,7 @@ function showSupplies() {
 console.putmsg("\r\n\1h\1w*FOOD*" + "\1h\1rBULLETS " + "\1bCLOTHING" + "\1yMISC. SUPP." + "\1gCASH");
 	console.crlf();
 	console.putmsg("\1w--" + foodAMT + "\1w--\1r --" + ammoAMT + "--\1b-- " + clothingAMT + "--\1y--" + supplyAMT + " --\1g--" + cashInitialPurchase + "\r\n");
-	}
-	
+	}	
 function setFortAmtSubroutine() {
 	fortAMT = console.getnum();
 	if(cashInitialPurchase > 0) {  
@@ -665,8 +746,7 @@ else
 		{
 		console.putmsg("\1h\1rYou don't have any money left");
 }
-}
-		
+}		
 function foodFortCycle(){
 	fortAMT = 0;
 	console.putmsg("\1h\1wFOOD\r\n");
@@ -692,7 +772,6 @@ function foodFortCycle(){
 	console.putmsg("\1h\1rYou don't have any money left");
 	}
 }
-
 function ammoFortCycle(){
 	console.putmsg("\1h\1rAMMUNITION");
 fortAMT = 0;
@@ -717,7 +796,6 @@ fortAMT = 0;
 		console.putmsg("\1h\1rYou don't have any money left");
 }
 }
-
 function clothingFortCycle(){
 	console.putmsg("\1h\1bCLOTHING");
 	fortAMT = 0;
@@ -767,8 +845,7 @@ fortAMT = 0;
 	console.putmsg("\1h\1rYou don't have any money left");
 	}
 }
-
-	function shotInLeg() { 
+function shotInLeg() { 
 	if(bangResponse <= 35) { 
 	quickestDraw();
 	}
@@ -888,15 +965,16 @@ if(eventNo == 11) {
 	supplyAMT=supplyAMT-5;
 	if(supplyAMT <= 0) {
 	console.putmsg("\1r\r\n\1i YOU DIE OF SNAKEBITE SINCE YOU HAVE NO MEDICINE\1n");
+	causeOfDeath = "got bit by a snake";
 	formalities();
-	return;
+	return;  // comes after formalities
 	}
 	else {
 	 mountains();
 	 }
 	}
 if(eventNo == 12) {
-	console.putmsg("YOUR WAGON GETS \1ySWAMPED \1cFORDING \1bRIVER--\11h\1wLOSE FOOD \1wAND \1bCLOTHES");
+	console.putmsg("YOUR WAGON GETS \1ySWAMPED \1cFORDING \1h\1bRIVER--\r\n\1h\1wLOSE FOOD \1wAND \1bCLOTHES");
 	foodAMT=foodAMT-30;
 	clothingAMT=clothingAMT-20;
 	totalMileage=totalMileage-20-20*Math.random();
@@ -950,13 +1028,12 @@ if(eventNo == 15) {
 }
 
 }
-
 // ***MOUNTAINS***
 function mountains()  {
 	console.pause();
 	if(totalMileage <= 950) {
 	turnCheck();
-	return;
+	return;//this is the sketchiest one it seems to leave in.
 	}
 	if(Math.random() * 10< 9-((Math.pow(totalMileage/100-15,2)+72)/(Math.pow(totalMileage/100-15),2)+12)) {
 	hailStorm();
@@ -1048,8 +1125,9 @@ checkMileageNine50();
 // ***DYING***
 function starve() {
 console.putmsg("\r\n\1i\1rYOU RAN OUT OF FOOD AND STARVED TO DEATH\1n");
+causeOfDeath = "starved to death";
 formalities();
-return;
+return;  //after formalities
 }
 function outOfMedicalSupplies() {
 console.putmsg("\1rYOU RAN OUT OF MEDICAL SUPPLIES");
@@ -1062,14 +1140,16 @@ if(woundedFlag == 1) {
  }
  else {
 console.putmsg("\1cPNEUMONIA");
+causeOfDeath = "got pneumonia";
 formalities();
-return;
+return;  //after formalities
 }
 }
 function injuries() {
 console.putmsg("\1h\1rINJURIES");
+causeOfDeath = "was injured badly";
 formalities();
-return;
+return;  //after formalities
 }
 function formalities() {
 console.crlf();
@@ -1091,6 +1171,24 @@ else {
 telegraph();
 }
 }
+
+function digGrave(){
+    console.putmsg("\1wWhat would you like on your tombstone? (\1r79 chars\1w)\r\n\1y>");
+    this.engraving = console.getstr();
+	this.fromBBS = system.name;
+    this.engraving = this.engraving.substring(0,78);
+    this.score = parseInt(totalMileage);
+    this.corpseName = user.alias;
+	this.deathDate = system.datestr();
+	this.deathCause = causeOfDeath;
+	console.clear();
+    console.putmsg("\r\n\r\n\1h\1wHere lies the rotten corpse of " + this.corpseName);
+    console.putmsg("\r\n\1w ... \r\n" + this.engraving);
+	console.putmsg("\r\n\1wTraveled \1h" + this.score + "\1n miles from \1h" + this.fromBBS + "\1n before they \1h" + this.deathCause + "\1n and died.\r\n\r\n\r\n");
+    graveObj = {"name":this.corpseName,"engraving":this.engraving,"score":this.score,"bbs":this.fromBBS,"date":this.deathDate,"cause":this.deathCause};
+    db.push("TRAIL","TRAIL.GRAVES",graveObj,2);
+    db.cycle();
+}
 function telegraph() {
 console.putmsg("\r\n\1h\1i\1yTHAT WILL BE $4.50 FOR THE TELEGRAPH CHARGE.\1n\r\n");
  console.crlf();
@@ -1102,8 +1200,11 @@ console.crlf();
 console.putmsg("\1h\1wSINCERELY");
 console.crlf();
 console.putmsg("\1gTHE OREGONCITY CHAMBER OF COMMERCE\r\n\r\n");
-throw "You are dead";
+digGrave();
+throw "gameOver";
+console.putmsg("\1r\1iGAME OVER");
 }
+
 
 // ***FINAL TURN***
 function finalTurn() {
@@ -1173,8 +1274,21 @@ console.putmsg("HEARTIEST CONGRATULATIONS");
 console.putmsg("AND WISHES YOU A PROSERPOUS LIFE AHEAD");
 console.crlf();
 console.putmsg("AT YOUR NEW HOME");
+newHighScore();
 }
-
+function newHighScore(){
+    console.putmsg("\1h\1yYOUR NAME HAS BEEN ADDED TO THE HIGH SCORE LIST!!!");
+	this.fromBBS = system.name;
+    this.score = Score();
+	this.score = this.score * (21 - turnNumber);
+	console.putmsg("\r\n\1h\1mYour score was \1w" + this.score + "\r\n");
+    this.corpseName = user.alias;
+	this.deathDate = system.datestr();
+    scoreObj = {"name":this.corpseName,"score":this.score,"bbs":this.fromBBS,"date":this.deathDate};
+    db.push("TRAIL","TRAIL.SCORES",scoreObj,2);
+    db.cycle();
+	throw err;
+}
 
 // ***ILLNESS SUB-ROUTINE***
 function illnessSubroutine() {
@@ -1364,6 +1478,14 @@ misfirePhrase[1]="You completely miss your target, but almost kill your favorite
 misfirePhrase[3]="Who taught you to shoot? Plaxico Burress?"
 var misfirePhraseSelector=parseInt(getRandomInt(0,misfirePhrase.length - 1));
 console.putmsg("\1h\1y" + misfirePhrase[misfirePhraseSelector] + "\r\n");
+}
+}
+
+try {
+OregonTrail(); 
+}
+catch(err) {
+console.putmsg("\1r\1iGAME OVER");
 }
  
  
