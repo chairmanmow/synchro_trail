@@ -5,7 +5,7 @@ To run the game, you use the same specifiers that you would any javascript file 
 Name                       Oregon Trail
 Internal Code              OREGONTR
 Start-up Directory         ../xtrn/ortrail
-Command Line               *oregontrail.js
+Command Line               ?oregontrail.js
 Clean-up Command Line
 Execution Cost             None
 Access Requirements
