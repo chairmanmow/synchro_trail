@@ -135,8 +135,7 @@ function OregonTrail() {
     firstTurn();
 //log(eventNo.toSource());
     function firstPrompt() {
-        console.putmsg("\1h\1mDO YOU NEED INSTRUCTIONS (\1gYES/\1rNO)");
-        console.putmsg("1 - Play \r\n2 - Instructions\r\n3 - Quit\r\n)
+        console.putmsg("1 - Play \r\n2 - Instructions\r\n3 - Quit\r\n");
         yesNo = console.getstr();
         yesNo = yesNo.toUpperCase();
         if (yesNo == "1") {
