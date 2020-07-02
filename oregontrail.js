@@ -130,20 +130,27 @@ function OregonTrail() {
     var outOfAmmoToggle = new Boolean;
 
 
-    firstPrompt();  // finds out what your shooting level is 
-    initialPurchase();
-    firstTurn();
-//log(eventNo.toSource());
-    function firstPrompt() {
-        console.putmsg("\1h\1mDO YOU NEED INSTRUCTIONS (\1gYES/\1rNO)");
-        yesNo = console.getstr();
-        yesNo = yesNo.toUpperCase();
+	var userSelection = "0";
+	while (userSelection != "1") {
+		userSelection = firstPrompt();
+	}	
+	rifleSkills();  // finds out what your shooting level is 
+	initialPurchase();
+	firstTurn();
 
-        if (yesNo[0] == "Y") {
-            instructions();
-        }
-        rifleSkills();
-    }
+	function firstPrompt() {
+		console.putmsg("\r\n\r\n1 - Play \r\n2 - Instructions\r\n3 - Quit\r\n");
+		yesNo = console.getstr();
+		yesNo = yesNo.toUpperCase();
+		if (yesNo == "2") {
+			instructions();
+		}
+		if (yesNo == "3") {
+			throw "gameOver";
+			// return 
+		}
+		return yesNo;
+	}
 
     function instructions() {
         console.crlf();
