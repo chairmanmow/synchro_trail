@@ -1,11 +1,10 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: term.c,v 1.387 2020/06/27 00:04:50 deuce Exp $ */
-
 #include <assert.h>
 #include <ciolib.h>
 #include <cterm.h>
 #include <genwrap.h>
+#include <float.h>
 #include <math.h>
 #include <stdbool.h>
 #include <string.h>
@@ -64,8 +63,10 @@ struct cterminal *cterm;
 #define TRANSFER_WIN_HEIGHT 18
 static struct vmem_cell winbuf[(TRANSFER_WIN_WIDTH + 2) * (TRANSFER_WIN_HEIGHT + 1) * 2]; /* Save buffer for transfer
                                                                                            * window */
-static struct text_info trans_ti;
-static struct text_info log_ti;
+static struct text_info trans_ti;    // Holds the screen and window size from before transfer
+static struct text_info transw_ti;   // Holds the screen and transfer window
+static struct text_info progress_ti; // Holds the screen and progress window
+static struct text_info log_ti;      // Holds the screen and log info
 
 static struct ciolib_pixels *pixmap_buffer[2];
 static struct ciolib_mask *mask_buffer;
@@ -194,7 +195,7 @@ mousedrag(struct vmem_cell *scrollback)
 	struct vmem_cell     *screen;
 	unsigned char        *tscreen;
 	struct vmem_cell     *sbuffer;
-	int                   sbufsize;
+	size_t                sbufsize;
 	int                   pos, startpos, endpos, lines;
 	int                   outpos;
 	char                 *copybuf = NULL;
@@ -202,10 +203,16 @@ mousedrag(struct vmem_cell *scrollback)
 	int                   lastchar;
 	struct ciolib_screen *savscrn;
 
-	sbufsize = term.width * sizeof(*screen) * term.height;
+	sbufsize = (size_t)term.width * sizeof(*screen) * term.height;
 	screen = malloc(sbufsize);
 	sbuffer = malloc(sbufsize);
-	tscreen = malloc(term.width * 2 * term.height);
+	tscreen = malloc((size_t)term.width * 2 * term.height);
+	if (screen == NULL || sbuffer == NULL || tscreen == NULL) {
+		free(screen);
+		free(sbuffer);
+		free(tscreen);
+		return;
+	}
 	vmem_gettext(term.x - 1, term.y - 1, term.x + term.width - 2, term.y + term.height - 2, screen);
 	gettext(term.x - 1, term.y - 1, term.x + term.width - 2, term.y + term.height - 2, tscreen);
 	savscrn = savescreen();
@@ -413,6 +420,8 @@ update_status(struct bbslist *bbs, int speed, int ooii_mode, bool ata_inv)
 			if (term.width >= 80)
 				avail = 29;
 	}
+	if (term.width == 40)
+		avail = 29;
 
 	if (speed)
 		snprintf(sbuf, sizeof(sbuf), " (%d)", speed);
@@ -446,13 +455,13 @@ update_status(struct bbslist *bbs, int speed, int ooii_mode, bool ata_inv)
 		snprintf(fullbuf, sizeof(fullbuf), " %-*.*s %c %-6.6s ", avail, avail, nbuf, 0xb3
 		    , conn_types[bbs->conn_type]);
 	}
-	if (ms->mode == 0) {
+	if (ms->mode == MM_OFF) {
 		status_bar[30].ch = ' ';
 	}
-	for (i = 1; fullbuf[i]; i++) {
+	for (i = 1; fullbuf[i] && i < term.width; i++) {
 		status_bar[i].ch = fullbuf[i];
 	}
-	if (ms->mode != 0) {
+	if (ms->mode != MM_OFF) {
 		// TODO: Clear before M?
 		//status_bar[29].ch = ' ';
 		status_bar[30].ch = 'M';
@@ -609,6 +618,9 @@ lputs(void *cbdata, int level, const char *str)
 	return chars;
 }
 
+#if defined(__GNUC__)   // Catch printf-format errors with lprintf
+static int lprintf(int level, const char *fmt, ...) __attribute__ ((format (printf, 2, 3)));
+#endif
 static int
 lprintf(int level, const char *fmt, ...)
 {
@@ -639,17 +651,19 @@ zmodem_progress(void *cbdata, int64_t current_pos)
 	struct zmodem_cbdata *zcb = (struct zmodem_cbdata *)cbdata;
 	zmodem_t             *zm = zcb->zm;
 	bool                  growing = false;
+	int                   tww = transw_ti.winright - transw_ti.winleft + 1;
+	struct text_info      orig_info;
 
 	now = time(NULL);
 	if (current_pos > zm->current_file_size)
 		growing = true;
 	if ((now != last_progress) || ((current_pos >= zm->current_file_size) && (growing == false))) {
+		gettextinfo(&orig_info);
+		int os = _wscroll;
+		_wscroll = 0;
 		zmodem_check_abort(cbdata);
 		hold_update = true;
-		window(((trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2) + 2,
-		    ((trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2) + 1,
-		    ((trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2) + TRANSFER_WIN_WIDTH - 2,
-		    ((trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2) + 5);
+		window(progress_ti.winleft, progress_ti.wintop, progress_ti.winright, progress_ti.winbottom);
 		gotoxy(1, 1);
 		textattr(LIGHTCYAN | (BLUE << 4));
 		t = now - zm->transfer_start_time;
@@ -663,7 +677,7 @@ zmodem_progress(void *cbdata, int64_t current_pos)
 		if (l < 0)
 			l = 0;
 		cprintf("File (%u of %u): %-.*s",
-		    zm->current_file_num, zm->total_files, TRANSFER_WIN_WIDTH - 20, zm->current_file_name);
+		    zm->current_file_num, zm->total_files, tww - 20, zm->current_file_name);
 		clreol();
 		cputs("\r\n");
 		if (zm->transfer_start_pos)
@@ -693,13 +707,13 @@ zmodem_progress(void *cbdata, int64_t current_pos)
 		clreol();
 		cputs("\r\n");
 		if (zm->current_file_size == 0) {
-			cprintf("%*s%3d%%\r\n", TRANSFER_WIN_WIDTH / 2 - 5, "", 100);
-			l = 60;
+			cprintf("%*s%3d%%\r\n", tww / 2 - 5, "", 100);
+			l = tww - 6;
 		}
 		else {
-			cprintf("%*s%3d%%\r\n", TRANSFER_WIN_WIDTH / 2 - 5, "",
+			cprintf("%*s%3d%%\r\n", tww / 2 - 5, "",
 			    (long)(((float)current_pos / (float)zm->current_file_size) * 100.0));
-			l = (long)(60 * ((float)current_pos / (float)zm->current_file_size));
+			l = (long)((tww - 6) * ((float)current_pos / (float)zm->current_file_size));
 		}
 		cprintf("[%*.*s%*s]", l, l,
 		    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
@@ -708,10 +722,12 @@ zmodem_progress(void *cbdata, int64_t current_pos)
 		    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 		    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 		    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1",
-		    (int)(60 - l), "");
+		    (int)((tww - 6) - l), "");
 		last_progress = now;
 		hold_update = false;
-		gotoxy(wherex(), wherey());
+		window(orig_info.winleft, orig_info.wintop, orig_info.winright, orig_info.winbottom);
+		gotoxy(orig_info.curx, orig_info.cury);
+		_wscroll = os;
 		hold_update = old_hold;
 	}
 }
@@ -785,6 +801,23 @@ recv_byte(void *unused, unsigned timeout /* seconds */)
 	return -1;
 }
 
+static int
+recv_byte_ms(void *unused, unsigned timeout /* milliseconds */)
+{
+	BYTE ch;
+
+	recv_bytes(timeout);
+
+	if (recv_byte_buffer_len > 0) {
+		ch = recv_byte_buffer[recv_byte_buffer_pos++];
+		if (recv_byte_buffer_pos == recv_byte_buffer_len)
+			recv_byte_buffer_len = recv_byte_buffer_pos = 0;
+		return ch;
+	}
+
+	return -1;
+}
+
 #if defined(__BORLANDC__)
  #pragma argsused
 #endif
@@ -812,25 +845,38 @@ count_data_waiting(void)
 void
 draw_transfer_window(char *title)
 {
+	int  tww = TRANSFER_WIN_WIDTH;
+	int  twh = TRANSFER_WIN_HEIGHT;
+	gettextinfo(&trans_ti);
+
+	if (tww > trans_ti.screenwidth)
+		tww = trans_ti.screenwidth;
+	if (twh > trans_ti.screenheight)
+		twh = trans_ti.screenheight;
+	if (twh > tww)
+		twh = tww;
 	char outline[TRANSFER_WIN_WIDTH * 2];
-	char shadow[TRANSFER_WIN_WIDTH * 2]; /* Assumes that width*2 > height * 2 */
+	char shadow[TRANSFER_WIN_HEIGHT * 2]; /* Assumes that width*2 > height * 2 */
 	int  i, top, left, old_hold;
 
 	old_hold = hold_update;
 	hold_update = true;
-	gettextinfo(&trans_ti);
-	top = (trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2;
-	left = (trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2;
+	top = (trans_ti.screenheight - twh) / 2 + 1;
+	left = (trans_ti.screenwidth - tww) / 2 + 1;
+	window(left, top, left + tww - 1, top + twh - 1);
+	gettextinfo(&transw_ti);
+	window(transw_ti.winleft + 2, transw_ti.wintop + 1, transw_ti.winright - 2, transw_ti.wintop + 5);
+	gettextinfo(&progress_ti);
 	window(1, 1, trans_ti.screenwidth, trans_ti.screenheight);
 
-	vmem_gettext(left, top, left + TRANSFER_WIN_WIDTH + 1, top + TRANSFER_WIN_HEIGHT, winbuf);
-	memset(outline, YELLOW | (BLUE << 4), sizeof(outline));
-	for (i = 2; i < sizeof(outline) - 2; i += 2) {
+	vmem_gettext(transw_ti.winleft, transw_ti.wintop, transw_ti.winright, transw_ti.winbottom, winbuf);
+	memset(outline, YELLOW | (BLUE << 4), tww * 2);
+	for (i = 2; i < (tww - 1) * 2; i += 2) {
 		outline[i] = (char)0xcd; /* Double horizontal line */
 	}
 	outline[0] = (char)0xc9;
-	outline[sizeof(outline) - 2] = (char)0xbb;
-	puttext(left, top, left + TRANSFER_WIN_WIDTH - 1, top, outline);
+	outline[(tww - 1) * 2] = (char)0xbb;
+	puttext(left, top, left + tww - 1, top, outline);
 
         /* Title */
 	gotoxy(left + 4, top);
@@ -840,75 +886,75 @@ draw_transfer_window(char *title)
 	textattr(WHITE | (BLUE << 4));
 	cprintf("%s", title);
 
-	for (i = 2; i < sizeof(outline) - 2; i += 2) {
+	for (i = 2; i < (tww - 1) * 2; i += 2) {
 		outline[i] = (char)0xc4;           /* Single horizontal line */
 	}
 	outline[0] = (char)0xc7;                   /* 0xcc */
-	outline[sizeof(outline) - 2] = (char)0xb6; /* 0xb6 */
-	puttext(left, top + 6, left + TRANSFER_WIN_WIDTH - 1, top + 6, outline);
+	outline[(tww - 1) * 2] = (char)0xb6; /* 0xb6 */
+	puttext(left, top + 6, left + tww - 1, top + 6, outline);
 
-	for (i = 2; i < sizeof(outline) - 2; i += 2) {
+	for (i = 2; i < (tww - 1) * 2; i += 2) {
 		outline[i] = (char)0xcd; /* Double horizontal line */
 	}
 	outline[0] = (char)0xc8;
-	outline[sizeof(outline) - 2] = (char)0xbc;
+	outline[(tww - 1) * 2] = (char)0xbc;
 	puttext(left,
-	    top + TRANSFER_WIN_HEIGHT - 1,
-	    left + TRANSFER_WIN_WIDTH - 1,
-	    top + TRANSFER_WIN_HEIGHT - 1,
+	    top + twh - 1,
+	    left + tww - 1,
+	    top + twh - 1,
 	    outline);
 	outline[0] = (char)0xba;
-	outline[sizeof(outline) - 2] = (char)0xba;
-	for (i = 2; i < sizeof(outline) - 2; i += 2)
+	outline[(tww - 1) * 2] = (char)0xba;
+	for (i = 2; i < (tww - 1) * 2; i += 2)
 		outline[i] = ' ';
 	for (i = 1; i < 6; i++)
-		puttext(left, top + i, left + TRANSFER_WIN_WIDTH - 1, top + i, outline);
+		puttext(left, top + i, left + tww - 1, top + i, outline);
 
 /*
- *      for(i=3;i < sizeof(outline) - 2; i+=2) {
+ *      for(i=3;i < (tww - 1) * 2; i+=2) {
  *              outline[i] = LIGHTGRAY | (BLACK << 8);
  *      }
  */
-	for (i = 7; i < TRANSFER_WIN_HEIGHT - 1; i++)
-		puttext(left, top + i, left + TRANSFER_WIN_WIDTH - 1, top + i, outline);
+	for (i = 7; i < twh - 1; i++)
+		puttext(left, top + i, left + tww - 1, top + i, outline);
 
         /* Title */
-	gotoxy(left + TRANSFER_WIN_WIDTH - 20, top + i);
+	gotoxy(left + tww - 20, top + i);
 	textattr(YELLOW | (BLUE << 4));
 	cprintf("\xb5              \xc6");
 	textattr(WHITE | (BLUE << 4));
-	gotoxy(left + TRANSFER_WIN_WIDTH - 18, top + i);
+	gotoxy(left + tww - 18, top + i);
 	cprintf("ESC to Abort");
 
         /* Shadow */
 	if (uifc.bclr == BLUE) {
-		gettext(left + TRANSFER_WIN_WIDTH,
+		gettext(left + tww,
 		    top + 1,
-		    left + TRANSFER_WIN_WIDTH + 1,
-		    top + (TRANSFER_WIN_HEIGHT - 1),
+		    left + tww + 1,
+		    top + (twh - 1),
 		    shadow);
-		for (i = 1; i < sizeof(shadow); i += 2)
+		for (i = 1; i < tww * 2; i += 2)
 			shadow[i] = DARKGRAY;
-		puttext(left + TRANSFER_WIN_WIDTH,
+		puttext(left + tww,
 		    top + 1,
-		    left + TRANSFER_WIN_WIDTH + 1,
-		    top + (TRANSFER_WIN_HEIGHT - 1),
+		    left + tww + 1,
+		    top + (twh - 1),
 		    shadow);
 		gettext(left + 2,
-		    top + TRANSFER_WIN_HEIGHT,
-		    left + TRANSFER_WIN_WIDTH + 1,
-		    top + TRANSFER_WIN_HEIGHT,
+		    top + twh,
+		    left + tww + 1,
+		    top + twh,
 		    shadow);
-		for (i = 1; i < sizeof(shadow); i += 2)
+		for (i = 1; i < tww * 2; i += 2)
 			shadow[i] = DARKGRAY;
 		puttext(left + 2,
-		    top + TRANSFER_WIN_HEIGHT,
-		    left + TRANSFER_WIN_WIDTH + 1,
-		    top + TRANSFER_WIN_HEIGHT,
+		    top + twh,
+		    left + tww + 1,
+		    top + twh,
 		    shadow);
 	}
 
-	window(left + 2, top + 7, left + TRANSFER_WIN_WIDTH - 3, top + TRANSFER_WIN_HEIGHT - 2);
+	window(left + 2, top + 7, left + tww - 3, top + twh - 2);
 	hold_update = false;
 	gotoxy(1, 1);
 	hold_update = old_hold;
@@ -919,11 +965,7 @@ draw_transfer_window(char *title)
 void
 erase_transfer_window(void)
 {
-	vmem_puttext(((trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2),
-	    ((trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2),
-	    ((trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2) + TRANSFER_WIN_WIDTH + 1,
-	    ((trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2) + TRANSFER_WIN_HEIGHT,
-	    winbuf);
+	vmem_puttext(transw_ti.winleft, transw_ti.wintop, transw_ti.winright, transw_ti.winbottom, winbuf);
 	window(trans_ti.winleft, trans_ti.wintop, trans_ti.winright, trans_ti.winbottom);
 	gotoxy(trans_ti.curx, trans_ti.cury);
 	textattr(trans_ti.attribute);
@@ -1036,22 +1078,737 @@ begin_upload(struct bbslist *bbs, bool autozm, int lastch)
 	gotoxy(txtinfo.curx, txtinfo.cury);
 }
 
+static int
+ask_overwrite(int *dflt)
+{
+	char                 *opts[4] = {
+		"Overwrite",
+		"Choose New Name",
+		"Cancel Download",
+		NULL
+	};
+	uifc.helpbuf = "Duplicate file... choose action\n";
+	return uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, dflt, NULL, "Duplicate File Name", opts);
+}
+
+static void
+transfer_complete(bool success, bool was_binary)
+{
+	int timeout = success ? settings.xfer_success_keypress_timeout : settings.xfer_failure_keypress_timeout;
+
+	if (!was_binary)
+		conn_binary_mode_off();
+	if (log_fp != NULL)
+		fflush(log_fp);
+
+        /* TODO: Make this pretty (countdown timer) and don't delay a second between keyboard polls */
+	lprintf(LOG_NOTICE, "Hit any key or wait %u seconds to continue...", timeout);
+	while (timeout > 0) {
+		if (kbhit()) {
+			/* coverity[cond_const:SUPPRESS] */
+			if (getch() == (CIO_KEY_QUIT & 0xff)) {
+				if ((getch() << 8) == (CIO_KEY_QUIT & 0xff00))
+					check_exit(false);
+			}
+			break;
+		}
+		timeout--;
+		SLEEP(1000);
+	}
+
+	erase_transfer_window();
+}
+
+struct cet_ts_state {
+	int (*recv_byte)(void *, unsigned);
+	uint8_t *orig_screen;
+	uint8_t *frame_buffer;
+	size_t orig_screen_pos;
+	size_t orig_screen_sz;
+	size_t fb_pos;
+	size_t fb_sz;
+	size_t bytes_received;
+	time_t start;
+	long frame_count;
+	unsigned frame_num;
+	char fpath[MAX_PATH * 2 + 2];
+	bool aborted;
+};
+
+struct cet_ts_block {
+	size_t  sz;
+	size_t  length;
+	uint8_t frame;
+	uint8_t block_num;
+	uint8_t block_cnt;
+	uint8_t ends_file;
+	char    data[];
+};
+
+static int
+cet_frame_recv_byte(void *ptr, unsigned timeout)
+{
+	struct cet_ts_state *sp = ptr;
+	if (sp->orig_screen_pos >= sp->orig_screen_sz) {
+		free(sp->orig_screen);
+		sp->orig_screen = NULL;
+		sp->recv_byte = recv_byte_ms;
+		return sp->recv_byte(ptr, timeout);
+	}
+	uint8_t ret = sp->orig_screen[sp->orig_screen_pos];
+	sp->orig_screen_pos += 2;
+	return ret;
+}
+
+#define CET_TS_TIMEOUT_SEC 5
+#define CET_TS_TIMEOUT_MS (CET_TS_TIMEOUT_SEC * 1000)
+#define CET_TS_RETRIES 3
+
+static void
+cet_telesoftware_progress(struct cet_ts_state *sp)
+{
+	static int16_t   last_frame;
+	int              old_hold = hold_update;
+	struct text_info orig_info;
+
+	time_t now = time(NULL);
+	if (sp->frame_num == 0) {
+		last_frame = -1;
+	}
+	if (sp->frame_num != last_frame) {
+		gettextinfo(&orig_info);
+		hold_update = true;
+		int os = _wscroll;
+		window(progress_ti.winleft, progress_ti.wintop, progress_ti.winright, progress_ti.winbottom);
+		gotoxy(1, 1);
+		textattr(LIGHTCYAN | (BLUE << 4));
+		time_t t = now - sp->start;
+		if (t <= 0)
+			t = 1;
+		unsigned cps = (unsigned)(sp->bytes_received / t);
+		if (cps == 0)
+			cps = 1;           /* cps so far */
+		double fps = ((double)sp->frame_num) / t;
+		if (fps <= 0.0)
+			fps = DBL_MIN;     /* Avoid division by zero and denormals */
+		time_t l = (time_t)(sp->frame_count / fps); /* total transfer est time */
+		if (t >= l)
+			l = 0;
+		else
+			l -= t;                    /* now, it's est time left */
+		if (sp->frame_count != 999) {
+			cprintf("File: %-.*s\r\nFrame: %u of %u  Byte: %" PRId64,
+			    progress_ti.winright - progress_ti.winleft + 1 - 7, getfname(sp->fpath),
+			    sp->frame_num, sp->frame_count,
+			    sp->bytes_received);
+		}
+		else {
+			cprintf("File: %-.*s\r\nFrame: %u  Byte: %" PRId64,
+			    progress_ti.winright - progress_ti.winleft + 1 - 7, getfname(sp->fpath),
+			    sp->frame_num,
+			    sp->bytes_received);
+		}
+		clreol();
+		cputs("\r\n");
+		cprintf("Time: %lu:%02lu  %u cps",
+		    (ulong)(t / 60L),
+		    (ulong)(t % 60L),
+		    cps);
+		cputs("\r\n");
+		clreol();
+		if (sp->frame_count != 999) {
+			cprintf("Remain: %lu:%02lu",
+			    (ulong)(l / 60L),
+			    (ulong)(l % 60L));
+			clreol();
+		}
+		last_frame = sp->frame_num;
+		hold_update = false;
+		window(orig_info.winleft, orig_info.wintop, orig_info.winright, orig_info.winbottom);
+		gotoxy(orig_info.curx, orig_info.cury);
+		_wscroll = os;
+		hold_update = old_hold;
+	}
+}
+
+static bool
+cet_send_string(const char *str)
+{
+	for (;*str;str++) {
+		if (send_byte(NULL, *str, CET_TS_TIMEOUT_SEC))
+			return false;
+	}
+	flush_send(NULL);
+	return true;
+}
+
+static inline void
+cet_append_fb(struct cet_ts_state *sp, int byte)
+{
+	if (byte == 12) {	// Clear screen
+		sp->fb_pos = 0;
+	}
+	if (sp->fb_pos == sp->fb_sz) {
+		size_t newsz = sp->fb_sz ? sp->fb_sz * 2 : 1000;
+		void *ra = realloc(sp->frame_buffer, newsz);
+		if (!ra)
+			return;
+		sp->frame_buffer = ra;
+		sp->fb_sz = newsz;
+	}
+	sp->frame_buffer[sp->fb_pos++] = byte;
+}
+
+static struct cet_ts_block *
+cet_telesoftware_try_get_block(struct cet_ts_state *sp)
+{
+	struct text_info ti;
+	gettextinfo(&ti);
+	size_t max_len = ti.screenwidth * ti.screenheight;
+	size_t sz = offsetof(struct cet_ts_block, data) + max_len + 1;
+	struct cet_ts_block *ret = malloc(sz);
+	if (ret == NULL)
+		return NULL;
+	ret->sz = sz;
+	ret->length = 0;
+	ret->frame = 'A';
+	ret->block_num = 0;
+	ret->block_cnt = 0;
+	ret->ends_file = false;
+	uint8_t checkxor = 0;
+	bool got_start = false;
+	bool got_escape = false;
+	bool got_block_end = false;
+	bool need_term = false;
+	int16_t shift = 0;
+
+	while ((!sp->aborted) && (ret->length < max_len) && (!got_block_end)) {
+		bool xor = got_start;
+		// Check for user abort...
+		while (kbhit()) {
+			int key = getch();
+			switch (key) {
+				case ESC:
+				case CTRL_C:
+				case CTRL_X:
+					sp->aborted = true;
+					break;
+				case 0:
+				case 0xe0:
+					key |= (getch() << 8);
+					if (key == CIO_KEY_MOUSE)
+						getmouse(NULL);
+					if (key == CIO_KEY_QUIT) {
+						if (check_exit(false))
+							sp->aborted = true;
+					}
+					break;
+			}
+		}
+		if (sp->aborted) {
+			free(ret);
+			lputs(NULL, LOG_INFO, "Aborted by user");
+			return NULL;
+		}
+		int b = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+		if (b < 0 || b > 255) {
+			free(ret);
+			lprintf(LOG_ERR, "Failed to receive byte (timeout %d)", b);
+			return NULL;
+		}
+		cet_append_fb(sp, b);
+		if (got_start && (b > 127 || b < 32)) {
+			free(ret);
+			lprintf(LOG_ERR, "Received illegal byte 0x%02x (%s)", b, b < 32 ? "control character" : "high bit set");
+			return NULL;
+		}
+		if (got_escape) {
+			if (!got_start && b != 'A') {
+				continue;
+			}
+			bool allowed_after_end = false;
+			got_escape = false;
+			if (need_term) {
+				if (b == 'I') {
+					allowed_after_end = true;
+					need_term = false;
+				}
+			}
+			else {
+				int b1, b2, b3;
+				switch (b) {
+					case '0':
+						shift = 0;
+						break;
+					case '1':
+						shift = -64;
+						break;
+					case '2':
+						shift = 64;
+						break;
+					case '3':
+						shift = 96;
+						break;
+					case '4':
+						shift = 128;
+						break;
+					case '5':
+						shift = 160;
+						break;
+					case 'A':
+						if (got_start) {
+							free(ret);
+							lputs(NULL, LOG_ERR, "|A Inside block");
+							return NULL;
+						}
+						got_start = true;
+						break;
+					case 'E':
+						ret->data[ret->length++] = '|';
+						break;
+					case 'F':
+						if (ret->ends_file) {
+							free(ret);
+							lputs(NULL, LOG_ERR, "Multiple |F in file");
+							return NULL;
+						}
+						ret->ends_file = true;
+						allowed_after_end = true;
+						break;
+					case 'G':
+						if (ret->frame != 'A') {
+							free(ret);
+							lputs(NULL, LOG_ERR, "Multiple |G in block");
+							return NULL;
+						}
+						// Read extra bytes up to | or four, then set got_escape
+						need_term = true;
+						b1 = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+						cet_append_fb(sp, b1);
+						if (b1 < 'a' || b1 > 'z') {
+							free(ret);
+							lprintf(LOG_ERR, "Invalid |G frame byte 0x%02x%s", b1, b1 == -1 ? " (timeout)" : "");
+							return NULL;
+						}
+						checkxor ^= b1;
+						ret->frame = b1;
+						b1 = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+						cet_append_fb(sp, b1);
+						if (((b1 < '0') || (b1 > '9')) && (b1 != '|')) {
+							free(ret);
+							lprintf(LOG_ERR, "Invalid |G block id byte 0x%02x%s", b1, b1 == -1 ? " (timeout)" : "");
+							return NULL;
+						}
+						if (b1 == '|') {
+							got_escape = true;
+						}
+						else {
+							checkxor ^= b1;
+							ret->block_num = b1 - '0';
+							b1 = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+							cet_append_fb(sp, b1);
+							if ((b1 < '0') || (b1 > '9')) {
+								free(ret);
+								lprintf(LOG_ERR, "Invalid |G block id byte 0x%02x%s", b1, b1 == -1 ? " (timeout)" : "");
+								return NULL;
+							}
+							ret->block_cnt = b1 - '0';
+						}
+						break;
+					case 'I':
+						free(ret);
+						lputs(NULL, LOG_ERR, "Got unneeded |I");
+						return NULL;
+					case 'L':
+#ifdef _WIN32
+						ret->data[ret->length++] = '\r';
+#endif
+						ret->data[ret->length++] = '\n';
+						break;
+					case 'Z':
+						allowed_after_end = true;
+						b1 = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+						cet_append_fb(sp, b1);
+						if (b1 < '0' || b1 > '9') {
+							free(ret);
+							lprintf(LOG_ERR, "Invalid checkxor byte 0x%02x%s", b1, b1 == -1 ? " (timeout)" : "");
+							return NULL;
+						}
+						b2 = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+						cet_append_fb(sp, b2);
+						if (b2 < '0' || b2 > '9') {
+							free(ret);
+							lprintf(LOG_ERR, "Invalid checkxor byte 0x%02x%s", b2, b2 == -1 ? " (timeout)" : "");
+							return NULL;
+						}
+						b3 = sp->recv_byte(sp, CET_TS_TIMEOUT_MS);
+						cet_append_fb(sp, b3);
+						if (b3 < '0' || b3 > '9') {
+							free(ret);
+							lprintf(LOG_ERR, "Invalid checkxor byte 0x%02x%s", b3, b3 == -1 ? " (timeout)" : "");
+							return NULL;
+						}
+						uint8_t checked = (b1 - '0') * 100 + (b2 - '0') * 10 + (b3 - '0');
+						if (checked != checkxor) {
+							free(ret);
+							lprintf(LOG_ERR, "Incorrect checkxor. Calculated 0x%02x, Remote indicated 0x%02x", checkxor, checked);
+							return NULL;
+						}
+						got_block_end = true;
+						break;
+					case '}': // ie: ¾
+						ret->data[ret->length++] = '}';
+						break;
+					// We don't really handle these for now...
+					default:
+						allowed_after_end = true;
+						// Fallthrough
+					case 'D':
+					case 'T':
+						lprintf(LOG_WARNING, "Unhandled escape |%c", b);
+						need_term = true;
+						break;
+				}
+			}
+			if (ret->ends_file && !allowed_after_end) {
+				free(ret);
+				lprintf(LOG_ERR, "Received |%c after |F", b);
+				return NULL;
+			}
+			if (xor) {
+				checkxor ^= '|';
+				checkxor ^= (b & 0x7F);
+			}
+		}
+		else {
+			if (!got_start && b != '|') {
+				continue;
+			}
+			switch (b) {
+				case '|':
+					got_escape = true;
+					break;
+				default: {
+					uint8_t nb = b + shift;
+					if (shift && b < 64) {
+						free(ret);
+						lprintf(LOG_ERR, "Illegal encoding, shift of %d with byte of %d", shift, b);
+						return NULL;
+					}
+					if (b == '}')
+						ret->data[ret->length++] = ' ';
+					else
+						ret->data[ret->length++] = nb;
+					if (xor) {
+						checkxor ^= (b & 0x7F);
+					}
+				}
+			}
+		}
+	}
+	if (need_term) {
+		free(ret);
+		lputs(NULL, LOG_ERR, "No terminating |I found");
+		return NULL;
+	}
+	if (ret->length == max_len) {
+		free(ret);
+		lputs(NULL, LOG_ERR, "No terminating |Z found");
+		return NULL;
+	}
+	return ret;
+}
+
+static struct cet_ts_block *
+cet_telesoftware_get_block(struct cet_ts_state *sp)
+{
+	int retries = CET_TS_RETRIES;
+	struct cet_ts_block *ret = NULL;
+	while ((!sp->aborted) && ret == NULL) {
+		ret = cet_telesoftware_try_get_block(sp);
+		if (ret)
+			return ret;
+		if (retries == 0)
+			break;
+		retries--;
+		cet_send_string("*00");
+	}
+	if (!sp->aborted)
+		lputs(NULL, LOG_ERR, "Too many retries, aborting");
+	return NULL;
+}
+
+bool
+cet_telesoftware_duplicate(struct bbslist *bbs, char *path, size_t pathsize, char *fname)
+{
+	struct  text_info     txtinfo;
+	struct ciolib_screen *savscrn;
+	bool                  ret = false;
+	int                   i;
+	char                  newfname[MAX_PATH + 1];
+	bool                  loop = true;
+	int                   old_hold = hold_update;
+
+	gettextinfo(&txtinfo);
+	savscrn = cp437_savescrn();
+	window(1, 1, txtinfo.screenwidth, txtinfo.screenheight);
+
+	init_uifc(false, false);
+
+	hold_update = false;
+	while (loop) {
+		loop = false;
+		i = 0;
+		uifc.helpbuf = "Duplicate file... choose action\n";
+		switch (ask_overwrite(&i)) {
+			case -1:
+				if (check_exit(false)) {
+					ret = false;
+					break;
+				}
+				loop = true;
+				break;
+			case 0: /* Overwrite */
+				unlink(path);
+				ret = true;
+				break;
+			case 1: /* Choose new name */
+				uifc.changes = 0;
+				uifc.helpbuf = "Duplicate Filename... enter new name";
+				SAFECOPY(newfname, getfname(fname));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "New Filename: ", newfname,
+				    sizeof(newfname) - 1, K_EDIT) == -1) {
+					loop = true;
+				}
+				else {
+					if (uifc.changes) {
+						sprintf(path, "%s/%s", bbs->dldir, newfname);
+						ret = true;
+					}
+					else {
+						loop = true;
+					}
+				}
+				break;
+		}
+	}
+
+	uifcbail();
+	restorescreen(savscrn);
+	freescreen(savscrn);
+	hold_update = old_hold;
+	return ret;
+}
+
+static void
+cet_telesoftware_download(struct bbslist *bbs, void **frame_buffer, size_t *buflen)
+{
+	*frame_buffer = NULL;
+	*buflen = 0;
+	if (safe_mode)
+		return;
+	bool     was_binary = conn_api.binary_mode;
+	bool     success = false;
+	uint8_t  next_frame = 'A';
+	uint8_t  next_block = 0;
+	uint16_t frames_remaining;
+	struct text_info ti;
+	gettextinfo(&ti);
+	struct cet_ts_state st = {
+		.recv_byte = cet_frame_recv_byte,
+		.orig_screen = malloc(ti.screenwidth * ti.screenheight * 2),
+		.orig_screen_pos = 0,
+		.orig_screen_sz = ti.screenwidth * ti.screenheight * 2,
+		.aborted = false,
+		.start = time(NULL),
+	};
+	FILE *fp = NULL;
+	struct cet_ts_block *header = NULL;
+	struct cet_ts_block *blk = NULL;
+
+	if (st.orig_screen)
+		gettext(ti.winleft, ti.wintop, ti.winright, ti.winbottom, st.orig_screen);
+	draw_transfer_window("CET Telesoftware Download");
+	if (st.orig_screen == NULL) {
+		lputs(NULL, LOG_ERR, "malloc() failures");
+		goto failure;
+	}
+
+	if (!was_binary)
+		conn_binary_mode_on();
+
+	cet_telesoftware_progress(&st);
+
+	header = cet_telesoftware_get_block(&st);
+	if (header == NULL) {
+		lputs(NULL, LOG_ERR, "Failed to get header block");
+		goto failure;
+	}
+	const char *fname = header->data;
+	char *p = strchr(header->data, '\n');
+	if (p == NULL) {
+		lputs(NULL, LOG_ERR, "Invalid header block (missing |L)");
+		goto failure;
+	}
+	*p = 0;
+	if (p == fname) {
+		lputs(NULL, LOG_ERR, "Invalid header block (zero-length file name)");
+		goto failure;
+	}
+#ifdef _WIN32
+	if (*(p - 1) != '\r') {
+		lputs(NULL, LOG_ERR, "Invalid header block (missing |L)");
+		goto failure;
+	}
+	*(p - 1) = 0;
+#endif
+	p++;
+	header->data[header->length] = 0;
+	st.frame_count = strtol(p, NULL, 10);
+	if (st.frame_count < 1 || st.frame_count > 999) {
+		lprintf(LOG_ERR, "Invalid header block size (%s)", p);
+		goto failure;
+	}
+	frames_remaining = st.frame_count;
+
+	lprintf(LOG_DEBUG, "Incoming filename: %.64s ", getfname(fname));
+	SAFEPRINTF2(st.fpath, "%s/%s", bbs->dldir, getfname(fname));
+	lprintf(LOG_INFO, "File size: %" PRId16 " frames", frames_remaining);
+	lprintf(LOG_DEBUG, "Receiving: %.64s ", st.fpath);
+
+	while (fexistcase(st.fpath)) {
+		lprintf(LOG_WARNING, "%s already exists", st.fpath);
+		if (!cet_telesoftware_duplicate(bbs, st.fpath, sizeof(st.fpath), getfname(fname))) {
+			goto failure;
+		}
+	}
+
+	cet_telesoftware_progress(&st);
+	fp = fopen(st.fpath, "wb");
+	if (fp == NULL) {
+		lprintf(LOG_ERR, "Error %d creating %s", errno, st.fpath);
+		goto failure;
+	}
+
+	unsigned retries = 0;
+	while (!st.aborted) {
+		if (next_frame == 'z' + 1) {
+			next_frame = 'a';
+			if (!cet_send_string("0")) {
+				lputs(NULL, LOG_ERR, "Error requesting next frame");
+				goto failure;
+			}
+		}
+		else {
+			if (!cet_send_string("_")) {
+				lputs(NULL, LOG_ERR, "Error requesting next page");
+				goto failure;
+			}
+		}
+		blk = cet_telesoftware_get_block(&st);
+		if (blk == NULL) {
+			goto failure;
+		}
+		st.bytes_received += blk->length;
+		st.frame_num++;
+		cet_telesoftware_progress(&st);
+		if (blk->frame == 'A') {
+			if (next_frame == 'A') {
+				next_frame = 'a';
+			}
+		}
+		else {
+			if (next_frame == 'A')
+				next_frame = blk->frame;
+			if (blk->frame != next_frame) {
+				if (retries >= 3) {
+					lprintf(LOG_ERR, "Too many retries for frame %c, aborting", next_frame);
+					goto failure;
+				}
+				if (blk->frame < next_frame) {
+					lprintf(LOG_ERR, "Old frame retransmitted... got %c, expcted %c", blk->frame, next_frame);
+					free(blk);
+					blk = NULL;
+					cet_send_string("_");
+					retries++;
+					continue;
+				}
+				else if (next_frame == 'a') {
+					lprintf(LOG_ERR, "New page not started... got %c, expcted %c", blk->frame, next_frame);
+					free(blk);
+					blk = NULL;
+					cet_send_string("0");
+					retries++;
+					continue;
+				}
+				else {
+					lprintf(LOG_ERR, "Out of order frame... got %c, expcted %c", blk->frame, next_frame);
+					goto failure;
+				}
+			}
+			if (blk->block_num != next_block) {
+				lprintf(LOG_ERR, "Out of order block in frame %c... got %u, expcted %u", blk->frame, blk->block_num, next_block);
+				goto failure;
+			}
+		}
+		retries = 0;
+		if (blk->block_cnt == blk->block_num)
+			next_frame++;
+		else
+			next_block++;
+		if (frames_remaining != 999)
+			frames_remaining--;
+		size_t written = fwrite(blk->data, 1, blk->length, fp);
+		if (written != blk->length) {
+			lprintf(LOG_ERR, "Bad write, wrote %zu, tried %zu", written, blk->length);
+			goto failure;
+		}
+		if (blk->ends_file) {
+			if (frames_remaining && frames_remaining != 999) {
+				lprintf(LOG_ERR, "End of file detected with %u frames remaining.", frames_remaining);
+			}
+			break;
+		}
+		if (!frames_remaining) {
+			lprintf(LOG_WARNING, "Frame count exhausted without end-of-file marker.");
+			frames_remaining = 999;
+		}
+		free(blk);
+		blk = NULL;
+	}
+	success = !st.aborted;
+
+failure:
+	free(blk);
+	free(header);
+	free(st.orig_screen);
+	if (fp)
+		fclose(fp);
+	transfer_complete(success, was_binary);
+	// Display cached last frame
+	*frame_buffer = st.frame_buffer;
+	*buflen = st.fb_pos;
+}
+
 void
 begin_download(struct bbslist *bbs)
 {
 	char                  path[MAX_PATH + 1];
 	int                   i;
-	char                 *opts[6] = {
+	char                 *opts[7] = {
 		"ZMODEM",
 		"YMODEM-g",
 		"YMODEM",
 		"XMODEM-CRC",
 		"XMODEM-CHKSUM",
+		"CET Telesoftware",
 		""
 	};
 	struct  text_info     txtinfo;
 	int                   old_hold = hold_update;
 	struct ciolib_screen *savscrn;
+	void *buf = NULL;
+	size_t buflen = 0;
 
 	if (safe_mode)
 		return;
@@ -1062,6 +1819,8 @@ begin_download(struct bbslist *bbs)
 	init_uifc(false, false);
 
 	i = 0;
+	if (cterm->emulation != CTERM_EMULATION_PRESTEL)
+		opts[5] = "";
 	uifc.helpbuf = "Select Protocol";
 	hold_update = false;
 	suspend_rip(true);
@@ -1086,6 +1845,9 @@ begin_download(struct bbslist *bbs)
 			if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Filename", path, sizeof(path), 0) != -1)
 				xmodem_download(bbs, XMODEM | RECV, path);
 			break;
+		case 5:
+			cet_telesoftware_download(bbs, &buf, &buflen);
+			break;
 	}
 	suspend_rip(false);
 	hold_update = old_hold;
@@ -1093,6 +1855,10 @@ begin_download(struct bbslist *bbs)
 	restorescreen(savscrn);
 	freescreen(savscrn);
 	gotoxy(txtinfo.curx, txtinfo.cury);
+	if (buf) {
+		cterm_write(cterm, buf, buflen, NULL, 0, NULL);
+		free(buf);
+	}
 }
 
 #if defined(__BORLANDC__)
@@ -1172,34 +1938,6 @@ ascii_upload(FILE *fp)
 	}
 }
 
-static void
-transfer_complete(bool success, bool was_binary)
-{
-	int timeout = success ? settings.xfer_success_keypress_timeout : settings.xfer_failure_keypress_timeout;
-
-	if (!was_binary)
-		conn_binary_mode_off();
-	if (log_fp != NULL)
-		fflush(log_fp);
-
-        /* TODO: Make this pretty (countdown timer) and don't delay a second between keyboard polls */
-	lprintf(LOG_NOTICE, "Hit any key or wait %u seconds to continue...", timeout);
-	while (timeout > 0) {
-		if (kbhit()) {
-			/* coverity[cond_const:SUPPRESS] */
-			if (getch() == (CIO_KEY_QUIT & 0xff)) {
-				if ((getch() << 8) == (CIO_KEY_QUIT & 0xff00))
-					check_exit(false);
-			}
-			break;
-		}
-		timeout--;
-		SLEEP(1000);
-	}
-
-	erase_transfer_window();
-}
-
 void
 zmodem_upload(struct bbslist *bbs, FILE *fp, char *path)
 {
@@ -1251,12 +1989,6 @@ zmodem_duplicate_callback(void *cbdata, void *zm_void)
 	struct ciolib_screen *savscrn;
 	bool                  ret = false;
 	int                   i;
-	char                 *opts[4] = {
-		"Overwrite",
-		"Choose New Name",
-		"Cancel Download",
-		NULL
-	};
 	struct zmodem_cbdata *cb = (struct zmodem_cbdata *)cbdata;
 	zmodem_t             *zm = (zmodem_t *)zm_void;
 	char                  fpath[MAX_PATH * 2 + 2];
@@ -1273,7 +2005,7 @@ zmodem_duplicate_callback(void *cbdata, void *zm_void)
 		loop = false;
 		i = 0;
 		uifc.helpbuf = "Duplicate file... choose action\n";
-		switch (uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, NULL, "Duplicate File Name", opts)) {
+		switch (ask_overwrite(&i)) {
 			case -1:
 				if (check_exit(false)) {
 					ret = false;
@@ -1424,25 +2156,26 @@ num_blocks(unsigned curr_block, uint64_t offset, uint64_t len, unsigned block_si
 void
 xmodem_progress(void *cbdata, unsigned block_num, int64_t offset, int64_t fsize, time_t start)
 {
-	uint64_t      total_blocks;
-	unsigned      cps;
-	int           i;
-	uint64_t      l;
-	time_t        t;
-	time_t        now;
-	static time_t last_progress;
-	int           old_hold = hold_update;
-	xmodem_t     *xm = (xmodem_t *)cbdata;
+	uint64_t         total_blocks;
+	unsigned         cps;
+	int              i;
+	uint64_t         l;
+	time_t           t;
+	time_t           now;
+	static time_t    last_progress;
+	int              old_hold = hold_update;
+	xmodem_t        *xm = (xmodem_t *)cbdata;
+	int              tww = transw_ti.winright - transw_ti.winleft + 1;
+	struct text_info orig_info;
 
 	now = time(NULL);
 	if ((now - last_progress > 0) || (offset >= fsize)) {
 		xmodem_check_abort(cbdata);
 
 		hold_update = true;
-		window(((trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2) + 2,
-		    ((trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2) + 1,
-		    ((trans_ti.screenwidth - TRANSFER_WIN_WIDTH) / 2) + TRANSFER_WIN_WIDTH - 2,
-		    ((trans_ti.screenheight - TRANSFER_WIN_HEIGHT) / 2) + 5);
+		int os = _wscroll;
+		gettextinfo(&orig_info);
+		window(progress_ti.winleft, progress_ti.wintop, progress_ti.winright, progress_ti.winbottom);
 		gotoxy(1, 1);
 		textattr(LIGHTCYAN | (BLUE << 4));
 		t = now - start;
@@ -1473,13 +2206,13 @@ xmodem_progress(void *cbdata, unsigned block_num, int64_t offset, int64_t fsize,
 			    cps);
 			clreol();
 			cputs("\r\n");
-			cprintf("%*s%3d%%\r\n", TRANSFER_WIN_WIDTH / 2 - 5, "",
+			cprintf("%*s%3d%%\r\n", tww / 2 - 5, "",
 			    fsize ? (long)(((float)offset / (float)fsize) * 100.0) : 100);
-			i = fsize ? (((float)offset / (float)fsize) * 60.0) : 60;
+			i = fsize ? (((float)offset / (float)fsize) * (tww - 6)) : (tww - 6);
 			if (i < 0)
 				i = 0;
-			else if (i > 60)
-				i = 60;
+			else if (i > (tww - 6))
+				i = (tww - 6);
 			cprintf("[%*.*s%*s]", i, i,
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
@@ -1487,7 +2220,7 @@ xmodem_progress(void *cbdata, unsigned block_num, int64_t offset, int64_t fsize,
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1",
-			    60 - i, "");
+			    (tww - 6) - i, "");
 		}
 		else if ((*(xm->mode)) & YMODEM) {
 			cprintf("Block (%lu%s): %lu  Byte: %" PRId64,
@@ -1505,13 +2238,13 @@ xmodem_progress(void *cbdata, unsigned block_num, int64_t offset, int64_t fsize,
 			    cps);
 			clreol();
 			cputs("\r\n");
-			cprintf("%*s%3d%%\r\n", TRANSFER_WIN_WIDTH / 2 - 5, "",
+			cprintf("%*s%3d%%\r\n", tww / 2 - 5, "",
 			    fsize ? (long)(((float)offset / (float)fsize) * 100.0) : 100);
-			i = fsize ? (long)(((float)offset / (float)fsize) * 60.0) : 60;
+			i = fsize ? (long)(((float)offset / (float)fsize) * (tww - 6)) : (tww - 6);
 			if (i < 0)
 				i = 0;
-			else if (i > 60)
-				i = 60;
+			else if (i > (tww - 6))
+				i = (tww - 6);
 			cprintf("[%*.*s%*s]", i, i,
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
@@ -1519,7 +2252,7 @@ xmodem_progress(void *cbdata, unsigned block_num, int64_t offset, int64_t fsize,
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1"
 			    "\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1\xb1",
-			    60 - i, "");
+			    (tww - 6) - i, "");
 		}
 		else { /* XModem receive */
 			cprintf("Block (%lu%s): %lu  Byte: %" PRId64,
@@ -1537,7 +2270,9 @@ xmodem_progress(void *cbdata, unsigned block_num, int64_t offset, int64_t fsize,
 		}
 		last_progress = now;
 		hold_update = false;
-		gotoxy(wherex(), wherey());
+		window(orig_info.winleft, orig_info.wintop, orig_info.winright, orig_info.winbottom);
+		gotoxy(orig_info.curx, orig_info.cury);
+		_wscroll = os;
 		hold_update = old_hold;
 	}
 }
@@ -1660,12 +2395,6 @@ xmodem_duplicate(xmodem_t *xm, struct bbslist *bbs, char *path, size_t pathsize,
 	struct ciolib_screen *savscrn;
 	bool                  ret = false;
 	int                   i;
-	char                 *opts[4] = {
-		"Overwrite",
-		"Choose New Name",
-		"Cancel Download",
-		NULL
-	};
 	char                  newfname[MAX_PATH + 1];
 	bool                  loop = true;
 	int                   old_hold = hold_update;
@@ -1681,7 +2410,7 @@ xmodem_duplicate(xmodem_t *xm, struct bbslist *bbs, char *path, size_t pathsize,
 		loop = false;
 		i = 0;
 		uifc.helpbuf = "Duplicate file... choose action\n";
-		switch (uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, NULL, "Duplicate File Name", opts)) {
+		switch (ask_overwrite(&i)) {
 			case -1:
 				if (check_exit(false)) {
 					ret = false;
@@ -1783,8 +2512,11 @@ xmodem_download(struct bbslist *bbs, long mode, char *path)
 		if (mode & XMODEM) {
 			if (isfullpath(path))
 				SAFECOPY(str, path);
-			else
-				SAFEPRINTF2(str, "%s/%s", bbs->dldir, path);
+			else {
+				snprintf(str, sizeof(str) - 2, "%s", bbs->dldir);
+				backslash(str);
+				SAFECAT(str, path);
+			}
 			file_bytes = file_bytes_left = 0x7fffffff;
 		}
 		else {
@@ -1893,6 +2625,12 @@ xmodem_download(struct bbslist *bbs, long mode, char *path)
 		}
 
 		lprintf(LOG_DEBUG, "Receiving: %.64s ", str);
+
+		if (isdir(str)) {
+			lprintf(LOG_ERR, "%s is an existing directory", str);
+			xmodem_cancel(&xm);
+			goto end;
+		}
 
 		while (fexistcase(str) && !(mode & OVERWRITE)) {
 			lprintf(LOG_WARNING, "%s already exists", str);
@@ -2037,7 +2775,7 @@ xmodem_download(struct bbslist *bbs, long mode, char *path)
 		else
 			total_bytes = 0;
 		if ((total_files > 1) && total_bytes) {
-			lprintf(LOG_INFO, "Remaining - Time: %lu:%02lu  Files: %u  KBytes: %" PRId64,
+			lprintf(LOG_INFO, "Remaining - Time: %" PRIu64 ":%02" PRIu64 "  Files: %u  KBytes: %" PRId64,
 			    (total_bytes / cps) / 60,
 			    (total_bytes / cps) % 60,
 			    total_files,
@@ -2326,6 +3064,8 @@ get_cache_fn_base(struct bbslist *bbs, char *fn, size_t fnsz)
 {
 	get_syncterm_filename(fn, fnsz, SYNCTERM_PATH_CACHE, false);
 	backslash(fn);
+	if (strlen(fn) + strlen(bbs->name) >= fnsz)
+		return 0;
 	strcat(fn, bbs->name);
 	backslash(fn);
 	if (!isdir(fn)) {
@@ -2345,6 +3085,8 @@ get_cache_fn_subdir(struct bbslist *bbs, char *fn, size_t fnsz, const char *subd
 	ret = get_cache_fn_base(bbs, fn, fnsz);
 	if (ret == 0)
 		return ret;
+	if (strlen(fn) + strlen(subdir) >= fnsz)
+		return 0;
 	strcat(fn, subdir);
 	backslash(fn);
 	if (!isdir(fn)) {
@@ -2798,7 +3540,7 @@ b64_decode_alloc(const char *strbuf, size_t slen, size_t *outlen)
 	int    ol;
 	size_t sz;
 
-	sz = slen * 3 + 3 / 4 + 1;
+	sz = (slen + 3) / 4 * 3 + 1;
 	ret = malloc(sz);
 	if (!ret)
 		return NULL;
@@ -3614,7 +4356,9 @@ apc_handler(char *strbuf, size_t slen, char *retbuf, size_t retsize, void *apcd)
 		p = strchr(strbuf + 13, ';');
 		if (p == NULL)
 			return;
-		strncat(fn, strbuf + 13, p - strbuf - 13);
+		*p = '\0';
+		strlcat(fn, strbuf + 13, sizeof(fn));
+		*p = ';';
 		if (!clean_path(fn, sizeof(fn)))
 			return;
 		p++;
@@ -3669,7 +4413,7 @@ apc_handler(char *strbuf, size_t slen, char *retbuf, size_t retsize, void *apcd)
 			p = "*";
 		else
 			p = strbuf + 13;
-		strcat(fn, p);
+		strlcat(fn, p, sizeof(fn));
 		conn_send("\x1b_SyncTERM:C;L\n", 15, 0);
 		rc = glob(fn, GLOB_MARK, NULL, &gl);
 		if (rc != 0) {
@@ -3714,7 +4458,7 @@ apc_handler(char *strbuf, size_t slen, char *retbuf, size_t retsize, void *apcd)
 		if (*p != ';')
 			return;
 		p++;
-		strcat(fn, p);
+		strlcat(fn, p, sizeof(fn));
 		if (!clean_path(fn, sizeof(fn)))
 			return;
 		if (!fexist(fn))
@@ -3800,18 +4544,26 @@ apc_handler(char *strbuf, size_t slen, char *retbuf, size_t retsize, void *apcd)
 				switch(Jxl.status) {
 					case JXL_STATUS_OK:
 					case JXL_STATUS_NOTHREADS:
-						memcpy(&retbuf[rlen], "\x1b[=1;1-n", 8);
+						memcpy(&retbuf[rlen], "\x1b[=1;1-n", 9);
 						break;
 					default:
-						memcpy(&retbuf[rlen], "\x1b[=1;0-n", 8);
+						memcpy(&retbuf[rlen], "\x1b[=1;0-n", 9);
 						break;
 				}
 			}
 			else
-				memcpy(&retbuf[rlen], "\x1b[=1;0-n", 8);
+				memcpy(&retbuf[rlen], "\x1b[=1;0-n", 9);
 #else
-			memcpy(&retbuf[rlen], "\x1b[=1;0-n", 8);
+			memcpy(&retbuf[rlen], "\x1b[=1;0-n", 9);
 #endif
+		}
+	}
+	else if(strcmp(strbuf, "SyncTERM:VER") == 0) {
+		size_t rlen = strlen(retbuf);
+		size_t addon = 2 + 13 + strlen(syncterm_version) + 2 + 1;
+
+		if (rlen + addon + 1< retsize) {
+			sprintf(&retbuf[rlen], "\x1b_SyncTERM:VER;%s\x1b\\", syncterm_version);
 		}
 	}
 
@@ -4484,7 +5236,7 @@ doterm(struct bbslist *bbs)
 							break;
 						case CIOLIB_BUTTON_4_PRESS:
 						case CIOLIB_BUTTON_5_PRESS:
-							if ((ms.mode != 9) && (ms.mode != 0)) {
+							if ((ms.mode != MM_X10) && (ms.mode != MM_OFF) && (ms.mode != MM_RIP)) {
 								conn_send(mouse_buf,
 								    fill_mevent(mouse_buf, sizeof(mouse_buf), &mevent,
 								    &ms), 0);
@@ -4498,7 +5250,7 @@ doterm(struct bbslist *bbs)
 							break;
 						case CIOLIB_BUTTON_2_CLICK:
 						case CIOLIB_BUTTON_3_CLICK:
-							if (ms.mode == 9) {
+							if (ms.mode == MM_X10) {
 								conn_send(mouse_buf,
 								    fill_mevent(mouse_buf, sizeof(mouse_buf), &mevent,
 								    &ms), 0);
@@ -5111,7 +5863,7 @@ doterm(struct bbslist *bbs)
 						if (cterm->extattr & CTERM_EXTATTR_DECBKM)
 							conn_send("\x7f", 1, 0);
 						else
-							conn_send("\x1b[3~", 1, 0);
+							conn_send("\x1b[3~", 4, 0);
 						break;
 					case '\b':
 						if (cterm->extattr & CTERM_EXTATTR_DECBKM)
@@ -5155,7 +5907,7 @@ doterm(struct bbslist *bbs)
 						if (cterm->extattr & CTERM_EXTATTR_DECBKM)
 							conn_send("\x7f", 1, 0);
 						else
-							conn_send("\x1b[3~", 1, 0);
+							conn_send("\x1b[3~", 4, 0);
 						break;
 					case CIO_KEY_NPAGE: /* Page down */
 						conn_send("\033[U", 3, 0);
@@ -5164,19 +5916,19 @@ doterm(struct bbslist *bbs)
 						conn_send("\033[V", 3, 0);
 						break;
 					case CIO_KEY_F(1):
-						conn_send("\033[11~", 3, 0);
+						conn_send("\033[11~", 5, 0);
 						break;
 					case CIO_KEY_F(2):
-						conn_send("\033[12~", 3, 0);
+						conn_send("\033[12~", 5, 0);
 						break;
 					case CIO_KEY_F(3):
-						conn_send("\033[13~", 3, 0);
+						conn_send("\033[13~", 5, 0);
 						break;
 					case CIO_KEY_F(4):
-						conn_send("\033[14~", 3, 0);
+						conn_send("\033[14~", 5, 0);
 						break;
 					case CIO_KEY_F(5):
-						conn_send("\033[15~", 3, 0);
+						conn_send("\033[15~", 5, 0);
 						break;
 					case CIO_KEY_F(6):
 						conn_send("\033[17~", 5, 0);
@@ -5200,112 +5952,112 @@ doterm(struct bbslist *bbs)
 						conn_send("\033[24~", 5, 0);
 						break;
 					case CIO_KEY_SHIFT_F(1):
-						conn_send("\033[11;2~", 3, 0);
+						conn_send("\033[11;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(2):
-						conn_send("\033[12;2~", 3, 0);
+						conn_send("\033[12;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(3):
-						conn_send("\033[13;2~", 3, 0);
+						conn_send("\033[13;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(4):
-						conn_send("\033[14;2~", 3, 0);
+						conn_send("\033[14;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(5):
-						conn_send("\033[15;2~", 3, 0);
+						conn_send("\033[15;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(6):
-						conn_send("\033[17;2~", 5, 0);
+						conn_send("\033[17;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(7):
-						conn_send("\033[18;2~", 5, 0);
+						conn_send("\033[18;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(8):
-						conn_send("\033[19;2~", 5, 0);
+						conn_send("\033[19;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(9):
-						conn_send("\033[20;2~", 5, 0);
+						conn_send("\033[20;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(10):
-						conn_send("\033[21;2~", 5, 0);
+						conn_send("\033[21;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(11):
-						conn_send("\033[23;2~", 5, 0);
+						conn_send("\033[23;2~", 7, 0);
 						break;
 					case CIO_KEY_SHIFT_F(12):
-						conn_send("\033[24;2~", 5, 0);
+						conn_send("\033[24;2~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(1):
-						conn_send("\033[11;5~", 3, 0);
+						conn_send("\033[11;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(2):
-						conn_send("\033[12;5~", 3, 0);
+						conn_send("\033[12;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(3):
-						conn_send("\033[13;5~", 3, 0);
+						conn_send("\033[13;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(4):
-						conn_send("\033[14;5~", 3, 0);
+						conn_send("\033[14;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(5):
-						conn_send("\033[15;5~", 3, 0);
+						conn_send("\033[15;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(6):
-						conn_send("\033[17;5~", 5, 0);
+						conn_send("\033[17;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(7):
-						conn_send("\033[18;5~", 5, 0);
+						conn_send("\033[18;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(8):
-						conn_send("\033[19;5~", 5, 0);
+						conn_send("\033[19;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(9):
-						conn_send("\033[20;5~", 5, 0);
+						conn_send("\033[20;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(10):
-						conn_send("\033[21;5~", 5, 0);
+						conn_send("\033[21;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(11):
-						conn_send("\033[23;5~", 5, 0);
+						conn_send("\033[23;5~", 7, 0);
 						break;
 					case CIO_KEY_CTRL_F(12):
-						conn_send("\033[24;5~", 5, 0);
+						conn_send("\033[24;5~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(1):
-						conn_send("\033[11;3~", 3, 0);
+						conn_send("\033[11;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(2):
-						conn_send("\033[12;3~", 3, 0);
+						conn_send("\033[12;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(3):
-						conn_send("\033[13;3~", 3, 0);
+						conn_send("\033[13;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(4):
-						conn_send("\033[14;3~", 3, 0);
+						conn_send("\033[14;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(5):
-						conn_send("\033[15;3~", 3, 0);
+						conn_send("\033[15;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(6):
-						conn_send("\033[17;3~", 5, 0);
+						conn_send("\033[17;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(7):
-						conn_send("\033[18;3~", 5, 0);
+						conn_send("\033[18;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(8):
-						conn_send("\033[19;3~", 5, 0);
+						conn_send("\033[19;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(9):
-						conn_send("\033[20;3~", 5, 0);
+						conn_send("\033[20;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(10):
-						conn_send("\033[21;3~", 5, 0);
+						conn_send("\033[21;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(11):
-						conn_send("\033[23;3~", 5, 0);
+						conn_send("\033[23;3~", 7, 0);
 						break;
 					case CIO_KEY_ALT_F(12):
-						conn_send("\033[24;3~", 5, 0);
+						conn_send("\033[24;3~", 7, 0);
 						break;
 					case CIO_KEY_IC:
 						conn_send("\033[@", 3, 0);

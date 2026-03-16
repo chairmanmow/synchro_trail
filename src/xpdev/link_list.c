@@ -40,7 +40,11 @@ link_list_t* listInit(link_list_t* list, int flags)
 
 #if defined(LINK_LIST_THREADSAFE)
 	if (list->flags & LINK_LIST_MUTEX) {
+#ifdef _WIN32
+		pthread_mutex_init(&list->mutex, NULL);
+#else
 		list->mutex = pthread_mutex_initializer_np(/* recursive: */ true);
+#endif
 	}
 
 	if (list->flags & LINK_LIST_SEMAPHORE)
@@ -101,6 +105,7 @@ int listFreeNodes(link_list_t* list)
 
 bool listFree(link_list_t* list)
 {
+	bool ret = true;
 	if (list == NULL)
 		return false;
 
@@ -110,20 +115,20 @@ bool listFree(link_list_t* list)
 #if defined(LINK_LIST_THREADSAFE)
 
 	if (list->flags & LINK_LIST_MUTEX) {
-		while (pthread_mutex_destroy((pthread_mutex_t*)&list->mutex) == EBUSY)
-			SLEEP(1);
+		if (pthread_mutex_destroy((pthread_mutex_t*)&list->mutex))
+			ret = false;
 		list->flags &= ~LINK_LIST_MUTEX;
 	}
 
 	if (list->flags & LINK_LIST_SEMAPHORE) {
-		while (sem_destroy(&list->sem) == -1 && errno == EBUSY)
-			SLEEP(1);
+		if (sem_destroy(&list->sem) == -1 && errno == EBUSY)
+			ret = false;
 		//list->sem=(sem_t)NULL; /* Removed 08-20-08 - list->sem is never checked and this causes an error with gcc 4.1.2 (ThetaSigma) */
 		list->flags &= ~LINK_LIST_SEMAPHORE;
 	}
 #endif
 
-	return true;
+	return ret;
 }
 
 int listAttach(link_list_t* list)
@@ -424,9 +429,11 @@ int listNodeIndex(link_list_t* list, list_node_t* find_node)
 
 	listLock(list);
 
-	for (node = list->first; node != NULL; node = node->next)
+	for (node = list->first; node != NULL; node = node->next) {
 		if (node == find_node)
 			break;
+		i++;
+	}
 
 	listUnlock(list);
 

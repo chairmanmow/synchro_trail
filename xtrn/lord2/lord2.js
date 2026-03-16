@@ -301,8 +301,10 @@ function insane_run_ref(sec, fname, refret)
 				throw new Error('@do getkey with no argument');
 			if (!dk.console.waitkey(0))
 				setvar(args[0], '_');
-			lastkey = time();
-			setvar(args[0], dk.console.getkey());
+			else {
+				lastkey = time();
+				setvar(args[0], dk.console.getkey());
+			}
 		},
 		'goto':function(args) {
 			if (args.length < 1)
@@ -710,7 +712,8 @@ function insane_run_ref(sec, fname, refret)
 			update_update();
 		},
 		'buymanager':function(args) {
-			var itms = getlines();
+			var startitms = getlines();
+			var itms = [];
 			var itm;
 			var i;
 			var cur = 0;
@@ -718,12 +721,11 @@ function insane_run_ref(sec, fname, refret)
 			var choice;
 			var y = scr.pos.y;
 
-			for (i = 0; i < itms.length; i++) {
-				itms[i] = parseInt(itms[i], 10);
-				// TODO: Does this abort or ignore?
-				if (isNaN(itms[i])) {
-					throw new Error('@buymanager inventory item ' + (i + 1) + ' is invalid');
-				}
+			for (i = 0; i < startitms.length; i++) {
+				itm = parseInt(startitms[i], 10);
+				if (isNaN(itm))
+					continue;
+				itms.push(itm);
 			}
 			// Don't clear the screen first?  Interesting...
 			dk.console.gotoxy(0, y);
@@ -733,7 +735,7 @@ function insane_run_ref(sec, fname, refret)
 			dk.console.gotoxy(2, 23);
 			lw('`$Q `2to quit, `$ENTER `2to buy item.        You have `$'+pretty_int(player.money)+' `2gold.`r0');
 
-			if (items.length === 0) {
+			if (itms.length === 0) {
 				dk.console.gotoxy(0, 10);
 				lw('  `2They have nothing to sell.  (press `%Q `2to continue)');
 				do {
@@ -1079,7 +1081,6 @@ function insane_run_ref(sec, fname, refret)
 					lln(l);
 				}
 			}
-			throw new Error('@display not implemented');
 		},
 		'displayfile':function(args) {
 			// TODO: This seems to be the only way the moremap string is used.

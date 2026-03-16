@@ -1,0 +1,17 @@
+# Heal command fixtures.
+# Members start at MaxHP/2 and MaxSP/2 (Fighter: HP=40/80, SP=5/10).
+# RunEvent does NOT reset HP or SP at end in qtest script mode (reset_hp=false).
+# Both Heal and Heal SP produce observable state changes.
+
+Event HealSPEv
+  Heal SP
+  EndQ
+
+Event HealHPEv
+  Heal
+  EndQ
+
+Event HealAfterFightEv
+  Fight NextLine Stop NoRun
+  Heal SP
+  EndQ

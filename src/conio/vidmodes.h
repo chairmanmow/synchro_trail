@@ -1,5 +1,3 @@
-/* $Id: vidmodes.h,v 1.33 2020/06/27 00:04:45 deuce Exp $ */
-
 /****************************************************************************
  * @format.tab-size 4		(Plain Text/Source Code File Header)			*
  * @format.use-tabs true	(see http://www.synchro.net/ptsc_hdr.html)		*
@@ -13,20 +11,8 @@
  * See the GNU Lesser General Public License for more details: lgpl.txt or	*
  * http://www.fsf.org/copyleft/lesser.html									*
  *																			*
- * Anonymous FTP access to the most recent released source is available at	*
- * ftp://vert.synchro.net, ftp://cvs.synchro.net and ftp://ftp.synchro.net	*
- *																			*
- * Anonymous CVS access to the development source and modification history	*
- * is available at cvs.synchro.net:/cvsroot/sbbs, example:					*
- * cvs -d :pserver:anonymous@cvs.synchro.net:/cvsroot/sbbs login			*
- *     (just hit return, no password is necessary)							*
- * cvs -d :pserver:anonymous@cvs.synchro.net:/cvsroot/sbbs checkout src		*
- *																			*
  * For Synchronet coding style and modification guidelines, see				*
  * http://www.synchro.net/source.html										*
- *																			*
- * You are encouraged to submit any modifications (preferably in Unix diff	*
- * format) via e-mail to mods@synchro.net									*
  *																			*
  * Note: If this box doesn't appear square, then you need to fix your tabs.	*
  ****************************************************************************/
@@ -41,6 +27,7 @@
  #undef CIOLIB_EXPORTS
 #endif
 
+#include <stdbool.h>
 #include "ciolib.h"
 
 #define TOTAL_DAC_SIZE	282
@@ -70,12 +57,13 @@ struct  video_params {
 };
 
 struct vstat_vmem {
+	struct vmem_cell *vmem;
+	size_t count;
 	unsigned refcount;
 	int top_row;
 	int width;
 	int height;
-	size_t count;
-	struct vmem_cell *vmem;
+	bool changed;
 };
 
 struct video_stats {
@@ -114,6 +102,9 @@ struct video_stats {
 	uint32_t palette[16];
 	struct vstat_vmem *vmem;
 	uint8_t *forced_font;
+	uint8_t *forced_font2;
+	uint8_t *forced_font3;
+	uint8_t *forced_font4;
 };
 
 enum {

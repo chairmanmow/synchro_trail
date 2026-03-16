@@ -66,6 +66,7 @@ public:
 	enum output_rate cur_output_rate{output_rate_unlimited};
 	unsigned mouse_mode{MOUSE_MODE_OFF};            // Mouse reporting mode flags
 	bool pause_hotspot{false};
+	bool optimize_gotoxy{false};
 	bool suspend_lbuf{0};
 	link_list_t *mouse_hotspots{nullptr};
 
@@ -238,8 +239,11 @@ public:
 	}
 
 	virtual void line_feed(unsigned count = 1) {
-		for (unsigned i = 0; i < count; i++)
+		for (unsigned i = 0; i < count; i++) {
 			sbbs->term_out('\n');
+			if (sbbs->line_delay)
+				SLEEP(sbbs->line_delay);
+		}
 	}
 
 	/*
@@ -254,14 +258,19 @@ public:
 		}
 	}
 
-	virtual void newline(unsigned count = 1) {
+	virtual void newline(unsigned count = 1, bool no_bg_attr = false) {
 		// TODO: Original version did not increment row or lncntr
 		//       It recursed through outchar()
+		int saved_attr = curatr;
+		if (no_bg_attr && (curatr & BG_LIGHTGRAY)) { // Don't allow background colors to bleed when scrolling
+			sbbs->attr(LIGHTGRAY);
+		}
 		for (unsigned i = 0; i < count; i++) {
 			carriage_return();
 			line_feed();
 			sbbs->check_pause();
 		}
+		sbbs->attr(saved_attr);
 	}
 
 	virtual void clearscreen() {
@@ -301,19 +310,22 @@ public:
 		}
 	}
 	virtual void set_output_rate(enum output_rate speed) {}
-	virtual void center(const char *instr, bool msg = false, unsigned columns = 0) {
-		if (columns == 0)
-			columns = cols;
+
+	virtual uint print_cols(int mode) {
+		uint cols = this->cols;
+		if ((mode & P_80COLS) && cols > 80)
+			cols = 80;
+		return cols;
+	}
+	virtual void center(const char *instr, int mode = 0) {
+		uint cols = print_cols(mode);
 		char *str = strdup(instr);
 		truncsp(str);
 		size_t len = bstrlen(str);
 		carriage_return();
-		if (len < columns)
-			cursor_right((columns - len) / 2);
-		if (msg)
-			sbbs->putmsg(str, P_NONE);
-		else
-			sbbs->bputs(str);
+		if (len < cols)
+			cursor_right((cols - len) / 2);
+		sbbs->bputs(str, mode);
 		free(str);
 		newline();
 	}
@@ -332,17 +344,45 @@ public:
 				str++;
 				if (*str == 0 || *str == 'Z')    // EOF
 					break;
-				if (*str == '[') // CR
-					count = 0;
+				if (*str == '[') { // CR
+					size_t next = bstrlen(str + 1, mode);
+					if (next > count)
+						count = next;
+					break;
+				}
+				if (*str == ']') // LF
+					break;
 				else if (*str == '<' && count) // ND-Backspace
 					count--;
+				else if (*str == '/' && count) // Conditional newline
+					break;
+			} else if ((mode & P_PCBOARD) && *str == '@' && *(str + 1) == 'X' && IS_UPPERHEXDIGIT(*(str + 2)) && IS_UPPERHEXDIGIT(*(str + 3))) {
+				len = 4;
+			} else if ((mode & P_WILDCAT) && *str == '@' && IS_UPPERHEXDIGIT(*(str + 1)) && IS_UPPERHEXDIGIT(*(str + 2)) && *(str + 3) == '@') {
+				len = 4;
+			} else if ((mode & P_RENEGADE) && *str == '|' && IS_DIGIT(*(str + 1)) && IS_DIGIT(*(str + 2))) {
+				len = 3;
+			} else if ((mode & P_CELERITY) && *str == '|' && IS_ALPHA(*(str + 1))) {
+				len = 2;
+			} else if ((mode & P_WWIV) && *str == CTRL_C && IS_DIGIT(*(str + 1))) {
+				len = 2;
 			} else if (((*str) & 0x80) && (mode & P_UTF8)) {
 				enum unicode_codepoint codepoint = UNICODE_UNDEFINED;
 				len = utf8_getc(str, end - str, &codepoint);
 				if (len < 1)
 					break;
 				count += unicode_width(codepoint, sbbs->unicode_zerowidth);
-			} else
+			} else if (*str == '\b') {
+				if (count)
+					count--;
+			} else if (*str == '\r') {
+				size_t next = bstrlen(str + 1, mode);
+				if (next > count)
+					count = next;
+				break;
+			} else if (*str == '\n')
+				break;
+			else
 				count++;
 			str += len;
 		}

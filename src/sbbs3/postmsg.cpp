@@ -339,9 +339,8 @@ bool sbbs_t::postmsg(int subnum, int wm_mode, smb_t* resmb, smbmsg_t* remsg)
 	user_posted_msg(&cfg, &useron, 1);
 	bprintf(text[Posted], cfg.grp[cfg.sub[subnum]->grp]->sname
 	        , cfg.sub[subnum]->lname);
-	snprintf(str, sizeof str, "posted to %s on %s %s"
+	llprintf("P+", "posted to %s on %s %s"
 	         , touser, cfg.grp[cfg.sub[subnum]->grp]->sname, cfg.sub[subnum]->lname);
-	logline("P+", str);
 
 	char topic[128];
 	snprintf(topic, sizeof(topic), "post/%s", cfg.sub[subnum]->code);
@@ -372,7 +371,7 @@ bool sbbs_t::postmsg(int subnum, int wm_mode, smb_t* resmb, smbmsg_t* remsg)
 	return true;
 }
 
-// When message body is UTF-8 encoded, insure header files are UTF-8 (not CP437) encoded too
+// When message body is UTF-8 encoded, insure header fields are UTF-8 (not CP437) encoded too
 extern "C" void normalize_msg_hfield_encoding(const char* charset, char* str, size_t size)
 {
 	char utf8_str[128];
@@ -453,11 +452,11 @@ extern "C" int savemsg(scfg_t* cfg, smb_t* smb, smbmsg_t* msg, client_t* client,
 	}
 
 	/* Lock the msgbase early to preserve our message number (used in MSG-IDs) */
-	if (!smb->locked && smb_locksmbhdr(smb) != SMB_SUCCESS)
+	if (!smb->smbhdr_locked && smb_locksmbhdr(smb) != SMB_SUCCESS)
 		return SMB_ERR_LOCK;
 
 	if (filelength(fileno(smb->shd_fp)) > 0 && (i = smb_getstatus(smb)) != SMB_SUCCESS) {
-		if (smb->locked)
+		if (smb->smbhdr_locked)
 			smb_unlocksmbhdr(smb);
 		return i;
 	}

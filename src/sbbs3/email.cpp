@@ -74,7 +74,7 @@ bool sbbs_t::email(int usernumber, const char *top, const char *subj, int mode, 
 		return false;
 	}
 	if ((user.misc & NETMAIL) && (cfg.sys_misc & SM_FWDTONET) && !(mode & WM_NOFWD) && !(useron.rest & FLAG('M'))) {
-		if (is_supported_netmail_addr(&cfg, user.netmail)) {
+		if (netmail_addr_is_supported(&cfg, user.netmail)) {
 			bprintf(text[UserNetMail], user.netmail);
 			if ((mode & WM_FORCEFWD) || yesno(text[ForwardMailQ])) /* Forward to netmail address */
 				return netmail(user.netmail, subj, mode, resmb, remsg);
@@ -90,10 +90,9 @@ bool sbbs_t::email(int usernumber, const char *top, const char *subj, int mode, 
 	action = NODE_SMAL;
 	nodesync();
 
-	if (cfg.feedback_mod[0] && to_sysop && !useron_is_sysop()
-	    && (useron.fbacks || usernumber != cfg.valuser)) {
-		main_csi.logic = LOGIC_TRUE;
-		if (exec_bin(cfg.feedback_mod, &main_csi) != 0 || main_csi.logic != LOGIC_TRUE)
+	if (to_sysop && !useron_is_sysop() && (useron.fbacks || usernumber != cfg.valuser)) {
+		bool invoked = false;
+		if (exec_mod("send feedback", cfg.feedback_mod, &invoked) != 0 && invoked)
 			return false;
 	}
 
@@ -292,17 +291,18 @@ bool sbbs_t::email(int usernumber, const char *top, const char *subj, int mode, 
 	smb_dfield(&msg, TEXT_BODY, length);
 
 	i = smb_addmsghdr(&smb, &msg, smb_storage_mode(&cfg, &smb)); // calls smb_unlocksmbhdr()
-	if (i == SMB_SUCCESS && remsg != NULL)
-		smb_updatethread(&smb, remsg, msg.hdr.number);
+	if (i == SMB_SUCCESS) {
+		if (remsg != NULL)
+			smb_updatethread(&smb, remsg, msg.hdr.number);
+	} else {
+		errormsg(WHERE, ERR_WRITE, smb.file, i, smb.last_error);
+		smb_freemsgdat(&smb, offset, length, 1);
+	}
 	smb_close(&smb);
 	smb_stack(&smb, SMB_STACK_POP);
-
 	smb_freemsgmem(&msg);
-	if (i != SMB_SUCCESS) {
-		smb_freemsgdat(&smb, offset, length, 1);
-		errormsg(WHERE, ERR_WRITE, smb.file, i, smb.last_error);
+	if (i != SMB_SUCCESS)
 		return false;
-	}
 
 	if (usernumber == 1)
 		logon_fbacks++;
@@ -310,9 +310,8 @@ bool sbbs_t::email(int usernumber, const char *top, const char *subj, int mode, 
 		logon_emails++;
 	user_sent_email(&cfg, &useron, 1, usernumber == 1);
 	bprintf(text[Emailed], username(&cfg, usernumber, tmp), usernumber);
-	safe_snprintf(str, sizeof(str), "sent e-mail to %s #%d"
+	llprintf("E+", "sent e-mail to %s #%d"
 	              , username(&cfg, usernumber, tmp), usernumber);
-	logline("E+", str);
 	if (mode & WM_FILE && online == ON_REMOTE)
 		autohangup();
 	if (msgattr & MSG_ANONYMOUS)               /* Don't tell user if anonymous */
@@ -331,4 +330,8 @@ bool sbbs_t::email(int usernumber, const char *top, const char *subj, int mode, 
 		putsmsg(usernumber, str);
 	}
 	return true;
+}
+
+void sbbs_t::email_sec() {
+	exec_mod("email section", cfg.emailsec_mod);
 }

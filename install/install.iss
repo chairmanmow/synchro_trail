@@ -2,7 +2,7 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Synchronet BBS Software"
-#define MyAppVersion "3.20d"
+#define MyAppVersion "3.21c"
 #define MyAppPublisher "Rob Swindell"
 #define MyAppURL "http://www.synchro.net/"
 #define MyAppSupportURL "http://wiki.synchro.net/howto:support"
@@ -24,8 +24,8 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppSupportURL}
 AppUpdatesURL={#MyAppDownloadURL}
-AppCopyright=Copyright 2025 {#MyAppPublisher}
-VersionInfoVersion=3.20.3
+AppCopyright=Copyright 2026 {#MyAppPublisher}
+VersionInfoVersion=3.21.2
 AppMutex=sbbs_running,sbbsctrl_running
 DefaultDirName={sd}\sbbs
 DefaultGroupName={#MyAppName}
@@ -79,16 +79,18 @@ Source: "s:\sbbs\exec\mlabels.exe";                           DestDir: "{app}\ex
 Source: "s:\sbbs\exec\svdmansi.com";                          DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "s:\sbbs\exec\dosxtrn.exe";                           DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "s:\xfer\sbbs\sbbslist.json";                         DestDir: "{app}\data";
+Source: "s:\sbbs\data\text\info.ini";                         DestDir: "{app}\data\text";
 Source: "node1\node.ini";                                     DestDir: "{app}\node1"; Flags: ignoreversion
 Source: "node1\node.ini";                                     DestDir: "{app}\node2"; Flags: ignoreversion
 Source: "node1\node.ini";                                     DestDir: "{app}\node3"; Flags: ignoreversion
 Source: "node1\node.ini";                                     DestDir: "{app}\node4"; Flags: ignoreversion
 Source: "exec\*";   DestDir: "{app}\exec";  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "baja.js,menu.js,sbbsedit.js,jsdocs.js,testbuild.js,load\menulib.js"
-Source: "ctrl\*";   DestDir: "{app}\ctrl";  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.?.cnf,*.?.ini"
+Source: "ctrl\*";   DestDir: "{app}\ctrl";  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.?.cnf,*.?.ini,dsts.*,*.dab,text.ini"
 Source: "text\*";   DestDir: "{app}\text";  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.0??.*,.gitignore"
-Source: "xtrn\*";   DestDir: "{app}\xtrn";  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.obj,*.tds,smm,.gitignore"
+Source: "xtrn\*";   DestDir: "{app}\xtrn";  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "*.obj,*.tds,*.o,*.d,smm,.gitignore,gcc.*,bcc.*"
 Source: "docs\*";   DestDir: "{app}\docs";  Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "webv4\*";                                            DestDir: "{app}\webv4";            Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "xtrn\utopia\settings.example.ini";                   DestDir: "{app}\xtrn\utopia"; DestName: "settings.ini"; Flags: ignoreversion
 Source: "c:\bin\zip.exe";                                     DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "c:\bin\unzip.exe";                                   DestDir: "{app}\exec";  Flags: ignoreversion
 ; NOTE: Don't use "Flags: ignoreversion" on any shared system files

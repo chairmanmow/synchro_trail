@@ -28,7 +28,7 @@
 #include "ini_file.h"
 
 #define SBBSECHO_VERSION_MAJOR      3
-#define SBBSECHO_VERSION_MINOR      29
+#define SBBSECHO_VERSION_MINOR      37
 
 #define SBBSECHO_PRODUCT_CODE       0x12FF  /* from http://ftsc.org/docs/ftscprod.013 */
 
@@ -37,7 +37,7 @@
 #define DEFAULT_INBOUND             "../fido/nonsecure"
 #define DEFAULT_SECURE_INBOUND      "../fido/inbound"
 #define DEFAULT_OUTBOUND            "../fido/outbound"
-#define DEFAULT_AREA_FILE           "../data/areas.bbs"
+#define DEFAULT_AREA_FILE           ""
 #define DEFAULT_BAD_AREA_FILE       "../data/badareas.lst"
 #define DEFAULT_ECHOSTATS_FILE      "../data/echostats.ini"
 #define DEFAULT_LOG_FILE            "../data/sbbsecho.log"
@@ -150,6 +150,7 @@ struct robot {
 	char semfile[MAX_PATH + 1];
 	uint16_t attr;
 	unsigned recv_count;
+	bool uses_msg; // Uses FTS-1 stored message (.msg file)
 };
 
 typedef struct {
@@ -206,6 +207,7 @@ typedef struct {
 	bool ignore_netmail_kill_attr;
 	bool ignore_netmail_recv_attr;
 	bool ignore_netmail_local_attr;
+	bool ignore_packed_foreign_netmail;
 	bool relay_filtered_msgs;
 	bool auto_add_subs;
 	bool auto_add_to_areafile;

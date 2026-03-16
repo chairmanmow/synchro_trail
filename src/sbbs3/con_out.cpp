@@ -27,9 +27,10 @@
 
 char* sbbs_t::auto_utf8(const char* str, int& mode)
 {
+	// If the string starts with a UTF-8 BOM, set P_UTF8 mode and skip the BOM
 	if (strncmp(str, "\xEF\xBB\xBF", 3) == 0) {
 		mode |= P_UTF8;
-		return (char*)str;
+		return (char*)str + 3;
 	}
 	if (mode & P_AUTO_UTF8) {
 		if (!str_is_ascii(str) && utf8_str_is_valid(str))
@@ -60,6 +61,13 @@ int sbbs_t::bputs(const char *str, int mode)
 	if (online == ON_LOCAL)  /* script running as event */
 		return lputs(LOG_INFO, str);
 
+	uint cols = term->print_cols(mode);
+	if (mode & P_CENTER) {
+		size_t len = term->bstrlen(str);
+		term->carriage_return();
+		if (len < cols)
+			term->cursor_right((cols - len) / 2);
+	}
 	str = auto_utf8(str, mode);
 	size_t len = strlen(str);
 	while (l < len && online) {
@@ -71,7 +79,7 @@ int sbbs_t::bputs(const char *str, int mode)
 			case CTRL_A:
 				break;
 			default: // printing char
-				if ((mode & P_TRUNCATE) && term->column >= (term->cols - 1)) {
+				if ((mode & P_TRUNCATE) && term->column >= (cols - 1)) {
 					l++;
 					continue;
 				}
@@ -315,18 +323,19 @@ size_t sbbs_t::print_utf8_as_cp437(const char* str, size_t len)
 			return len;
 		}
 	}
+	size_t width = unicode_width(codepoint, unicode_zerowidth);
 	char ch = unicode_to_cp437(codepoint);
 	if (ch)
 		outchar(ch);
 	else {
-		size_t width = unicode_width(codepoint, unicode_zerowidth);
-		for (size_t i = 0; i < width; ++i)
-			outchar(CP437_INVERTED_QUESTION_MARK);
+		outchar(CP437_INVERTED_QUESTION_MARK);
 		char seq[32] = "";
 		for (size_t i = 0; i < len; i++)
 			snprintf(seq + strlen(seq), 4, "%02X ", (uchar) * (str + i));
 		lprintf(LOG_DEBUG, "Unsupported UTF-8 sequence: %s (U+%X) width=%u", seq, codepoint, (uint)width);
 	}
+	for (size_t i = 1; i < width; ++i)
+		outchar(' ');
 	return len;
 }
 
@@ -392,12 +401,18 @@ size_t sbbs_t::cp437_out(int ich)
 			term->cursor_left();
 			return 1;
 		case '\t':	// TAB
-			if (term->column < (term->cols - 1)) {
-                                outchar(' ');
-                                while ((term->column < (term->cols - 1)) && (term->column % term->tabstop))
-                                        outchar(' ');
-                        }
-                        return 1;
+		{
+			int col = term->column;
+			if (col < (int)(term->cols - 1) && term->tabstop > 0) {
+				int target = col + 1;
+				target += (term->tabstop - (target % term->tabstop)) % term->tabstop;
+				if (target >= (int)term->cols)
+					target = term->cols - 1;
+				for (int i = col; i < target; i++)
+					term_out(' ');
+			}
+			return 1;
+		}
 
 		case '\n':	// LF
 			term->line_feed();
@@ -729,19 +744,16 @@ int sbbs_t::outchar(char ch)
 	if (rainbow_index >= 0) {
 		attr(rainbow[rainbow_index]);
 		if (rainbow[rainbow_index + 1] == 0) {
-			if (rainbow_repeat)
+			if (rainbow_wrap)
 				rainbow_index = 0;
 		} else
 			++rainbow_index;
 	}
-	if ((console & CON_R_ECHOX) && (uchar)ch >= ' ')
+	if ((console & CON_PASSWORD) && (uchar)ch >= ' ')
 		ch = *text[PasswordChar];
 
-	if (ch == '\n' && line_delay)
-		SLEEP(line_delay);
-
 	/*
-	 * When line counter overflows, pause on the next pause-eligable line
+	 * When line counter overflows, pause on the next pause-eligible line
 	 * and log a debug message
 	 */
 	if (term->lncntr >= term->rows - 1 && term->column == 0) {
@@ -753,13 +765,15 @@ int sbbs_t::outchar(char ch)
 		}
 	}
 
-	if (ch == FF && term->lncntr > 0 && term->row > 0) {
-		term->lncntr = 0;
-		term->newline();
-		if (!(sys_status & SS_PAUSEOFF)) {
-			pause();
-			while (term->lncntr && online && !(sys_status & SS_ABORT))
+	if (ch == FF) {
+		if (term->lncntr > 0 && term->row > 0) {
+			term->lncntr = 0;
+			term->newline(); // Legacy behavior: FF does LF first, conditional-LF would have made more sense (but would be a behavior change)
+			if (!(sys_status & SS_PAUSEOFF)) { // Intentionally ignore UPAUSE here
 				pause();
+				while (term->lncntr && online && !(sys_status & SS_ABORT))
+					pause();
+			}
 		}
 	}
 
@@ -769,9 +783,13 @@ int sbbs_t::outchar(char ch)
 	return 0;
 }
 
+bool sbbs_t::pause_enabled() {
+	return (((useron.misc ^ (console & CON_PAUSE)) & UPAUSE) || (sys_status & SS_PAUSEON))
+		&& !(sys_status & (SS_PAUSEOFF | SS_ABORT));
+}
+
 bool sbbs_t::check_pause() {
-	if (term->lncntr == term->rows - 1 && ((useron.misc & (UPAUSE ^ (console & CON_PAUSEOFF))) || sys_status & SS_PAUSEON)
-	    && !(sys_status & (SS_PAUSEOFF | SS_ABORT))) {
+	if (term->lncntr == term->rows - 1 && pause_enabled()) {
 		term->lncntr = 0;
 		pause();
 		return true;
@@ -834,7 +852,7 @@ void sbbs_t::getdimensions()
 void sbbs_t::ctrl_a(char x)
 {
 	uint       atr = curatr;
-	struct  tm tm;
+	char	   tmp[64];
 
 	if (x && (uchar)x <= CTRL_Z) {    /* Ctrl-A through Ctrl-Z for users with MF only */
 		if (!(useron.flags1 & FLAG(x + 64)))
@@ -917,16 +935,7 @@ void sbbs_t::ctrl_a(char x)
 			term->lncntr = 0;
 			break;
 		case 'T':   /* Time */
-			now = time(NULL);
-			localtime_r(&now, &tm);
-			if (cfg.sys_misc & SM_MILITARY)
-				bprintf("%02u:%02u:%02u"
-				        , tm.tm_hour, tm.tm_min, tm.tm_sec);
-			else
-				bprintf("%02d:%02d %s"
-				        , tm.tm_hour == 0 ? 12
-				    : tm.tm_hour > 12 ? tm.tm_hour - 12
-				    : tm.tm_hour, tm.tm_min, tm.tm_hour > 11 ? "pm":"am");
+			bputs(time_as_hhmmss(&cfg, time(nullptr), tmp, sizeof tmp));
 			break;
 		case 'D':   /* Date */
 			now = time(NULL);
@@ -1056,10 +1065,16 @@ void sbbs_t::ctrl_a(char x)
 		case '7':   /* White Background */
 			attr(atr | BG_LIGHTGRAY);
 			break;
+		case 'U':   /* User Theme */
+			attr(cfg.color[x == 'u' ? clr_userlow : clr_userhigh]);
+			break;
+		case 'V':   /* Mnemonics */
+			attr(cfg.color[x == 'v' ? clr_mnelow : clr_mnehigh]);
+			break;
 		case 'X':   // Rainbow
 			if (rainbow[rainbow_index + 1] != 0)
 				++rainbow_index;
-			rainbow_repeat = (x == 'X');
+			rainbow_wrap = (x == 'X');
 			break;
 	}
 }

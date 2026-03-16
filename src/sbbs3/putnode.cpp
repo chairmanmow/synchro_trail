@@ -33,6 +33,7 @@ bool sbbs_t::putnodedat(uint number, node_t* node)
 	int  wr = 0;
 	int  wrerr = 0;
 	int  attempts;
+	bool result = true;
 
 	if (number < 1 || number > cfg.sys_nodes) {
 		errormsg(WHERE, ERR_CHK, "node number", number);
@@ -51,12 +52,10 @@ bool sbbs_t::putnodedat(uint number, node_t* node)
 
 	snprintf(path, sizeof path, "%snode.dab", cfg.ctrl_dir);
 	pthread_mutex_lock(&nodefile_mutex);
-	if (nodefile == -1) {
-		if ((nodefile = nopen(path, O_CREAT | O_RDWR | O_DENYNONE)) == -1) {
-			pthread_mutex_unlock(&nodefile_mutex);
-			errormsg(WHERE, ERR_OPEN, path, O_CREAT | O_RDWR | O_DENYNONE);
-			return false;
-		}
+	if (nodefile < 0) {
+		pthread_mutex_unlock(&nodefile_mutex);
+		errormsg(WHERE, ERR_CHK, "nodefile", nodefile);
+		return false;
 	}
 
 	for (attempts = 0; attempts < 10; attempts++) {
@@ -66,7 +65,7 @@ bool sbbs_t::putnodedat(uint number, node_t* node)
 				break;
 			wrerr = errno;    /* save write error */
 		}
-		FILE_RETRY_DELAY(attempts + 1);
+		FILE_RETRY_DELAY(attempts + 1, LOCK_RETRY_DELAY);
 	}
 	unlocknodedat(number);
 
@@ -77,11 +76,45 @@ bool sbbs_t::putnodedat(uint number, node_t* node)
 	}
 	if (wr != sizeof(node_t)) {
 		errno = wrerr;
-		errormsg(WHERE, ERR_WRITE, "nodefile", number);
+		errormsg(WHERE, ERR_WRITE, path, number);
 		return false;
 	}
 
-	return utime(path, NULL) == 0;   /* Update mod time for NFS/smbfs compatibility */
+	if (utime(path, NULL) != 0) {  /* Update mod time for NFS/smbfs compatibility */
+		errormsg(WHERE, "updating timestamp", path, number);
+		return false;
+	}
+
+	// Write to node#/status.ini
+	if (number == cfg.node_num) {
+		str_list_t ini = strListInit();
+		iniSetUInteger(&ini, ROOT_SECTION, "status", node->status, nullptr);
+		iniSetUInteger(&ini, ROOT_SECTION, "errors", node->errors, nullptr);
+		iniSetUInteger(&ini, ROOT_SECTION, "action", node->action, nullptr);
+		iniSetUInteger(&ini, ROOT_SECTION, "useron", node->useron, nullptr);
+		iniSetHexInt(&ini, ROOT_SECTION, "conn", node->connection, nullptr);
+		iniSetHexInt(&ini, ROOT_SECTION, "misc", node->misc, nullptr);
+		iniSetUInteger(&ini, ROOT_SECTION, "aux", node->aux, nullptr);
+		iniSetUInteger(&ini, ROOT_SECTION, "extaux", node->extaux, nullptr);
+		if ((node->status == NODE_INUSE || node->status == NODE_QUIET)
+			&& node->action == NODE_XTRN && xtrnnum_is_valid(&cfg, node->aux - 1))
+			iniSetString(&ini, ROOT_SECTION, "xtrn", cfg.xtrn[node->aux - 1]->code, nullptr);
+
+		snprintf(path, sizeof path, "%sstatus.ini", cfg.node_path[number - 1]);
+		FILE* fp = iniOpenFile(path, /* modify */ true);
+		if (fp == NULL) {
+			errormsg(WHERE, ERR_OPEN, path, number);
+			result = false;
+		} else {
+			result = iniWriteFile(fp, ini);
+			iniCloseFile(fp);
+			if (!result)
+				errormsg(WHERE, ERR_WRITE, path, number);
+		}
+		strListFree(&ini);
+	}
+
+	return result;
 }
 
 bool sbbs_t::unlocknodedat(uint number)
@@ -91,10 +124,14 @@ bool sbbs_t::unlocknodedat(uint number)
 		errormsg(WHERE, ERR_CHK, "node number", number);
 		return false;
 	}
+	if (nodefile < 0) {
+		pthread_mutex_unlock(&nodefile_mutex);
+		errormsg(WHERE, ERR_CHK, "nodefile", nodefile);
+		return false;
+	}
 	int result = unlock(nodefile, (number - 1) * sizeof(node_t), sizeof(node_t));
 	if (cfg.node_misc & NM_CLOSENODEDAB) {
-		close(nodefile);
-		nodefile = -1;
+		CLOSE_OPEN_FILE(nodefile);
 	}
 	pthread_mutex_unlock(&nodefile_mutex);
 	return result == 0;
@@ -102,7 +139,6 @@ bool sbbs_t::unlocknodedat(uint number)
 
 bool sbbs_t::putnodeext(uint number, char *ext)
 {
-	char str[MAX_PATH + 1];
 	int  count;
 	int  wr;
 
@@ -124,15 +160,14 @@ bool sbbs_t::putnodeext(uint number, char *ext)
 			if (wr == 128)
 				break;
 		}
-		FILE_RETRY_DELAY(count + 1);
+		FILE_RETRY_DELAY(count + 1, LOCK_RETRY_DELAY);
 	}
 	close(node_ext);
 	node_ext = -1;
 
 	if (count > (LOOP_NODEDAB / 2) && count != LOOP_NODEDAB) {
-		snprintf(str, sizeof str, "NODE.EXB (node %d) COLLISION - Count: %d"
+		llprintf(LOG_NOTICE, "!!", "NODE.EXB (node %d) COLLISION - Count: %d"
 		         , number + 1, count);
-		logline(LOG_NOTICE, "!!", str);
 	}
 	if (count == LOOP_NODEDAB) {
 		errormsg(WHERE, ERR_WRITE, "NODE.EXB", number + 1);

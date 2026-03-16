@@ -40,11 +40,16 @@ static const char* strInterfaces = "Interface";
 static const char* strPort = "Port";
 static const char* strMaxClients = "MaxClients";
 static const char* strMaxInactivity = "MaxInactivity";
+static const char* strMaxDumbTermInactivity = "MaxDumbTermInactivity";
 static const char* strMaxLoginInactivity = "MaxLoginInactivity";
 static const char* strMaxNewUserInactivity = "MaxNewUserInactivity";
 static const char* strMaxSessionInactivity = "MaxSessionInactivity";
 static const char* strMaxSFTPInactivity = "MaxSFTPInactivity";
 static const char* strMaxConConn = "MaxConcurrentConnections";
+static const char* strMaxRequestPerPeriod = "MaxRequestsPerPeriod";
+static const char* strRequestRateLimitPeriod = "RequestRateLimitPeriod";
+static const char* strMaxConnectsPerPeriod = "MaxConnectsPerPeriod";
+static const char* strConnectRateLimitPeriod = "ConnectRateLimitPeriod";
 static const char* strHostName = "HostName";
 static const char* strLogLevel = "LogLevel";
 static const char* strEventLogLevel = "EventLogLevel";
@@ -264,11 +269,14 @@ static void set_login_attempt_settings(str_list_t* lp, const char* section, stru
 
 static const struct in6_addr wildcard6;
 
-static void get_ini_globals(str_list_t list, global_startup_t* global)
+static bool get_ini_globals(str_list_t list, global_startup_t* global)
 {
 	const char* section = "Global";
 	char        value[INI_MAX_VALUE_LEN];
 	char*       p;
+
+	if (global->size != sizeof *global)
+		return false;
 
 	p = iniGetString(list, section, strCtrlDirectory, nulstr, value);
 	if (*p) {
@@ -308,6 +316,8 @@ static void get_ini_globals(str_list_t list, global_startup_t* global)
 
 	sbbs_get_js_settings(list, section, &global->js, &global->js);
 	sbbs_get_sound_settings(list, section, &global->sound, &global->sound);
+
+	return true;
 }
 
 void sbbs_free_ini(
@@ -345,8 +355,8 @@ void sbbs_free_ini(
 	}
 }
 
-void sbbs_read_ini(
-	FILE*                  fp
+bool sbbs_read_ini(
+	  FILE*                  fp
 	, const char*            ini_fname
 	, global_startup_t*      global
 	, bool*                  run_bbs
@@ -377,6 +387,7 @@ void sbbs_read_ini(
 
 	if (global == NULL) {
 		memset(&global_buf, 0, sizeof(global_buf));
+		global_buf.size = sizeof global_buf;
 		global = &global_buf;
 	}
 
@@ -388,9 +399,12 @@ void sbbs_read_ini(
 	              , services
 	              );
 
-	list = iniReadFile(fp);
+	list = iniReadFiles(fp, /* includes: */ true);
 
-	get_ini_globals(list, global);
+	if (!get_ini_globals(list, global)) {
+		iniFreeStringList(list);
+		return false;
+	}
 
 	if (global->ctrl_dir[0]) {
 		if (bbs != NULL)
@@ -430,6 +444,11 @@ void sbbs_read_ini(
 
 	if (bbs != NULL) {
 
+		if (bbs->size != sizeof *bbs) {
+			free(global_interfaces);
+			iniFreeStringList(list);
+			return false;
+		}
 		bbs->outgoing4.s_addr
 		    = iniGetIpAddress(list, section, strOutgoing4, global->outgoing4.s_addr);
 		bbs->outgoing6
@@ -530,6 +549,7 @@ void sbbs_read_ini(
 		bbs->login_attempt = get_login_attempt_settings(list, section, global);
 		bbs->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, 0);
 
+		bbs->max_dumbterm_inactivity = (uint16_t)iniGetDuration(list, section, strMaxDumbTermInactivity, 60);
 		bbs->max_login_inactivity = (uint16_t)iniGetDuration(list, section, strMaxLoginInactivity, 10 * 60);
 		bbs->max_newuser_inactivity = (uint16_t)iniGetDuration(list, section, strMaxNewUserInactivity, 60 * 60);
 		bbs->max_session_inactivity = (uint16_t)iniGetDuration(list, section, strMaxSessionInactivity, 10 * 60);
@@ -546,6 +566,11 @@ void sbbs_read_ini(
 
 	if (ftp != NULL) {
 
+		if (ftp->size != sizeof *ftp) {
+			free(global_interfaces);
+			iniFreeStringList(list);
+			return false;
+		}
 		ftp->outgoing4.s_addr
 		    = iniGetIpAddress(list, section, strOutgoing4, global->outgoing4.s_addr);
 		ftp->outgoing6
@@ -603,6 +628,9 @@ void sbbs_read_ini(
 		ftp->bind_retry_delay = iniGetInteger(list, section, strBindRetryDelay, global->bind_retry_delay);
 		ftp->login_attempt = get_login_attempt_settings(list, section, global);
 		ftp->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, 0);
+		ftp->max_requests_per_period = iniGetUInteger(list, section, strMaxRequestPerPeriod, 0);
+		ftp->request_rate_limit_period = iniGetUInteger(list, section, strRequestRateLimitPeriod, 60 * 60);
+
 	}
 
 	/***********************************************************************/
@@ -613,6 +641,10 @@ void sbbs_read_ini(
 
 	if (mail != NULL) {
 
+		if (mail->size != sizeof *mail) {
+			free(global_interfaces);
+			iniFreeStringList(list);
+		}
 		mail->interfaces
 		    = iniGetStringList(list, section, strInterfaces, ",", global_interfaces);
 		mail->outgoing4.s_addr
@@ -708,6 +740,8 @@ void sbbs_read_ini(
 		mail->bind_retry_delay = iniGetInteger(list, section, strBindRetryDelay, global->bind_retry_delay);
 		mail->login_attempt = get_login_attempt_settings(list, section, global);
 		mail->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, 0);
+		mail->max_requests_per_period = iniGetUInteger(list, section, strMaxRequestPerPeriod, 0);
+		mail->request_rate_limit_period = iniGetUInteger(list, section, strRequestRateLimitPeriod, 60 * 60);
 		mail->spam_block_duration = (uint)iniGetDuration(list, section, "SpamBlockDuration", 0);
 		mail->notify_offline_users = iniGetBool(list, section, "NotifyOfflineUsers", false);
 	}
@@ -720,6 +754,11 @@ void sbbs_read_ini(
 
 	if (services != NULL) {
 
+		if (services->size != sizeof *services) {
+			free(global_interfaces);
+			iniFreeStringList(list);
+			return false;
+		}
 		services->interfaces
 		    = iniGetStringList(list, section, strInterfaces, ",", global_interfaces);
 		services->outgoing4.s_addr
@@ -755,6 +794,9 @@ void sbbs_read_ini(
 		    = iniGetBitField(list, section, strOptions, service_options
 		                     , BBS_OPT_NO_HOST_LOOKUP);
 
+		services->max_connects_per_period = iniGetUInteger(list, section, strMaxConnectsPerPeriod, 0);
+		services->connect_rate_limit_period = iniGetUInteger(list, section, strConnectRateLimitPeriod, 60 * 60);
+
 		services->bind_retry_count = iniGetInteger(list, section, strBindRetryCount, global->bind_retry_count);
 		services->bind_retry_delay = iniGetInteger(list, section, strBindRetryDelay, global->bind_retry_delay);
 		services->login_attempt = get_login_attempt_settings(list, section, global);
@@ -768,6 +810,11 @@ void sbbs_read_ini(
 
 	if (web != NULL) {
 
+		if (web->size != sizeof *web) {
+			free(global_interfaces);
+			iniFreeStringList(list);
+			return false;
+		}
 		web->interfaces
 		    = iniGetStringList(list, section, strInterfaces, ",", global_interfaces);
 		web->tls_interfaces
@@ -842,10 +889,17 @@ void sbbs_read_ini(
 		web->bind_retry_delay = iniGetInteger(list, section, strBindRetryDelay, global->bind_retry_delay);
 		web->login_attempt = get_login_attempt_settings(list, section, global);
 		web->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, WEB_DEFAULT_MAX_CON_CONN);
+		web->max_requests_per_period = iniGetUInteger(list, section, strMaxRequestPerPeriod, 0);
+		web->request_rate_limit_period = iniGetUInteger(list, section, strRequestRateLimitPeriod, 60 * 60);
+		SAFECOPY(web->proxy_ip_header
+		         , iniGetString(list, section, "RemoteIPHeader", nulstr, value));
+		SAFECOPY(web->custom_log_fmt
+		         , iniGetString(list, section, "CustomLogFormat", nulstr, value));
 	}
 
 	free(global_interfaces);
 	iniFreeStringList(list);
+	return true;
 }
 
 bool sbbs_write_ini(
@@ -882,7 +936,9 @@ bool sbbs_write_ini(
 
 	if (global == NULL) {
 		memset(&global_buf, 0, sizeof(global_buf));
-		get_ini_globals(list, &global_buf);
+		global_buf.size = sizeof global_buf;
+		if (!get_ini_globals(list, &global_buf))
+			return false;
 		global = &global_buf;
 	}
 
@@ -966,6 +1022,8 @@ bool sbbs_write_ini(
 			if (!iniSetUInteger(lp, section, "OutbufDrainTimeout", bbs->outbuf_drain_timeout, &style))
 				break;
 			if (!iniSetUInteger(lp, section, strMaxConConn, bbs->max_concurrent_connections, &style))
+				break;
+			if (!iniSetDuration(lp, section, strMaxDumbTermInactivity, bbs->max_dumbterm_inactivity, &style))
 				break;
 			if (!iniSetDuration(lp, section, strMaxLoginInactivity, bbs->max_login_inactivity, &style))
 				break;
@@ -1073,6 +1131,10 @@ bool sbbs_write_ini(
 			if (!iniSetDuration(lp, section, strMaxInactivity, ftp->max_inactivity, &style))
 				break;
 			if (!iniSetUInteger(lp, section, strMaxConConn, ftp->max_concurrent_connections, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strMaxRequestPerPeriod, ftp->max_requests_per_period, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strRequestRateLimitPeriod, ftp->request_rate_limit_period, &style))
 				break;
 			if (!iniSetDuration(lp, section, "QwkTimeout", ftp->qwk_timeout, &style))
 				break;
@@ -1205,6 +1267,10 @@ bool sbbs_write_ini(
 			if (!iniSetDuration(lp, section, "ConnectTimeout", mail->connect_timeout, &style))
 				break;
 			if (!iniSetUInteger(lp, section, strMaxConConn, mail->max_concurrent_connections, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strMaxRequestPerPeriod, mail->max_requests_per_period, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strRequestRateLimitPeriod, mail->request_rate_limit_period, &style))
 				break;
 
 			if (strcmp(mail->host_name, global->host_name) == 0
@@ -1346,6 +1412,11 @@ bool sbbs_write_ini(
 				iniRemoveValue(lp, section, strBindRetryDelay);
 			else if (!iniSetInteger(lp, section, strBindRetryDelay, services->bind_retry_delay, &style))
 				break;
+
+			if (!iniSetUInteger(lp, section, strMaxConnectsPerPeriod, services->max_connects_per_period, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strConnectRateLimitPeriod, services->connect_rate_limit_period, &style))
+				break;
 		}
 
 		/***********************************************************************/
@@ -1457,6 +1528,14 @@ bool sbbs_write_ini(
 			if (!iniSetUInteger(lp, section, "OutbufDrainTimeout", web->outbuf_drain_timeout, &style))
 				break;
 			if (!iniSetUInteger(lp, section, strMaxConConn, web->max_concurrent_connections, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strMaxRequestPerPeriod, web->max_requests_per_period, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strRequestRateLimitPeriod, web->request_rate_limit_period, &style))
+				break;
+			if (!iniSetString(lp, section, "RemoteIPHeader", web->proxy_ip_header, &style))
+				break;
+			if (!iniSetString(lp, section, "CustomLogFormat", web->custom_log_fmt, &style))
 				break;
 		}
 

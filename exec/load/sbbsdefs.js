@@ -124,29 +124,27 @@ var   ON_REMOTE		=2;			/* Online remotely							*/
 							    /********************************************/
 							    /* console.status							*/
 							    /********************************************/
-var CON_R_ECHO		=(1<<0);	/* Echo remotely							*/
-var CON_R_ECHOX		=(1<<1);	/* Echo X's to remote user					*/
-var CON_R_INPUT  	=(1<<2);	/* Accept input remotely					*/
-var CON_L_ECHO		=(1<<3);	/* Echo locally              				*/
-var CON_L_ECHOX		=(1<<4);	/* Echo X's locally							*/
-var CON_L_INPUT  	=(1<<5);	/* Accept input locally						*/
-var CON_RAW_IN   	=(1<<8);	/* Raw input mode - no editing capabilities */
-var CON_ECHO_OFF 	=(1<<10);	/* Remote & Local echo disabled for ML/MF	*/
-var CON_UPARROW  	=(1<<11);	/* Up arrow hit - move up one line			*/
-var CON_DOWNARROW 	=(1<<12);	/* Down arrow hit - from getstr()			*/
-var CON_NO_INACT 	=(1<<13);	/* User inactivity detection disabled		*/
-var CON_BACKSPACE 	=(1<<14);	/* Backspace key - from getstr(K_LEFTEXIT)	*/
-var CON_LEFTARROW 	=(1<<15);	/* Left arrow hit - from getstr(K_LEFTEXIT)	*/
-var CON_INSERT		=(1<<16);	/* Insert mode - for use with getstr()		*/
-var CON_DELETELINE	=(1<<17);	/* Deleted line - from getstr(K_LEFTEXIT)	*/
-var CON_NORM_FONT	=(1<<18);	/* Alt normal font activated				*/
-var CON_HIGH_FONT	=(1<<19);	/* Alt high-intensity font activated		*/
-var CON_BLINK_FONT	=(1<<20);	/* Alt blink font activated					*/
-var CON_HBLINK_FONT	=(1<<21);	/* Alt high-blink font activated			*/
+var CON_PASSWORD	=(1<<1);	// Password input mode, e.g. echo *'s
+var CON_PAUSE		=(1<<4);	// Temporary pause over-ride (same as UPAUSE)
+var CON_RAW_IN   	=(1<<8);	// Raw input mode - no editing capabilities
+var CON_ECHO_OFF 	=(1<<10);	// Output disabled
+var CON_UPARROW  	=(1<<11);	// Up arrow hit - move up one line
+var CON_DOWNARROW 	=(1<<12);	// Down arrow hit - from getstr()
+var CON_NO_INACT 	=(1<<13);	// User inactivity detection disabled
+var CON_BACKSPACE 	=(1<<14);	// Backspace key - from getstr(K_LEFTEXIT)
+var CON_LEFTARROW 	=(1<<15);	// Left arrow hit - from getstr(K_LEFTEXIT)
+var CON_INSERT		=(1<<16);	// Insert mode - for use with getstr()
+var CON_DELETELINE	=(1<<17);	// Deleted line - from getstr(K_LEFTEXIT)
+var CON_NORM_FONT	=(1<<18);	// Alt normal font activated
+var CON_HIGH_FONT	=(1<<19);	// Alt high-intensity font activated
+var CON_BLINK_FONT	=(1<<20);	// Alt blink font activated
+var CON_HBLINK_FONT	=(1<<21);	// Alt high-blink font activated
 var CON_MOUSE_CLK_PASSTHRU	=(1<<24); // Pass-through unhandled mouse button-click reports
 var CON_MOUSE_REL_PASSTHRU	=(1<<25); // Pass-through unhandled mouse button-release reports
 var CON_MOUSE_SCROLL		=(1<<26); // Enable mouse scroll-wheel to arrow key translations
 var CON_CR_CLREOL			=(1<<31); // Sending '\r', clears to end-of-line first
+var CON_R_ECHOX     = CON_PASSWORD; // Legacy
+var CON_L_ECHOX     = 0;            // Legacy
 
 								// Terminal mouse reporting mode (console.mouse_mode)
 var MOUSE_MODE_OFF	= 0;		// No terminal mouse reporting enabled/expected
@@ -189,37 +187,43 @@ var   K_NUL         =(1<<25);   /* Return null instead of "" upon timeout   */
 var   K_UTF8		=(1<<26);	/* Don't translate UTF-8 input to CP437 	*/
 var   K_RIGHTEXIT   =(1<<27);   /* Allow exit by arrowing right				*/
 var   K_LINEWRAP    =(1<<29);   /* Allow string input to wrap the terminal  */
+var   K_EXTKEYS     =(1<<30);   /* Like K_CTRLKEYS but w/extended key xlats */
 					    		/********************************************/
 var   K_WRAP = K_WORDWRAP;
 
 						    	/********************************************/
     							/* Bits in 'mode' for putmsg and printfile  */
 							    /********************************************/
-var   P_NONE		=0;			/* No special behavior						*/
-var   P_NOABORT  	=(1<<0);	/* Disallows abortion of a message          */
-var   P_SAVEATR		=(1<<1);	/* Save the new current attributes after	*/
-					    		/* msg has printed							*/
-var   P_NOATCODES	=(1<<2);	/* Don't allow @ codes                      */
-var   P_OPENCLOSE	=(1<<3);	/* Open and close the file					*/
-var   P_NOPAUSE		=(1<<4);	/* Disable screen pause						*/
-var   P_HTML		=(1<<5);	/* Message is HTML							*/
-var   P_NOCRLF		=(1<<6);	/* Don't prepend a CRLF	in printfile()		*/
-var   P_WORDWRAP	=(1<<7);	/* Word-wrap long lines for user's terminal	*/
-var   P_CPM_EOF		=(1<<8);	/* Treat Ctrl-Z as End-of-file				*/
-var   P_TRUNCATE    =(1<<9);    /* Truncate (don't display) long lines      */
-var   P_NOERROR     =(1<<10);   /* Don't report error if file doesn't exist */
-var   P_PETSCII     =(1<<11);   /* Message is native PETSCII                */
-var   P_WRAP        =(1<<12);   /* Wrap/split long-lines, ungracefully      */
-var   P_UTF8        =(1<<13);	/* Message is UTF-8 encoded                 */
-var   P_AUTO_UTF8	=(1<<14);	/* Message may be UTF-8, auto-detect		*/
-var   P_NOXATTRS	=(1<<15);	/* No "Extra Attribute Codes" supported		*/
-var   P_MARKUP		=(1<<16);	/* Support StyleCodes/Rich/StructuredText	*/
-var   P_HIDEMARKS	=(1<<17);	/* Hide the mark-up tags					*/
-var   P_REMOTE		=(1<<18);	/* Only print when online == ON_REMOTE		*/
-var   P_INDENT		=(1<<19);	/* Indent lines to current cursor column	*/
-var   P_ATCODES		=(1<<20);	/* Trusted @-codes in formatted string		*/
+var   P_NONE		=0;			// No special behavior
+var   P_NOABORT  	=(1<<0);	// Disallows abortion of a message
+var   P_SAVEATR		=(1<<1);	// Save the new current attributes after msg has printed
+var   P_NOATCODES	=(1<<2);	// Don't allow @ codes
+var   P_OPENCLOSE	=(1<<3);	// Open and close the file (for smaller files)
+var   P_NOPAUSE		=(1<<4);	// Disable screen pause
+var   P_SEEK 		=(1<<5);	// Support jumping around via Home/End/PgUp/Dn, etc.
+var   P_NOCRLF		=(1<<6);	// Don't prepend a CRLF	in printfile()
+var   P_WORDWRAP	=(1<<7);	// Word-wrap long lines for user's terminal
+var   P_CPM_EOF		=(1<<8);	// Treat Ctrl-Z as End-of-file
+var   P_TRUNCATE    =(1<<9);    // Truncate (don't display) long lines
+var   P_NOERROR     =(1<<10);   // Don't report error if file doesn't exist
+var   P_PETSCII     =(1<<11);   // Message is native PETSCII
+var   P_WRAP        =(1<<12);   // Wrap/split long-lines, ungracefully
+var   P_UTF8        =(1<<13);	// Message is UTF-8 encoded
+var   P_AUTO_UTF8	=(1<<14);	// Message may be UTF-8, auto-detect
+var   P_NOXATTRS	=(1<<15);	// No "Extra Attribute Codes" supported
+var   P_MARKUP		=(1<<16);	// Support StyleCodes/Rich/StructuredText
+var   P_HIDEMARKS	=(1<<17);	// Hide the mark-up tags
+var   P_REMOTE		=(1<<18);	// Only print when online == ON_REMOTE
+var   P_INDENT		=(1<<19);	// Indent lines to current cursor column
+var   P_ATCODES		=(1<<20);	// Trusted @-codes in formatted string
 var   P_MODS        =(1<<21);   // Display from mods/text dir, if file is there
 var   P_CENTER      =(1<<22);   // Center the output based on widest line
+var   P_80COLS      =(1<<23);   // Format the output for 80-column display
+var   P_WILDCAT     =(1<<27);   // Support Wildcat @xx@ color codes
+var   P_PCBOARD     =(1<<28);   // Support PCBoard @Xxx color codes
+var   P_WWIV        =(1<<29);   // Support WWIV (^C) color codes
+var   P_CELERITY    =(1<<30);   // Support Celerity (|x) color codes
+var   P_RENEGADE    =(1<<31);   // Support Renegade (|xx) color codes
 							    /********************************************/
 
     							/********************************************/

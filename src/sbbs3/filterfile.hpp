@@ -1,0 +1,112 @@
+/* Synchronet *cached* client/content-filtering (trashcan/twit) file classes */
+
+/****************************************************************************
+ * @format.tab-size 4		(Plain Text/Source Code File Header)			*
+ * @format.use-tabs true	(see http://www.synchro.net/ptsc_hdr.html)		*
+ *																			*
+ * Copyright Rob Swindell - http://www.synchro.net/copyright.html			*
+ *																			*
+ * This program is free software; you can redistribute it and/or			*
+ * modify it under the terms of the GNU General Public License				*
+ * as published by the Free Software Foundation; either version 2			*
+ * of the License, or (at your option) any later version.					*
+ * See the GNU General Public License for more details: gpl.txt or			*
+ * http://www.fsf.org/copyleft/gpl.html										*
+ *																			*
+ * For Synchronet coding style and modification guidelines, see				*
+ * http://www.synchro.net/source.html										*
+ *																			*
+ * Note: If this box doesn't appear square, then you need to fix your tabs.	*
+ ****************************************************************************/
+
+#ifndef FILTERFILE_HPP_
+#define FILTERFILE_HPP_
+#include "trash.h"
+#include <atomic>
+#include <mutex>
+#include <time.h>
+
+class filterFile {
+	public:
+		filterFile() {
+			pthread_mutex_init(&mutex, nullptr);
+		}
+		filterFile(scfg_t* cfg, const char* fname) : filterFile() {
+			init(cfg, fname);
+		}
+		void init(scfg_t* cfg, const char* fname) {
+			fchk_interval = cfg->cache_filter_files;
+			if (getfname(fname) == fname)
+				snprintf(this->fname, sizeof this->fname, "%s%s", cfg->ctrl_dir, fname);
+			else
+				strlcpy(this->fname, fname, sizeof this->fname);
+		}
+		filterFile(const filterFile&) = delete;
+		filterFile& operator=(const filterFile&) = delete;
+		~filterFile() {
+			strListFree(&list);
+			pthread_mutex_destroy(&mutex);
+		}
+		void reset() {
+			fread_count = 0;
+			total_found = 0;
+			timestamp = 0;
+			lastftime_check = 0;
+			// strListFree(&list); // This triggers MSVC debug-heap assertion, see Issue #1099 for details
+		}
+		std::atomic<uint> fread_count{};
+		std::atomic<uint> total_found{};
+		time_t fchk_interval{}; // seconds
+		char fname[MAX_PATH + 1]{};
+		bool listed(const char* str1, const char* str2 = nullptr, struct trash* details = nullptr) {
+			bool result;
+			time_t now = time(nullptr);
+			if (fchk_interval) {
+				pthread_mutex_lock(&mutex);
+				if ((now - lastftime_check) >= fchk_interval) {
+					lastftime_check = now;
+					time_t latest = fdate(fname);
+					if (latest > timestamp) {
+						strListFree(&list);
+						list = findstr_list(fname);
+						timestamp = latest;
+						++fread_count;
+					}
+				}
+				result = trash_in_list(str1, str2, list, details);
+				pthread_mutex_unlock(&mutex);
+			} else {
+				char str[FINDSTR_MAX_LINE_LEN + 1];
+				result = find2strs(str1, str2, fname, str);
+				++fread_count;
+				if (details != nullptr) {
+					if (trash_parse_details(str, details, nullptr, 0)
+						&& details->expires && details->expires <= now)
+						result = false;
+				}
+			}
+			if (result)
+				++total_found;
+			return result;
+		}
+	private:
+		str_list_t list{};
+		pthread_mutex_t mutex{};
+		time_t lastftime_check{};
+		time_t timestamp{};
+
+};
+
+class trashCan : public filterFile {
+	public:
+		trashCan() : filterFile() {}
+		trashCan(scfg_t* cfg, const char* name) : filterFile(cfg, name) {
+			init(cfg, name);
+		}
+		void init(scfg_t* cfg, const char* name) {
+			char path[MAX_PATH + 1];
+			filterFile::init(cfg, trashcan_fname(cfg, name, path, sizeof path));
+		}
+};
+
+#endif  /* Don't add anything after this line */

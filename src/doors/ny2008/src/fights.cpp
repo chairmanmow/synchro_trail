@@ -69,7 +69,6 @@ void any_attack_ops(user_rec *user_on, const char fight_name[], const char en_na
 	INT32 en_hit_s;
 	INT32 en_def_s;
 
-	FILE *justfile;
 	//enemy_idx eidx;
 	//	INT16 first,last;//,moneis;
 	INT32 intval;
@@ -78,7 +77,7 @@ void any_attack_ops(user_rec *user_on, const char fight_name[], const char en_na
 
 	wrt_sts();
 
-	od_printf("\n\r\n");
+	od_printf("\r\n\r\n");
 
 	ny_clr_scr();
 
@@ -102,9 +101,9 @@ bam_af:
 
 		//	  ny_line(204,3,2);
 		//	  ny_disp_emu("\n\r\n\n\r`@S`4treet `@F`4ight\n\r\n`0");
-		od_disp_str("\n\n\n\r");
+		od_disp_str("\r\n\r\n\r\n");
 		ny_disp_emu(fight_name);
-		od_disp_str("\n\n\r");
+		od_disp_str("\r\n\r\n");
 		od_set_attrib(0x0a);
 		ny_disp_emu(en_name);
 		ny_line(205,0,0);
@@ -112,7 +111,7 @@ bam_af:
 		od_printf("%s",D_Num(en_hitpoints));
 		ny_line(206,1,0);
 		//	  ny_disp_emu("\n\r`@Y`4er `@H`4itpoints: ");
-		od_printf("%s\n\r\n",D_Num(user_on->hitpoints));
+		od_printf("%s\r\n\r\n",D_Num(user_on->hitpoints));
 		/*	  ny_disp_emu("\n\r\n`@[A] `4- `@A`4ttack\n\r");
 			  ny_disp_emu("`@[T] `4- `@T`4ake `@D`4rug `@A`4nd `@A`4ttack\n\r");
 			  ny_disp_emu("`@[G] `4- `@G`4et `@O`4utta `@H`4ere\n\r");
@@ -121,7 +120,7 @@ bam_af:
 		ny_line(207,1,0);
 		//ny_disp_emu("\n\r`@W`4hat ya gonna do? (`@[A] T G Y`4)");
 
-		key=od_get_answer("ATKPRGY\n\r");
+		key=od_get_answer("ATKPRGY\r\n");
 		if (key=='\n' || key=='\r')
 			key='A';
 
@@ -229,7 +228,7 @@ attack_again_a:
 
 			if (en_hitpoints>0) {
 
-				ny_disp_emu("\n\r\n`0");
+				ny_disp_emu("\r\n\r\n`0");
 				ny_disp_emu(en_name);
 
 				ny_line(211,0,0);
@@ -239,7 +238,7 @@ attack_again_a:
 				user_on->hitpoints-=en_hit_s;
 				wrt_sts();
 				if (user_on->hitpoints<=0) {
-					od_printf("\n\r\n");
+					od_printf("\r\n\r\n");
 					ny_send_menu(ASS_KICKED,"");
 					/*		od_printf("You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\r");
 							od_printf("You lost all the money on ya...");
@@ -264,7 +263,7 @@ attack_again_a:
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				return;
 			} else {
 
@@ -286,7 +285,7 @@ attack_again_a:
 					en_hit_s=0;
 
 
-				ny_disp_emu("\n\r\n`0");
+				ny_disp_emu("\r\n\r\n`0");
 				ny_disp_emu(en_name);
 				ny_line(211,0,0);
 				//od_printf(" `red`kicks yer ass fer `bright green`
@@ -297,7 +296,7 @@ attack_again_a:
 				wrt_sts();
 				if (user_on->hitpoints<=0) {
 					//od_printf("\n\r\n`bright`");
-					od_printf("\n\r\n");
+					od_printf("\r\n\r\n");
 					ny_send_menu(ASS_KICKED,"");
 
 					/*od_printf("You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\r");
@@ -348,6 +347,7 @@ attack_again_a:
 	WaitForEnter();
 } // end of function attack_ops
 
+#if 0
 /*char
 fight(INT16 exp)
 {
@@ -445,7 +445,7 @@ fight(INT16 exp)
 	return key;
 } // End of fight menu function
 */
-
+#endif
 
 
 
@@ -455,17 +455,16 @@ fight_ops(user_rec *cur_user)  //This function operates the fights with monsters
 {
 
 	char key;  // Menu choice
-	INT16 intval;
 
 	//user_rec cur_user; // The User Record Variable
 	//cur_user *user_on;  // declare allias for the user record
 
 	do {
 		//key = fight(expert);  //Getting the result of menu choice
-		key=callmenu("LHYTQ?\n\r",S_FIG,353,TRUE);
+		key=callmenu("LHYTQ?\r\n",S_FIG,353,TRUE);
 		while (key=='?') {
 			expert+=10;
-			key=callmenu("LHYTQ?\n\r",S_FIG,353,TRUE);
+			key=callmenu("LHYTQ?\r\n",S_FIG,353,TRUE);
 			expert-=10;
 		}
 
@@ -480,7 +479,7 @@ fight_ops(user_rec *cur_user)  //This function operates the fights with monsters
 		else if (key == 'H') {
 			ny_line(199,2,0);
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			//od_printf("\n\r\n`bright red`Y`red`a enter the hospital ...\n\r");
 			heal_wounds();
 		} // End of healing
@@ -516,7 +515,7 @@ void attack_ops(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else {
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 			no_rip_m=1;
 		}
 		return;
@@ -551,209 +550,125 @@ void attack_ops(user_rec *user_on) {
 		ny_fread(&last,2,1,justfile);
 
 		fclose(justfile);
-	}
 
-	intval=xp_random(last-first+1)+first;
+		intval=xp_random(last-first+1)+first;
 
-	justfile=ShareFileOpen(ENEMY_FILENAME,"rb");
-	if(justfile != NULL) {
-		fseek(justfile,(INT32)intval*sizeof(enemy),SEEK_SET);
-		ny_fread(&erec,sizeof(enemy),1,justfile);
-		fclose(justfile);
-	}
-
-
-	od_printf("\n\r\n");
-
-	ny_clr_scr();
+		justfile=ShareFileOpen(ENEMY_FILENAME,"rb");
+		if(justfile != NULL) {
+			fseek(justfile,(INT32)intval*sizeof(enemy),SEEK_SET);
+			ny_fread(&erec,sizeof(enemy),1,justfile);
+			fclose(justfile);
+		}
 
 
-	ny_line(201,0,0);
-	//	You meet
-	ny_disp_emu(erec.name);
-	ny_line(202,0,2);
-	//	 ...
-	ny_line(203,0,0);
-	//	H`4e got a bad lokin' `0");
-	print_arm(erec.arm);
+		od_printf("\r\n\r\n");
+
+		ny_clr_scr();
 
 
-	INT32 enhitp;
-	enhitp=erec.hitpoints;
+		ny_line(201,0,0);
+		//	You meet
+		ny_disp_emu(erec.name);
+		ny_line(202,0,2);
+		//	 ...
+		ny_line(203,0,0);
+		//	H`4e got a bad lokin' `0");
+		print_arm(erec.arm);
 
-	do {
+
+		INT32 enhitp;
+		enhitp=erec.hitpoints;
+
+		do {
 
 bam_nf:
 
-		ny_line(204,3,2);
-		//	  ny_disp_emu("\n\r\n\n\r`@S`4treet `@F`4ight\n\r\n`0");
-		ny_disp_emu(erec.name);
-		ny_line(205,0,0);
-		//	  ny_disp_emu("'s `@H`4itpoints:");
-		od_printf("%s",D_Num(erec.hitpoints));
-		ny_line(206,1,0);
-		//	  ny_disp_emu("\n\r`@Y`4er `@H`4itpoints: ");
-		od_printf("%s\n\r\n",D_Num(user_on->hitpoints));
-		/*	  ny_disp_emu("\n\r\n`@[A] `4- `@A`4ttack\n\r");
-			  ny_disp_emu("`@[T] `4- `@T`4ake `@D`4rug `@A`4nd `@A`4ttack\n\r");
-			  ny_disp_emu("`@[G] `4- `@G`4et `@O`4utta `@H`4ere\n\r");
-			  ny_disp_emu("`@[Y] `4- `@Y`4er `@S`4tats\n\r");*/
-		ny_send_menu(ATTACK,"");
-		ny_line(207,1,0);
-		//ny_disp_emu("\n\r`@W`4hat ya gonna do? (`@[A] T G Y`4)");
+			ny_line(204,3,2);
+			//	  ny_disp_emu("\n\r\n\n\r`@S`4treet `@F`4ight\n\r\n`0");
+			ny_disp_emu(erec.name);
+			ny_line(205,0,0);
+			//	  ny_disp_emu("'s `@H`4itpoints:");
+			od_printf("%s",D_Num(erec.hitpoints));
+			ny_line(206,1,0);
+			//	  ny_disp_emu("\n\r`@Y`4er `@H`4itpoints: ");
+			od_printf("%s\n\r\n",D_Num(user_on->hitpoints));
+			/*	  ny_disp_emu("\n\r\n`@[A] `4- `@A`4ttack\n\r");
+				  ny_disp_emu("`@[T] `4- `@T`4ake `@D`4rug `@A`4nd `@A`4ttack\n\r");
+				  ny_disp_emu("`@[G] `4- `@G`4et `@O`4utta `@H`4ere\n\r");
+				  ny_disp_emu("`@[Y] `4- `@Y`4er `@S`4tats\n\r");*/
+			ny_send_menu(ATTACK,"");
+			ny_line(207,1,0);
+			//ny_disp_emu("\n\r`@W`4hat ya gonna do? (`@[A] T G Y`4)");
 
-		key=od_get_answer("ATKPRGY\n\r");
-		if (key=='\n' || key=='\r')
-			key='A';
+			key=od_get_answer("ATKPRGY\r\n");
+			if (key=='\n' || key=='\r')
+				key='A';
 
-		od_putch(key);
+			od_putch(key);
 
-		if(key=='R' && user_on->rocks==0) {
-			ny_line(445,2,1);
-			WaitForEnter();
-			goto bam_nf;
-		}
-
-
-		if (key == 'T') {  // Take drugs
-			take_drug();
-			no_rip_m=0;
-			key='A';
-		}
-		if (key=='A' || key=='K' || key=='P' || key=='R') {
-			// when atacking
-			//	    randomize();
-			if(key=='K') {
-				hit_s=xp_random(150 - user_on->kick_ability);
-				if(hit_s<35) {
-					hit_s = (INT32)user_on->strength * (pow((user_on->level/2)+2,1.2)*6.0*(user_on->kick_ability/100.0)) * (double)((xp_random(80)+90)/100.0);
-					ny_line(439,2,0);
-				} else {
-					hit_s=0;
-					ny_line(440,2,0);
-				}
-			} else if(key=='P') {
-				hit_s=xp_random(140 - user_on->punch_ability);
-				if(hit_s<35) {
-					hit_s = (INT32)user_on->strength * (pow((user_on->level/2)+1,1.2)*6.0*(user_on->punch_ability/90.0)) * (double)((xp_random(80)+90)/100.0);
-					ny_line(441,2,0);
-				} else {
-					hit_s=0;
-					ny_line(442,2,0);
-				}
-			} else if(key=='R') {
-				hit_s=xp_random(145 - user_on->throwing_ability);
-				user_on->rocks--;
-				if(hit_s<35) {
-					hit_s = (INT32)user_on->strength * (pow((user_on->level/2)+2,1.2)*6.0*(user_on->throwing_ability/110.0)) * (double)((xp_random(80)+90)/100.0);
-					ny_line(443,2,0);
-				} else {
-					hit_s=0;
-					ny_line(444,2,0);
-				}
+			if(key=='R' && user_on->rocks==0) {
+				ny_line(445,2,1);
+				WaitForEnter();
+				goto bam_nf;
 			}
+
+
+			if (key == 'T') {  // Take drugs
+				take_drug();
+				no_rip_m=0;
+				key='A';
+			}
+			if (key=='A' || key=='K' || key=='P' || key=='R') {
+				// when atacking
+				//	    randomize();
+				if(key=='K') {
+					hit_s=xp_random(150 - user_on->kick_ability);
+					if(hit_s<35) {
+						hit_s = (INT32)user_on->strength * (pow((user_on->level/2)+2,1.2)*6.0*(user_on->kick_ability/100.0)) * (double)((xp_random(80)+90)/100.0);
+						ny_line(439,2,0);
+					} else {
+						hit_s=0;
+						ny_line(440,2,0);
+					}
+				} else if(key=='P') {
+					hit_s=xp_random(140 - user_on->punch_ability);
+					if(hit_s<35) {
+						hit_s = (INT32)user_on->strength * (pow((user_on->level/2)+1,1.2)*6.0*(user_on->punch_ability/90.0)) * (double)((xp_random(80)+90)/100.0);
+						ny_line(441,2,0);
+					} else {
+						hit_s=0;
+						ny_line(442,2,0);
+					}
+				} else if(key=='R') {
+					hit_s=xp_random(145 - user_on->throwing_ability);
+					user_on->rocks--;
+					if(hit_s<35) {
+						hit_s = (INT32)user_on->strength * (pow((user_on->level/2)+2,1.2)*6.0*(user_on->throwing_ability/110.0)) * (double)((xp_random(80)+90)/100.0);
+						ny_line(443,2,0);
+					} else {
+						hit_s=0;
+						ny_line(444,2,0);
+					}
+				}
 
 attack_again_s:
-			;
-			if(key=='A')
-				hit_s = (INT32)user_on->strength * (what_arm_force(user_on->arm)) * (double)((xp_random(80)+90)/100.0);
-			// If he is on drugs
-			if(user_on->drug_high > 0)
-				hit_s = (hit_s * what_drug_force_a(user_on->drug,user_on->drug_high));
+				;
+				if(key=='A')
+					hit_s = (INT32)user_on->strength * (what_arm_force(user_on->arm)) * (double)((xp_random(80)+90)/100.0);
+				// If he is on drugs
+				if(user_on->drug_high > 0)
+					hit_s = (hit_s * what_drug_force_a(user_on->drug,user_on->drug_high));
 
-			//	    hit_s*=pow(1.1,user_on->level);
+				//	    hit_s*=pow(1.1,user_on->level);
 
-			hit_s*=(100.0-(user_on->since_got_laid*2))/100.0;
-			if (user_on->drug>=COKE)
-				hit_s-=xp_random(user_on->drug_days_since * pow((double)user_on->drug_addiction,1.2))/60;
-			if (hit_s<0)
-				hit_s=0;
+				hit_s*=(100.0-(user_on->since_got_laid*2))/100.0;
+				if (user_on->drug>=COKE)
+					hit_s-=xp_random(user_on->drug_days_since * pow((double)user_on->drug_addiction,1.2))/60;
+				if (hit_s<0)
+					hit_s=0;
 
-			en_hit_s = erec.strength * (what_arm_force(erec.arm)) * (double)((xp_random(75)+60)/100.0);
+				en_hit_s = erec.strength * (what_arm_force(erec.arm)) * (double)((xp_random(75)+60)/100.0);
 
-			def_s = user_on->defense * what_drug_force_d(user_on->drug,user_on->drug_high) * (double)((xp_random(80)+140)/100.0);
-			def_s*=pow(1.2,user_on->level);
-			def_s*=(100.0-(user_on->since_got_laid*2))/100.0;
-			if (user_on->drug>=COKE)
-				def_s-=xp_random(user_on->drug_days_since * pow(user_on->drug_addiction,1.2))/60;
-			if (def_s<0)
-				def_s=0;
-
-			en_def_s = erec.defense * (double)((xp_random(75)+50)/100.0);
-
-			def_s/=2;
-			en_def_s/=2;
-
-			en_hit_s-=def_s;
-			if (en_hit_s<0)
-				en_hit_s=0;
-
-			hit_s-=en_def_s;
-			if (hit_s<0)
-				hit_s=0;
-
-			if (hit_s==0 && en_hit_s==0 && key=='A')
-				goto attack_again_s;
-
-			erec.hitpoints-=hit_s;
-
-
-			ny_line(208,2,0);
-			//	    od_printf("\n\r\n`bright red`Y`red`a kick `bright green`");
-			ny_disp_emu(erec.name);
-			ny_line(209,0,0);
-			//	    od_printf("'s `red`ass fer `bright green`
-			od_printf(D_Num(hit_s));
-			ny_line(210,0,0);
-			//	    %s `red`damage",D_Num(hit_s));
-
-
-			if (erec.hitpoints>0) {
-
-				ny_disp_emu("\n\r\n`0");
-				ny_disp_emu(erec.name);
-
-				ny_line(211,0,0);
-				//od_printf(" `red`kicks yer ass fer `bright green`
-				od_printf(D_Num(en_hit_s));
-				ny_line(210,0,0);
-				user_on->hitpoints-=en_hit_s;
-				wrt_sts();
-				if (user_on->hitpoints<=0) {
-					od_printf("\n\r\n");
-					ny_send_menu(ASS_KICKED,"");
-					/*		od_printf("You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\r");
-							od_printf("You lost all the money on ya...");
-							od_printf("\n\rAnd 2%c of yer points\n\r",37);*/
-					news_post(user_on->say_loose,user_on->name,erec.name,5);
-					user_on->money=0;
-					user_on->alive=UNCONCIOUS;
-					points_loose(user_on->points*.02);
-
-					WaitForEnter();
-					od_exit(10,FALSE);
-				}
-
-			}
-		} else if (key=='G') {
-			intval=xp_random(2);
-			if (intval==0) {
-
-				ny_line(212,2,1);
-				//od_printf("\n\r\n`bright red`Y`red`a got away ...\n\r");
-
-				if(!rip)
-					WaitForEnter();
-				else
-					od_get_answer("\n\r");
-				return;
-			} else {
-
-				ny_line(213,2,1);
-				//od_printf("\n\r\n`bright red`Y`red`e couldn't find a way outta this ...\n\r");
-
-				//	      randomize();
-				en_hit_s = erec.strength * (what_arm_force(erec.arm)) * (double)((xp_random(75)+75)/100.0);
 				def_s = user_on->defense * what_drug_force_d(user_on->drug,user_on->drug_high) * (double)((xp_random(80)+140)/100.0);
 				def_s*=pow(1.2,user_on->level);
 				def_s*=(100.0-(user_on->since_got_laid*2))/100.0;
@@ -761,71 +676,155 @@ attack_again_s:
 					def_s-=xp_random(user_on->drug_days_since * pow(user_on->drug_addiction,1.2))/60;
 				if (def_s<0)
 					def_s=0;
+
+				en_def_s = erec.defense * (double)((xp_random(75)+50)/100.0);
+
 				def_s/=2;
+				en_def_s/=2;
+
 				en_hit_s-=def_s;
 				if (en_hit_s<0)
 					en_hit_s=0;
 
+				hit_s-=en_def_s;
+				if (hit_s<0)
+					hit_s=0;
 
-				ny_disp_emu("\n\r\n`0");
+				if (hit_s==0 && en_hit_s==0 && key=='A')
+					goto attack_again_s;
+
+				erec.hitpoints-=hit_s;
+
+
+				ny_line(208,2,0);
+				//	    od_printf("\n\r\n`bright red`Y`red`a kick `bright green`");
 				ny_disp_emu(erec.name);
-				ny_line(211,0,0);
-				//od_printf(" `red`kicks yer ass fer `bright green`
-				od_printf(D_Num(en_hit_s));
+				ny_line(209,0,0);
+				//	    od_printf("'s `red`ass fer `bright green`
+				od_printf(D_Num(hit_s));
 				ny_line(210,0,0);
-
-				user_on->hitpoints-=en_hit_s;
-				wrt_sts();
-				if (user_on->hitpoints<=0) {
-					//od_printf("\n\r\n`bright`");
-					od_printf("\n\r\n");
-					ny_send_menu(ASS_KICKED,"");
-
-					/*od_printf("You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\r");
-					od_printf("You lost all the money on ya...");
-					od_printf("\n\rAnd 2%c of yer points\n\r",37);*/
+				//	    %s `red`damage",D_Num(hit_s));
 
 
-					news_post(user_on->say_loose,user_on->name,erec.name,5);
-					user_on->alive=UNCONCIOUS;
-					user_on->money=0;
-					points_loose(user_on->points*.02);
-					//wrt_sts();
-					WaitForEnter();
-					od_exit(10,FALSE);
+				if (erec.hitpoints>0) {
+
+					ny_disp_emu("\r\n\r\n`0");
+					ny_disp_emu(erec.name);
+
+					ny_line(211,0,0);
+					//od_printf(" `red`kicks yer ass fer `bright green`
+					od_printf(D_Num(en_hit_s));
+					ny_line(210,0,0);
+					user_on->hitpoints-=en_hit_s;
+					wrt_sts();
+					if (user_on->hitpoints<=0) {
+						od_printf("\r\n\r\n");
+						ny_send_menu(ASS_KICKED,"");
+						/*		od_printf("You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\r");
+								od_printf("You lost all the money on ya...");
+								od_printf("\n\rAnd 2%c of yer points\n\r",37);*/
+						news_post(user_on->say_loose,user_on->name,erec.name,5);
+						user_on->money=0;
+						user_on->alive=UNCONCIOUS;
+						points_loose(user_on->points*.02);
+
+						WaitForEnter();
+						od_exit(10,FALSE);
+					}
+
 				}
+			} else if (key=='G') {
+				intval=xp_random(2);
+				if (intval==0) {
 
+					ny_line(212,2,1);
+					//od_printf("\n\r\n`bright red`Y`red`a got away ...\n\r");
+
+					if(!rip)
+						WaitForEnter();
+					else
+						od_get_answer("\r\n");
+					return;
+				} else {
+
+					ny_line(213,2,1);
+					//od_printf("\n\r\n`bright red`Y`red`e couldn't find a way outta this ...\n\r");
+
+					//	      randomize();
+					en_hit_s = erec.strength * (what_arm_force(erec.arm)) * (double)((xp_random(75)+75)/100.0);
+					def_s = user_on->defense * what_drug_force_d(user_on->drug,user_on->drug_high) * (double)((xp_random(80)+140)/100.0);
+					def_s*=pow(1.2,user_on->level);
+					def_s*=(100.0-(user_on->since_got_laid*2))/100.0;
+					if (user_on->drug>=COKE)
+						def_s-=xp_random(user_on->drug_days_since * pow(user_on->drug_addiction,1.2))/60;
+					if (def_s<0)
+						def_s=0;
+					def_s/=2;
+					en_hit_s-=def_s;
+					if (en_hit_s<0)
+						en_hit_s=0;
+
+
+					ny_disp_emu("\r\n\r\n`0");
+					ny_disp_emu(erec.name);
+					ny_line(211,0,0);
+					//od_printf(" `red`kicks yer ass fer `bright green`
+					od_printf(D_Num(en_hit_s));
+					ny_line(210,0,0);
+
+					user_on->hitpoints-=en_hit_s;
+					wrt_sts();
+					if (user_on->hitpoints<=0) {
+						//od_printf("\n\r\n`bright`");
+						od_printf("\r\n\r\n");
+						ny_send_menu(ASS_KICKED,"");
+
+						/*od_printf("You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\r");
+						od_printf("You lost all the money on ya...");
+						od_printf("\n\rAnd 2%c of yer points\n\r",37);*/
+
+
+						news_post(user_on->say_loose,user_on->name,erec.name,5);
+						user_on->alive=UNCONCIOUS;
+						user_on->money=0;
+						points_loose(user_on->points*.02);
+						//wrt_sts();
+						WaitForEnter();
+						od_exit(10,FALSE);
+					}
+
+				}
+			} else {
+				DisplayStats();
+				WaitForEnter();
 			}
-		} else {
-			DisplayStats();
-			WaitForEnter();
-		}
-	} while (erec.hitpoints>0);
-	//	od_printf("\n\r\n%ld\n\r\n",intval);
-	//	intval=(INT32)enhitp*.2+ randomf((INT32)enhitp*.2);
-	//	od_printf("\n\r\n%ld\n\r\n",intval);
-	intval=((INT32)user_on->level*.55 + 1)*((INT32)enhitp*.5+ randomf((INT32)enhitp*.5))+(INT32)(3*(user_on->level+1));
-	if ((INT32)intval<(INT32)enhitp)
-		intval=(INT32)enhitp;
-	money_plus((DWORD)intval);
-	wrt_sts();
+		} while (erec.hitpoints>0);
+		//	od_printf("\n\r\n%ld\n\r\n",intval);
+		//	intval=(INT32)enhitp*.2+ randomf((INT32)enhitp*.2);
+		//	od_printf("\n\r\n%ld\n\r\n",intval);
+		intval=((INT32)user_on->level*.55 + 1)*((INT32)enhitp*.5+ randomf((INT32)enhitp*.5))+(INT32)(3*(user_on->level+1));
+		if ((INT32)intval<(INT32)enhitp)
+			intval=(INT32)enhitp;
+		money_plus((DWORD)intval);
+		wrt_sts();
 
 
-	ny_line(214,2,0);
-	//	od_printf("\n\r\n`bright red`Y`red`ou kicked `bright green`");
-	ny_disp_emu(erec.name);
-	ny_line(215,0,2);
-	//	od_printf("'s `red`ass ...\n\r\n");
-	ny_line(216,0,0);
-	//	od_printf("`bright red`Y`red`a find `bright red`
-	od_printf(D_Num(intval));
-	ny_line(217,0,0);
-	//	`red` bucks ",D_Num(intval));
-	intval=randomf((user_on->level+1)*12)+3;
-	od_printf(D_Num((DWORD)intval * (DWORD)DrgPtsCoef()));
-	ny_line(218,0,1);
-	//	`red` points!\n\r",D_Num((DWORD)intval * (DWORD)DrgPtsCoef()));
-	points_raise(intval);
+		ny_line(214,2,0);
+		//	od_printf("\n\r\n`bright red`Y`red`ou kicked `bright green`");
+		ny_disp_emu(erec.name);
+		ny_line(215,0,2);
+		//	od_printf("'s `red`ass ...\n\r\n");
+		ny_line(216,0,0);
+		//	od_printf("`bright red`Y`red`a find `bright red`
+		od_printf(D_Num(intval));
+		ny_line(217,0,0);
+		//	`red` bucks ",D_Num(intval));
+		intval=randomf((user_on->level+1)*12)+3;
+		od_printf(D_Num((DWORD)intval * (DWORD)DrgPtsCoef()));
+		ny_line(218,0,1);
+		//	`red` points!\n\r",D_Num((DWORD)intval * (DWORD)DrgPtsCoef()));
+		points_raise(intval);
+	}
 
 	WaitForEnter();
 } // end of function attack_ops
@@ -833,7 +832,6 @@ attack_again_s:
 void
 fgc(INT16 *enm_num, INT16 *user_num) {
 	char numstr[21];
-	INT16 intval;
 	//  ffblk ffblk;
 	FILE *justfile;
 
@@ -874,7 +872,7 @@ fig_m(user_rec *erec, user_rec *user_on, INT16 *enm_num, INT16 *user_num) {
 	char numstr[25];
 	char numstr2[25];
 	FILE *justfile;
-	INT32 hit_s,def_s,en_hit_s;
+	INT32 hit_s,def_s;
 	time_t t,t2;
 
 
@@ -884,7 +882,7 @@ fig_m(user_rec *erec, user_rec *user_on, INT16 *enm_num, INT16 *user_num) {
 bam_ofm:
 		ny_line(221,3,0);
 		//      od_printf("\n\r\n\n\r`bright red`O`red`nline `bright red`P`red`layer `bright red`F`red`ight");
-		ny_disp_emu("\n\r\n`0");
+		ny_disp_emu("\r\n\r\n`0");
 		ny_disp_emu(erec->name);
 		ny_line(205,0,0);
 		//      od_printf("'s `bright red`H`red`itpoints: %s",
@@ -892,7 +890,7 @@ bam_ofm:
 		ny_line(206,1,0);
 		//      od_printf("\n\r`bright red`Y`red`er `bright red`H`red`itpoints: %s",
 		od_printf(D_Num(user_on->hitpoints));
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		/*      od_printf("\n\r\n`bright red`[A] `red`- `bright red`A`red`ttack\n\r");
 		      od_printf("`bright red`[T] `red`- `bright red`T`red`ake `bright red`D`red`rug `bright red`A`red`nd `bright red`A`red`ttack\n\r");
 		      od_printf("`bright red`[G] `red`- `bright red`G`red`et `bright red`O`red`utta `bright red`H`red`ere\n\r");
@@ -903,7 +901,7 @@ bam_ofm:
 		//      ny_disp_emu("\n\r`@W`4hat ya gonna do? (`@[A] T G Y`4)");
 
 
-		key=od_get_answer("ATKPRGY\n\r");
+		key=od_get_answer("ATKPRGY\r\n");
 		if (key=='\n' || key=='\r')
 			key='A';
 		od_putch(key);
@@ -911,14 +909,14 @@ bam_ofm:
 		if (key=='Y') {
 			DisplayStats();
 			ny_line(1,1,0);
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		}
 	} while (key=='Y');
 
 	if(key=='R' && user_on->rocks==0) {
 		ny_line(445,2,1);
 		ny_line(1,1,0);
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 		goto bam_ofm;
 	}
 
@@ -1023,7 +1021,7 @@ bam_ofm:
 
 			ny_line(223,2,1);
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			ny_line(224,0,1);
 			//od_printf("\n\r\n`bright red`Y`red`er enemy droped carrier on ya!\n\r`bright red`G`red`o and kill him offline\n\r");
 
@@ -1034,7 +1032,7 @@ bam_ofm:
 			ny_remove(numstr);
 			if(!rip)
 				ny_line(1,1,0);
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 			return TRUE;
 		}
 
@@ -1077,7 +1075,7 @@ bam_ofm:
 			ny_remove(numstr);
 			if(!rip)
 				ny_line(1,1,0);
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 			return TRUE;
 		} else {
 
@@ -1115,7 +1113,7 @@ bam_ofm:
 
 				ny_line(223,2,1);
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				ny_line(224,0,1);
 				//od_printf("\n\r\n`bright red`Y`red`er enemy droped carrier on ya!\n\r`bright red`G`red`o and kill him offline\n\r");
 
@@ -1126,7 +1124,7 @@ bam_ofm:
 				ny_remove(numstr);
 				if(!rip)
 					ny_line(1,1,0);
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 				return TRUE;
 			}
 		}
@@ -1142,7 +1140,7 @@ o_checks(INT16 *enm_num,INT16 *user_num, user_rec *user_on, user_rec *erec) {
 	char numstr[25];
 	char numstr2[25];
 	INT16 rape;
-	INT32 hit_s,def_s,en_hit_s;
+	INT32 en_hit_s;
 	time_t t,t2;
 	char key;
 	mail_idx_type mail_idx;
@@ -1173,7 +1171,7 @@ o_checks(INT16 *enm_num,INT16 *user_num, user_rec *user_on, user_rec *erec) {
 
 		ny_line(223,2,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(224,0,1);
 		//	od_printf("\n\r\n`bright red`Y`red`er enemy droped carrier on ya!\n\r`bright red`G`red`o and kill him offline\n\r");
 
@@ -1181,7 +1179,7 @@ o_checks(INT16 *enm_num,INT16 *user_num, user_rec *user_on, user_rec *erec) {
 		ny_remove(numstr);
 		if(!rip)
 			ny_line(1,1,0);
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 		return TRUE;
 	}
 
@@ -1191,332 +1189,330 @@ o_checks(INT16 *enm_num,INT16 *user_num, user_rec *user_on, user_rec *erec) {
 	if(justfile != NULL) {
 		ny_fread(&en_hit_s,4,1,justfile);
 		fclose(justfile);
-	}
+		if (en_hit_s==-1) {
 
-	if (en_hit_s==-1) {
+			ny_line(226,2,1);
+			//	od_printf("\n\r\n`bright red`Y`red`er enemy ran away in fear...\n\r");
 
-		ny_line(226,2,1);
-		//	od_printf("\n\r\n`bright red`Y`red`er enemy ran away in fear...\n\r");
-
-		ny_remove(numstr);
-		sprintf(numstr,"u%07d.fgg",*user_num);
-		ny_remove(numstr);
-		//sprintf(numstr,"del u%07d.atk",*user_num);
-		//system(numstr); //see above!
-		if(!rip)
-			ny_line(1,1,0);
-		od_get_answer("\n\r");
-		return TRUE;
-	}
-	if (en_hit_s==-9) {
-
-		ny_line(227,2,2);
-		//	od_printf("\n\r\n`bright red`Y`red`a `bright white`WON`red`!\n\r\n");
-		sprintf(numstr,"u%07d.atk",*user_num);
-		justfile = ShareFileOpen(numstr, "rb");
-		if(justfile != NULL) {
-			ny_fread(&en_hit_s,4,1,justfile);
-			ny_fread(&intval,4,1,justfile);
-
-			fclose(justfile);
+			ny_remove(numstr);
+			sprintf(numstr,"u%07d.fgg",*user_num);
+			ny_remove(numstr);
+			//sprintf(numstr,"del u%07d.atk",*user_num);
+			//system(numstr); //see above!
+			if(!rip)
+				ny_line(1,1,0);
+			od_get_answer("\r\n");
+			return TRUE;
 		}
+		if (en_hit_s==-9) {
 
-		money_plus(intval);
+			ny_line(227,2,2);
+			//	od_printf("\n\r\n`bright red`Y`red`a `bright white`WON`red`!\n\r\n");
+			sprintf(numstr,"u%07d.atk",*user_num);
+			justfile = ShareFileOpen(numstr, "rb");
+			if(justfile != NULL) {
+				ny_fread(&en_hit_s,4,1,justfile);
+				ny_fread(&intval,4,1,justfile);
 
-		ny_line(216,0,0);
-		//	od_printf("`bright red`Y`red`a find `bright red`
-		od_printf(D_Num(intval));
-		ny_line(217,0,0);
-		intval=.08*erec->points;
-		od_printf(D_Num((DWORD)intval * (DWORD)DrgPtsCoef()));
-		ny_line(218,0,1);
-		points_raise(intval);
+				fclose(justfile);
 
-		ny_kernel();
+				money_plus(intval);
+
+				ny_line(216,0,0);
+				//	od_printf("`bright red`Y`red`a find `bright red`
+				od_printf(D_Num(intval));
+				ny_line(217,0,0);
+				intval=.08*erec->points;
+				od_printf(D_Num((DWORD)intval * (DWORD)DrgPtsCoef()));
+				ny_line(218,0,1);
+				points_raise(intval);
+
+				ny_kernel();
 
 
-		//no_kernel=TRUE;
-		wrt_sts();
-		//no_kernel=FALSE;
+				//no_kernel=TRUE;
+				wrt_sts();
+				//no_kernel=FALSE;
 
-		if (erec->arm>user_on->arm) {
+				if (erec->arm>user_on->arm) {
 
-			ny_line(228,2,0);
-			//	  od_printf("\n\r\n`bright red`D`red`o ya wanna swap weapons with`bright green` ");
-			if(!rip)
-				ny_disp_emu(erec->name);
-			else
-				od_disp_str(ny_un_emu(erec->name,numstr));
-			ny_line(79,0,0);
-			//ny_disp_emu("`4? (`@Y`4/`@N`4)");
-
-			key=od_get_answer("YN");
-			if(!rip)
-				od_printf("%c\n\r",key);
-			else
-				od_disp_str("\n\r");
-
-			if (key=='Y') {
-
-				weapon tarm;
-
-				tarm=erec->arm;
-				erec->arm=user_on->arm;
-				user_on->arm=tarm;
-				sprintf(numstr,"u%07d.on",*enm_num);
-				if (fexist(numstr)) {
-					sprintf(numstr,"u%07d.swp",*enm_num);
-					justfile=ShareFileOpen(numstr,"wb");
-					if(justfile != NULL) {
-						ny_fwrite(&(erec->arm),2,1,justfile);
-						fclose(justfile);
-					}
-				} else {
-					tarm=erec->arm;
-					ch_game_d();
-					justfile=ShareFileOpen(USER_FILENAME,"r+b");
-					if(justfile != NULL) {
-						fseek(justfile,*enm_num * sizeof(user_rec),SEEK_SET);
-						ny_fread(erec,sizeof(user_rec),1,justfile);
-						erec->arm=tarm;
-						fseek(justfile,*enm_num * sizeof(user_rec),SEEK_SET);
-						ny_fwrite(erec,sizeof(user_rec),1,justfile);
-						fclose(justfile);
-					}
-					ch_flag_d();
-				}
-
-				ny_line(229,2,0);
-				//	    od_printf("\n\r`bright red`D`red`one! `bright red`Y`red`ou now got the `bright green`");
-
-				print_arm(user_on->arm);
-				if(rip) {
-					od_disp_str("::^M@OK))|#|#|#\n\r\n");
-					od_get_answer("\n\r");
-				}
-				od_printf("\n\r\n");
-
-			}
-		}
-
-		if (erec->sex!=user_on->sex && clean_mode==FALSE && user_on->sex_today>0) {
-
-			ny_line(230,2,0);
-			//	  od_printf("\n\r\n`bright red`D`red`o ya wanna rape `bright green`");
-			if(!rip)
-				ny_disp_emu(erec->name);
-			else
-				od_disp_str(ny_un_emu(erec->name,numstr));
-			ny_line(79,0,0);
-			//	  ny_disp_emu("`4? (`@Y`4/`@N`4)");
-
-			key=od_get_answer("YN");
-			if(!rip)
-				od_printf("%c\n\r",key);
-			else
-				od_disp_str("\n\r");
-			if (key=='Y') {
-				if (user_on->sex_today<=0) {
-
-					ny_line(118,2,1);
-					//od_printf("\n\r\n`bright white`You already used up all your sex turns today ...\n\r");
-
-					if(rip)
-						od_get_answer("\n\r");
-					sprintf(numstr,"u%07d.on",*enm_num);
-					if (fexist(numstr)) {
-						sprintf(numstr,"u%07d.kik",*enm_num);
-						justfile=ShareFileOpen(numstr,"wb");
-						if(justfile != NULL) {
-							rape=-1;
-							ny_fwrite(&rape,2,2,justfile);
-							fclose(justfile);
-						}
-					}
-					//	      WaitForEnter();
-				} else {
-					sprintf(numstr,"u%07d.on",*enm_num);
-					if (fexist(numstr)) {
-						sprintf(numstr,"u%07d.kik",*enm_num);
-						justfile=ShareFileOpen(numstr,"wb");
-						if(justfile != NULL) {
-							ny_fwrite(&user_on->std,2,1,justfile);
-							ny_fwrite(&user_on->std_percent,2,1,justfile);
-							fclose(justfile);
-						}
-					} else {
-						strcpy(mail_idx.recver,erec->name);
-						strcpy(mail_idx.sender,user_on->name);
-						strcpy(mail_idx.recverI,erec->bbsname);
-						strcpy(mail_idx.senderI,user_on->bbsname);
-						mail_idx.flirt=1000;
-						mail_idx.deleted=FALSE;
-						mail_idx.location=0;
-						mail_idx.length=0;
-						mail_idx.afterquote=0;
-						mail_idx.ill=user_on->std;
-						mail_idx.inf=user_on->std_percent;
-						mail_idx.sender_sex=user_on->sex;
-						ch_game_d();
-						justfile=ShareFileOpen(MAIL_INDEX,"a+b");
-						if(justfile != NULL) {
-							ny_fwrite(&mail_idx,sizeof(mail_idx_type),1,justfile);
-							fclose(justfile);
-						}
-						ch_flag_d();
-					}
-					user_on->since_got_laid=0;
-					user_on->sex_today--;
-					ny_line(339,1,0);
-					if(rip)
+					ny_line(228,2,0);
+					//	  od_printf("\n\r\n`bright red`D`red`o ya wanna swap weapons with`bright green` ");
+					if(!rip)
 						ny_disp_emu(erec->name);
 					else
 						od_disp_str(ny_un_emu(erec->name,numstr));
-					ny_line(340,0,1);
-					if(rip)
-						od_get_answer("\n\r");
-					illness(erec->std,erec->std_percent);
-					points_raise((INT32)35*(user_on->level+1));
+					ny_line(79,0,0);
+					//ny_disp_emu("`4? (`@Y`4/`@N`4)");
 
-					//	      char omg[51];
+					key=od_get_answer("YN");
+					if(!rip)
+						od_printf("%c\r\n",key);
+					else
+						od_disp_str("\r\n");
 
-					// sprintf(omg,"%s raped you after beating you ...",user_on->name);
-				}
-			} else {
-				sprintf(numstr,"u%07d.on",*enm_num);
-				if (fexist(numstr)) {
-					sprintf(numstr,"u%07d.kik",*enm_num);
-					justfile=ShareFileOpen(numstr,"wb");
-					if(justfile != NULL) {
-						rape=-1;
-						ny_fwrite(&rape,2,2,justfile);
-						fclose(justfile);
+					if (key=='Y') {
+
+						weapon tarm;
+
+						tarm=erec->arm;
+						erec->arm=user_on->arm;
+						user_on->arm=tarm;
+						sprintf(numstr,"u%07d.on",*enm_num);
+						if (fexist(numstr)) {
+							sprintf(numstr,"u%07d.swp",*enm_num);
+							justfile=ShareFileOpen(numstr,"wb");
+							if(justfile != NULL) {
+								ny_fwrite(&(erec->arm),2,1,justfile);
+								fclose(justfile);
+							}
+						} else {
+							tarm=erec->arm;
+							ch_game_d();
+							justfile=ShareFileOpen(USER_FILENAME,"r+b");
+							if(justfile != NULL) {
+								fseek(justfile,*enm_num * sizeof(user_rec),SEEK_SET);
+								ny_fread(erec,sizeof(user_rec),1,justfile);
+								erec->arm=tarm;
+								fseek(justfile,*enm_num * sizeof(user_rec),SEEK_SET);
+								ny_fwrite(erec,sizeof(user_rec),1,justfile);
+								fclose(justfile);
+							}
+							ch_flag_d();
+						}
+
+						ny_line(229,2,0);
+						//	    od_printf("\n\r`bright red`D`red`one! `bright red`Y`red`ou now got the `bright green`");
+
+						print_arm(user_on->arm);
+						if(rip) {
+							od_disp_str("::^M@OK))|#|#|#\r\n\r\n");
+							od_get_answer("\r\n");
+						}
+						od_printf("\r\n\r\n");
+
 					}
 				}
+
+				if (erec->sex!=user_on->sex && clean_mode==FALSE && user_on->sex_today>0) {
+
+					ny_line(230,2,0);
+					//	  od_printf("\n\r\n`bright red`D`red`o ya wanna rape `bright green`");
+					if(!rip)
+						ny_disp_emu(erec->name);
+					else
+						od_disp_str(ny_un_emu(erec->name,numstr));
+					ny_line(79,0,0);
+					//	  ny_disp_emu("`4? (`@Y`4/`@N`4)");
+
+					key=od_get_answer("YN");
+					if(!rip)
+						od_printf("%c\r\n",key);
+					else
+						od_disp_str("\r\n");
+					if (key=='Y') {
+						if (user_on->sex_today<=0) {
+
+							ny_line(118,2,1);
+							//od_printf("\n\r\n`bright white`You already used up all your sex turns today ...\n\r");
+
+							if(rip)
+								od_get_answer("\r\n");
+							sprintf(numstr,"u%07d.on",*enm_num);
+							if (fexist(numstr)) {
+								sprintf(numstr,"u%07d.kik",*enm_num);
+								justfile=ShareFileOpen(numstr,"wb");
+								if(justfile != NULL) {
+									rape=-1;
+									ny_fwrite(&rape,2,2,justfile);
+									fclose(justfile);
+								}
+							}
+							//	      WaitForEnter();
+						} else {
+							sprintf(numstr,"u%07d.on",*enm_num);
+							if (fexist(numstr)) {
+								sprintf(numstr,"u%07d.kik",*enm_num);
+								justfile=ShareFileOpen(numstr,"wb");
+								if(justfile != NULL) {
+									ny_fwrite(&user_on->std,2,1,justfile);
+									ny_fwrite(&user_on->std_percent,2,1,justfile);
+									fclose(justfile);
+								}
+							} else {
+								strcpy(mail_idx.recver,erec->name);
+								strcpy(mail_idx.sender,user_on->name);
+								strcpy(mail_idx.recverI,erec->bbsname);
+								strcpy(mail_idx.senderI,user_on->bbsname);
+								mail_idx.flirt=1000;
+								mail_idx.deleted=FALSE;
+								mail_idx.location=0;
+								mail_idx.length=0;
+								mail_idx.afterquote=0;
+								mail_idx.ill=user_on->std;
+								mail_idx.inf=user_on->std_percent;
+								mail_idx.sender_sex=user_on->sex;
+								ch_game_d();
+								justfile=ShareFileOpen(MAIL_INDEX,"a+b");
+								if(justfile != NULL) {
+									ny_fwrite(&mail_idx,sizeof(mail_idx_type),1,justfile);
+									fclose(justfile);
+								}
+								ch_flag_d();
+							}
+							user_on->since_got_laid=0;
+							user_on->sex_today--;
+							ny_line(339,1,0);
+							if(rip)
+								ny_disp_emu(erec->name);
+							else
+								od_disp_str(ny_un_emu(erec->name,numstr));
+							ny_line(340,0,1);
+							if(rip)
+								od_get_answer("\r\n");
+							illness(erec->std,erec->std_percent);
+							points_raise((INT32)35*(user_on->level+1));
+
+							//	      char omg[51];
+
+							// sprintf(omg,"%s raped you after beating you ...",user_on->name);
+						}
+					} else {
+						sprintf(numstr,"u%07d.on",*enm_num);
+						if (fexist(numstr)) {
+							sprintf(numstr,"u%07d.kik",*enm_num);
+							justfile=ShareFileOpen(numstr,"wb");
+							if(justfile != NULL) {
+								rape=-1;
+								ny_fwrite(&rape,2,2,justfile);
+								fclose(justfile);
+							}
+						}
+					}
+				}
+
+				sprintf(numstr,"u%07d.fgg",*user_num);
+				ny_remove(numstr);
+
+				sprintf(numstr,"u%07d.atk",*user_num);
+				ny_remove(numstr);
 			}
-		}
 
-		sprintf(numstr,"u%07d.fgg",*user_num);
-		ny_remove(numstr);
+			wrt_sts();
 
-		sprintf(numstr,"u%07d.atk",*user_num);
-		ny_remove(numstr);
-
-		wrt_sts();
-
-		if(!rip) {
-			ny_line(1,1,0);
-			od_get_answer("\n\r");
-		}
-		return TRUE;
-	}
-	if (en_hit_s!=-2) {
-		en_hit_s-=def_s;
-		if (en_hit_s<0)
-			en_hit_s=0;
-
-		user_on->hitpoints-=en_hit_s;
-		wrt_sts();
-
-
-		ny_disp_emu("\n\r\n`0");
-		ny_disp_emu(erec->name);
-		ny_line(211,0,0);
-		//	od_printf(" `red`kicks yer ass fer `bright green`
-		od_printf(D_Num(en_hit_s));
-		ny_line(210,0,0);
-
-
-		if (user_on->hitpoints <= 0) {
-			sprintf(numstr,"u%07d.atk",*user_num);
-			ny_remove(numstr);
-			sprintf(numstr,"u%07d.atk",*enm_num);
-			justfile = ShareFileOpen(numstr, "wb");
-			if(justfile != NULL) {
-				intval=-9; //user lost
-				ny_fwrite(&intval,4,1,justfile);
-				intval=user_on->money; //users money
-				ny_fwrite(&intval,4,1,justfile);
-				fclose(justfile);
+			if(!rip) {
+				ny_line(1,1,0);
+				od_get_answer("\r\n");
 			}
+			return TRUE;
+		}
+		if (en_hit_s!=-2) {
+			if (en_hit_s<0)
+				en_hit_s=0;
 
-			od_printf("\n\r\n");
-			ny_send_menu(ASS_KICKED_O,"");
-			/*	  od_printf("\n\r\n`bright red`Y`red`a `bright white`LOST`red`!!!!\n\r");
-				  od_printf("`bright red`C`red`ome back tomorrow to get revenge\n\r");
-				  od_printf("`bright red`8%c`red` of yer points lost\n\r",37);*/
+			user_on->hitpoints-=en_hit_s;
+			wrt_sts();
 
-			user_on->alive=UNCONCIOUS;
-			user_on->money=0;
-			points_loose(user_on->points*.08);
-			//wrt_sts();
 
-			if (erec->sex!=user_on->sex) {
-				sprintf(numstr,"u%07d.kik",*user_num);
-				sprintf(numstr2,"u%07d.on",*enm_num);
+			ny_disp_emu("\r\n\r\n`0");
+			ny_disp_emu(erec->name);
+			ny_line(211,0,0);
+			//	od_printf(" `red`kicks yer ass fer `bright green`
+			od_printf(D_Num(en_hit_s));
+			ny_line(210,0,0);
 
-				ny_line(225,2,1);
-				//	    od_printf("\n\r\n`bright red`W`red`aiting fer enemy response....\n\r");
 
-				t=time(NULL);
-				t2=t;
-				while (!fexist(numstr) && fexist(numstr2)) {
-					fgc(enm_num,user_num);
-					sprintf(numstr2,"u%07d.on",*enm_num);
+			if (user_on->hitpoints <= 0) {
+				sprintf(numstr,"u%07d.atk",*user_num);
+				ny_remove(numstr);
+				sprintf(numstr,"u%07d.atk",*enm_num);
+				justfile = ShareFileOpen(numstr, "wb");
+				if(justfile != NULL) {
+					intval=-9; //user lost
+					ny_fwrite(&intval,4,1,justfile);
+					intval=user_on->money; //users money
+					ny_fwrite(&intval,4,1,justfile);
+					fclose(justfile);
+				}
+
+				od_printf("\r\n\r\n");
+				ny_send_menu(ASS_KICKED_O,"");
+				/*	  od_printf("\n\r\n`bright red`Y`red`a `bright white`LOST`red`!!!!\n\r");
+					  od_printf("`bright red`C`red`ome back tomorrow to get revenge\n\r");
+					  od_printf("`bright red`8%c`red` of yer points lost\n\r",37);*/
+
+				user_on->alive=UNCONCIOUS;
+				user_on->money=0;
+				points_loose(user_on->points*.08);
+				//wrt_sts();
+
+				if (erec->sex!=user_on->sex) {
 					sprintf(numstr,"u%07d.kik",*user_num);
-					while(t==t2) {
-						t=time(NULL);
+					sprintf(numstr2,"u%07d.on",*enm_num);
+
+					ny_line(225,2,1);
+					//	    od_printf("\n\r\n`bright red`W`red`aiting fer enemy response....\n\r");
+
+					t=time(NULL);
+					t2=t;
+					while (!fexist(numstr) && fexist(numstr2)) {
+						fgc(enm_num,user_num);
+						sprintf(numstr2,"u%07d.on",*enm_num);
+						sprintf(numstr,"u%07d.kik",*user_num);
+						while(t==t2) {
+							t=time(NULL);
+							od_kernal();
+						}
+						t2=t;
 						od_kernal();
 					}
-					t2=t;
-					od_kernal();
-				}
-				if (fexist(numstr)) {
-					INT16 ill;
-					INT16 inf;
+					if (fexist(numstr)) {
+						INT16 ill;
+						INT16 inf;
 
-					justfile=ShareFileOpen(numstr,"rb");
-					if(justfile != NULL) {
-						ny_fread(&ill,2,1,justfile);
-						ny_fread(&inf,2,1,justfile);
-						fclose(justfile);
-					}
+						justfile=ShareFileOpen(numstr,"rb");
+						if(justfile != NULL) {
+							ny_fread(&ill,2,1,justfile);
+							ny_fread(&inf,2,1,justfile);
+							fclose(justfile);
 
-					ny_remove(numstr);
-					//sprintf(numstr,"del u%07d.kik",*user_num);
-					//system(numstr);
+							ny_remove(numstr);
+							//sprintf(numstr,"del u%07d.kik",*user_num);
+							//system(numstr);
 
-					if (ill!=1) {
-						illness((desease)ill,inf);
+							if (ill!=1) {
+								illness((desease)ill,inf);
 
 
-						ny_disp_emu("\n\r`0");
-						ny_disp_emu(erec->name);
-						ny_line(232,0,1);
-						//		od_printf(" `red`raped ya!\n\r");
+								ny_disp_emu("\r\n`0");
+								ny_disp_emu(erec->name);
+								ny_line(232,0,1);
+								//		od_printf(" `red`raped ya!\n\r");
 
+							}
+						}
 					}
 				}
+
+
+				fig_ker();
+				if(!rip)
+					ny_line(1,1,0);
+				od_get_answer("\r\n");
+
+				od_exit(10,FALSE);
 			}
 
+			sprintf(numstr,"u%07d.atk",*user_num);
+			ny_remove(numstr);
+		} else {
 
-			fig_ker();
-			if(!rip)
-				ny_line(1,1,0);
-			od_get_answer("\n\r");
+			od_printf("\r\n\r\n`0");
+			ny_disp_emu(erec->name);
+			ny_line(231,2,0);
+			//	od_printf("\n\r\n`bright green`%s`red` tried to get away but could not ...");
 
-			od_exit(10,FALSE);
 		}
-
-		sprintf(numstr,"u%07d.atk",*user_num);
-		ny_remove(numstr);
-	} else {
-
-		od_printf("\n\r\n`0");
-		ny_disp_emu(erec->name);
-		ny_line(231,2,0);
-		//	od_printf("\n\r\n`bright green`%s`red` tried to get away but could not ...");
-
 	}
 	return FALSE;
 }
@@ -1529,7 +1525,6 @@ online_fight_a(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 	char numstr[25];
 	char numstr2[25];
 	//  DWORD intval;
-	INT16 rape;
 	user_rec erec;
 	//  ffblk ffblk;
 	FILE *justfile;
@@ -1569,7 +1564,7 @@ online_fight_a(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 		//    sprintf(numstr2,"u%07d.on",enm_num);
 		//    sprintf(numstr,"u%07d.chl",enm_num);
 		od_kernal();
-		sleep(0);
+		od_sleep(0);
 	}
 
 	if (!fexist(numstr2)) {
@@ -1584,7 +1579,7 @@ online_fight_a(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 		ny_remove(numstr);
 		if(!rip)
 			ny_line(1,1,0);
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 		return;
 	}
 
@@ -1601,7 +1596,7 @@ online_fight_a(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return;
 	}
 
@@ -1612,6 +1607,7 @@ online_fight_a(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 			return;
 		if(o_checks(&enm_num,user_num,user_on,&erec))
 			return;
+#if 0
 		/*   do {
 		 
 		    bam_of1:
@@ -2196,7 +2192,7 @@ online_fight_a(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 		//	od_printf("\n\r\n`bright green`%s`red` tried to get away but could not ...");
 		 
 		      }*/
-
+#endif
 	} while (1);
 }
 
@@ -2219,7 +2215,7 @@ online_fight(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 
 	sfflg(*user_num,numstr,enm_num,&erec);
 
-	ny_disp_emu("\n\r\n`@");
+	ny_disp_emu("\r\n\r\n`@");
 	ny_disp_emu(erec.name);
 	ny_line(294,0,1);
 
@@ -2231,7 +2227,7 @@ online_fight(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 		if(fig_m(&erec,user_on,&enm_num,user_num))
 			return;
 
-
+#if 0
 		/*    sprintf(numstr,"u%07d.atk",*user_num);
 		    sprintf(numstr2,"u%07d.on",enm_num);
 
@@ -2784,6 +2780,7 @@ online_fight(INT16 *user_num, user_rec *user_on, INT16 enm_num) {
 		 }*/// else {
 		// DisplayStats();
 		//}
+#endif
 	} while (1);
 }
 
@@ -2802,10 +2799,10 @@ p_fight_ops(user_rec *cur_user,INT16 *user_num)  //This function operates the fi
 
 	do {
 		//key = p_fight(expert);  //Getting the result of menu choice
-		key=callmenu("KYLHTQ?\n\r",P_FIG,354,TRUE);
+		key=callmenu("KYLHTQ?\r\n",P_FIG,354,TRUE);
 		while (key=='?') {
 			expert+=10;
-			key=callmenu("KYLHTQ?\n\r",P_FIG,354,TRUE);
+			key=callmenu("KYLHTQ?\r\n",P_FIG,354,TRUE);
 			expert-=10;
 		}
 
@@ -2819,7 +2816,7 @@ p_fight_ops(user_rec *cur_user,INT16 *user_num)  //This function operates the fi
 			ny_line(199,2,0);
 			//		  od_printf("\n\r\n`bright red`Y`red`a enter the hospital ...\n\r");
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			heal_wounds();
 		} // End of healing
 		else if (key == 'Y') {
@@ -2848,7 +2845,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 	FILE *justfile;
 	FILE *scr_file;
 	//enemy_idx eidx;
-	INT32 intval,first,last,moneis;
+	INT32 intval;
 	scr_rec urec;
 	user_rec erec;
 	mail_idx_type mail_idx;
@@ -2856,7 +2853,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 	char key;
 
 	if(rip) {
-		od_disp_str("\n\r");
+		od_disp_str("\r\n");
 		od_send_file("texti.rip");
 	}
 
@@ -2866,7 +2863,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 
 	od_input_str(hand,24,' ',255);
 	ny_un_emu(hand);
-	od_printf("\n\r");
+	od_printf("\r\n");
 	unum=0;
 	ret=1;
 	if (hand[0]!=0) {
@@ -2894,7 +2891,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return;
 	} else if (single_node==FALSE && urec.online==TRUE) {
 		ch_flag_d();
@@ -2904,21 +2901,21 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 			if(justfile != NULL) {
 				ny_fread(&intval,2,1,justfile);
 				fclose(justfile);
-			}
-			sprintf(numstr,"u%07d.on",intval);
-			if (fexist(numstr)) {
+				sprintf(numstr,"u%07d.on",intval);
+				if (fexist(numstr)) {
 
-				ny_line(234,2,1);
-				//      od_printf("\n\r\n`bright red`T`red`he user is already being fought!\n\r");
+					ny_line(234,2,1);
+					//      od_printf("\n\r\n`bright red`T`red`he user is already being fought!\n\r");
 
-				if(!rip)
-					WaitForEnter();
-				else
-					od_get_answer("\n\r");
-				return;
-			} else {
-				sprintf(numstr,"u%07d.fgg",urec.user_num);
-				ny_remove(numstr);
+					if(!rip)
+						WaitForEnter();
+					else
+						od_get_answer("\r\n");
+					return;
+				} else {
+					sprintf(numstr,"u%07d.fgg",urec.user_num);
+					ny_remove(numstr);
+				}
 			}
 		}
 		if(expert==3)
@@ -2936,7 +2933,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return;
 	}
 
@@ -2951,21 +2948,21 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 			if(justfile != NULL) {
 				ny_fread(&intval,2,1,justfile);
 				fclose(justfile);
-			}
-			sprintf(numstr,"u%07d.on",intval);
-			if (fexist(numstr)) {
+				sprintf(numstr,"u%07d.on",intval);
+				if (fexist(numstr)) {
 
-				ny_line(234,2,1);
-				//      od_printf("\n\r\n`bright red`T`red`he user is already being fought!\n\r");
+					ny_line(234,2,1);
+					//      od_printf("\n\r\n`bright red`T`red`he user is already being fought!\n\r");
 
-				if(!rip)
-					WaitForEnter();
-				else
-					od_get_answer("\n\r");
-				return;
-			} else {
-				sprintf(numstr,"u%07d.bfa",urec.user_num);
-				ny_remove(numstr);
+					if(!rip)
+						WaitForEnter();
+					else
+						od_get_answer("\r\n");
+					return;
+				} else {
+					sprintf(numstr,"u%07d.bfa",urec.user_num);
+					ny_remove(numstr);
+				}
 			}
 		}
 
@@ -2980,7 +2977,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return;
 		}
 		ch_flag_d();
@@ -3022,9 +3019,9 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 
 		key=ny_get_answer("YN");
 		if(!rip)
-			od_printf("%c\n\r",key);
+			od_printf("%c\r\n",key);
 		else
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 
 		if (key=='N') {
 			if(single_node==FALSE) {
@@ -3060,7 +3057,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return;
 		}
 		money_minus(intval);
@@ -3075,9 +3072,9 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 
 		key=ny_get_answer("YN");
 		if(!rip)
-			od_printf("%c\n\r",key);
+			od_printf("%c\r\n",key);
 		else
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 
 		if (key=='N') {
 			if(single_node==FALSE) {
@@ -3113,7 +3110,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return;
 		}
 		money_minus(intval);
@@ -3128,9 +3125,9 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 
 		key=ny_get_answer("YN");
 		if(!rip)
-			od_printf("%c\n\r",key);
+			od_printf("%c\r\n",key);
 		else
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 
 		if (key=='N') {
 			if(single_node==FALSE) {
@@ -3165,7 +3162,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return;
 		}
 		money_minus(intval);
@@ -3176,7 +3173,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 	wrt_sts();
 	//  WaitForEnter();
 
-	od_printf("\n\r\n");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();
 
 
@@ -3192,7 +3189,7 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 	//	  od_printf("\n\r\n`bright red`S`red`till wanna do it?(`bright red`Y`red`/`bright red`N`red`)");
 
 	key=ny_get_answer("YN");
-	od_printf("%c\n\r",key);
+	od_printf("%c\r\n",key);
 
 	if (key=='N') {
 		if(single_node==FALSE) {
@@ -3215,12 +3212,12 @@ void p_attack_ops(user_rec *user_on,INT16 *nCurrentUserNumber) {
 bam_pf:
 		ny_line(240,3,0);
 		//	    od_printf("\n\r\n\n\r`bright red`P`red`layer `bright red`F`red`ight");
-		ny_disp_emu("\n\r\n`0");
+		ny_disp_emu("\r\n\r\n`0");
 		ny_disp_emu(erec.name);
 		ny_line(205,0,0);
 		od_printf(D_Num(erec.hitpoints));
 		ny_line(206,1,0);
-		od_printf("%s\n\r\n",D_Num(user_on->hitpoints));
+		od_printf("%s\r\n\r\n",D_Num(user_on->hitpoints));
 		/*	    od_printf("\n\r\n`bright red`[A] `red`- `bright red`A`red`ttack\n\r");
 			    od_printf("`bright red`[T] `red`- `bright red`T`red`ake `bright red`D`red`rug `bright red`A`red`nd `bright red`A`red`ttack\n\r");
 			    od_printf("`bright red`[G] `red`- `bright red`G`red`et `bright red`O`red`utta `bright red`H`red`ere\n\r");
@@ -3231,7 +3228,7 @@ bam_pf:
 		//	    ny_disp_emu("\n\r`@W`4hat ya gonna do? (`@[A] T G Y`4)");
 
 
-		key=od_get_answer("ATKPRGY\n\r");
+		key=od_get_answer("ATKPRGY\r\n");
 		if (key=='\n' || key=='\r')
 			key='A';
 
@@ -3357,7 +3354,7 @@ attack_again_p:
 
 			if (erec.hitpoints>0) {
 
-				ny_disp_emu("\n\r\n`0");
+				ny_disp_emu("\r\n\r\n`0");
 				ny_disp_emu(erec.name);
 				ny_line(211,0,0);
 				od_printf(D_Num(en_hit_s));
@@ -3368,7 +3365,7 @@ attack_again_p:
 				wrt_sts();
 				if (user_on->hitpoints<=0) {
 
-					od_printf("\n\r\n");
+					od_printf("\r\n\r\n");
 					ny_send_menu(ASS_KICKED_P,"");
 					//		od_printf("\n\r\n`bright white`You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\rYa lost 8%c of yer points\n\r",37);
 
@@ -3413,7 +3410,7 @@ attack_again_p:
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				return;
 			} else {
 
@@ -3443,7 +3440,7 @@ attack_again_p:
 				if (en_hit_s<0)
 					en_hit_s=0;
 
-				ny_disp_emu("\n\r\n`0");
+				ny_disp_emu("\r\n\r\n`0");
 				ny_disp_emu(erec.name);
 				ny_line(211,0,0);
 				od_printf(D_Num(en_hit_s));
@@ -3454,7 +3451,7 @@ attack_again_p:
 				wrt_sts();
 				if (user_on->hitpoints<=0) {
 
-					od_printf("\n\r\n");
+					od_printf("\r\n\r\n");
 					ny_send_menu(ASS_KICKED_P,"");
 
 					//od_printf("\n\r\n`bright white`You had yer ass kicked ... oh well that happens\n\rCome back tomorrow to get revenge ...\n\rYa lost 8%c of yer points\n\r",37);
@@ -3522,9 +3519,9 @@ attack_again_p:
 
 		key=od_get_answer("YN");
 		if(!rip)
-			od_printf("%c\n\r",key);
+			od_printf("%c\r\n",key);
 		else
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 		if (key=='Y') {
 
 			weapon tarm;
@@ -3538,10 +3535,10 @@ attack_again_p:
 
 			print_arm(user_on->arm);
 			if(rip) {
-				od_disp_str("::^M@OK))|#|#|#\n\r\n");
-				od_get_answer("\n\r");
+				od_disp_str("::^M@OK))|#|#|#\r\n\r\n");
+				od_get_answer("\r\n");
 			}
-			od_printf("\n\r\n");
+			od_printf("\r\n\r\n");
 		}
 	}
 
@@ -3647,9 +3644,9 @@ attack_again_p:
 
 		key=od_get_answer("YN");
 		if(!rip)
-			od_printf("%c\n\r",key);
+			od_printf("%c\r\n",key);
 		else
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 		if (key=='Y') {
 			if (user_on->sex_today<=0) {
 
@@ -3684,7 +3681,7 @@ attack_again_p:
 					od_disp_str(ny_un_emu(erec.name,numstr));
 				ny_line(340,0,1);
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 
 				illness(erec.std,erec.std_percent);
 				points_raise((INT32)35*(user_on->level+1));
@@ -3714,10 +3711,10 @@ void evil_ops(user_rec *cur_user) {
 	INT32 chance,intval;
 
 	do {
-		key=callmenu("SBPDRWQ?\n\r",EVIL_STUFF,355,FALSE);
+		key=callmenu("SBPDRWQ?\r\n",EVIL_STUFF,355,FALSE);
 		while (key=='?') {
 			expert+=10;
-			key=callmenu("SBPDRWQ?\n\r",EVIL_STUFF,355,FALSE);
+			key=callmenu("SBPDRWQ?\r\n",EVIL_STUFF,355,FALSE);
 			expert-=10;
 		}
 
@@ -3731,11 +3728,11 @@ void evil_ops(user_rec *cur_user) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			chance=xp_random(100);
 			if (chance<=busted_ch_beggar) {
 
-				od_printf("\n\r\n");
+				od_printf("\r\n\r\n");
 				ny_send_menu(BUSTED,"");
 				//od_printf("\n\r\n`bright white`BUSTED!!!! .... well the police beat the hell out of you .....");
 				//od_printf("\n\rWhy don't you try again tomorrow...\n\r");
@@ -3747,7 +3744,7 @@ void evil_ops(user_rec *cur_user) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				od_exit(10,FALSE);
 			} else {
 				chance=xp_random(100);
@@ -3765,7 +3762,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				} else {
 
 					ny_line(244,2,1);
@@ -3774,7 +3771,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 			}
 		}
@@ -3788,11 +3785,11 @@ void evil_ops(user_rec *cur_user) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			chance=xp_random(100);
 			if (chance<=busted_ch_car) {
 
-				od_printf("\n\r\n");
+				od_printf("\r\n\r\n");
 				ny_send_menu(BUSTED,"");
 				//od_printf("\n\r\n`bright white`BUSTED!!!! .... well the police beat the hell out of you .....");
 				//od_printf("\n\rWhy don't you try again tomorrow...\n\r");
@@ -3804,7 +3801,7 @@ void evil_ops(user_rec *cur_user) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				od_exit(10,FALSE);
 			} else {
 				chance=xp_random(100);
@@ -3813,17 +3810,17 @@ void evil_ops(user_rec *cur_user) {
 					ny_line(192,2,1);
 					//	  od_printf("\n\r\n`bright red`Y`red`ou totally smashed that car .... a very nice job...\n\r");
 					if(rip)
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					ny_line(117,0,0);
 					od_printf("%s",D_Num((INT32)(25*cur_user->level+25) * (INT32)DrgPtsCoef()));
 
 					points_raise((INT32)25*cur_user->level+25);
 					if(!rip) {
 						WaitForEnter();
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 					} else {
-						od_disp_str("::^M@OK))|#|#|#\n\r");
-						od_get_answer("\n\r");
+						od_disp_str("::^M@OK))|#|#|#\r\n");
+						od_get_answer("\r\n");
 					}
 				} else {
 
@@ -3832,7 +3829,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 			}
 		}
@@ -3846,11 +3843,11 @@ void evil_ops(user_rec *cur_user) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			chance=xp_random(100);
 			if (chance<=busted_ch_school) {
 
-				od_printf("\n\r\n");
+				od_printf("\r\n\r\n");
 				ny_send_menu(BUSTED,"");
 				//od_printf("\n\r\n`bright white`BUSTED!!!! .... well the police beat the hell out of you .....");
 				//od_printf("\n\rWhy don't you try again tomorrow...\n\r");
@@ -3862,7 +3859,7 @@ void evil_ops(user_rec *cur_user) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				od_exit(10,FALSE);
 			} else {
 				chance=xp_random(100);
@@ -3870,7 +3867,7 @@ void evil_ops(user_rec *cur_user) {
 
 					ny_line(246,2,1);
 					if(rip)
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					//	  od_printf("\n\r\n`bright red`I`red`t looks lovely as the school buildings crumble into ashes ...\n\r");
 					ny_line(117,0,0);
 					od_printf("%s",D_Num((INT32)(50*cur_user->level+40) * (INT32)DrgPtsCoef()));
@@ -3878,11 +3875,11 @@ void evil_ops(user_rec *cur_user) {
 					points_raise((INT32)50*cur_user->level+40);
 					news_post("`@A`4 school burned to ashes ... `%Police `4say clear case of arsen","","",0);
 					if(!rip) {
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 						WaitForEnter();
 					} else {
-						od_disp_str("::^M@OK))|#|#|#\n\r");
-						od_get_answer("\n\r");
+						od_disp_str("::^M@OK))|#|#|#\r\n");
+						od_get_answer("\r\n");
 					}
 				} else {
 
@@ -3892,7 +3889,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 			}
 		}
@@ -3906,11 +3903,11 @@ void evil_ops(user_rec *cur_user) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			chance=xp_random(100);
 			if (chance<=busted_ch_window) {
 
-				od_printf("\n\r\n");
+				od_printf("\r\n\r\n");
 				ny_send_menu(BUSTED,"");
 				//od_printf("\n\r\n`bright white`BUSTED!!!! .... well the police beat the hell out of you .....");
 				//od_printf("\n\rWhy don't you try again tomorrow...\n\r");
@@ -3922,7 +3919,7 @@ void evil_ops(user_rec *cur_user) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				od_exit(10,FALSE);
 			} else {
 				chance=xp_random(100);
@@ -3930,18 +3927,18 @@ void evil_ops(user_rec *cur_user) {
 
 					ny_line(249,2,1);
 					if(rip)
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					//	  od_printf("\n\r\n`bright red`B`red`reaking glass sounds so good...\n\r");
 					ny_line(117,0,0);
 					od_printf("%s",D_Num((INT32)(8*cur_user->level+8) * (INT32)DrgPtsCoef()));
 
 					points_raise((INT32)8 * cur_user->level + 8);
 					if(!rip) {
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 						WaitForEnter();
 					} else {
-						od_disp_str("::^M@OK))|#|#|#\n\r");
-						od_get_answer("\n\r");
+						od_disp_str("::^M@OK))|#|#|#\r\n");
+						od_get_answer("\r\n");
 					}
 				} else {
 
@@ -3950,7 +3947,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 			}
 		}
@@ -3972,7 +3969,7 @@ void evil_ops(user_rec *cur_user) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			} else if (key=='Y') {
 				if (cur_user->money < intval) {
 
@@ -3982,7 +3979,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				} else {
 					money_minus(intval);
 
@@ -3993,11 +3990,11 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					chance=xp_random(100);
 					if (chance<=busted_ch_poison) {
 
-						od_printf("\n\r\n");
+						od_printf("\r\n\r\n");
 						ny_send_menu(BUSTED,"");
 						//od_printf("\n\r\n`bright white`BUSTED!!!! .... well the police beat the hell out of you .....");
 						//od_printf("\n\rWhy don't you try again tomorrow...\n\r");
@@ -4009,7 +4006,7 @@ void evil_ops(user_rec *cur_user) {
 						if(!rip)
 							WaitForEnter();
 						else
-							od_get_answer("\n\r");
+							od_get_answer("\r\n");
 						od_exit(10,FALSE);
 					} else {
 						chance=xp_random(100);
@@ -4017,7 +4014,7 @@ void evil_ops(user_rec *cur_user) {
 
 							ny_line(254,2,1);
 							if(rip)
-								od_get_answer("\n\r");
+								od_get_answer("\r\n");
 							//od_printf("\n\r\n`bright red`W`red`ow lotsa dead folks ... It worked ...\n\r");
 							ny_line(117,0,0);
 							od_printf("%s",D_Num((INT32)(80*cur_user->level+60) * (INT32)DrgPtsCoef()));
@@ -4025,11 +4022,11 @@ void evil_ops(user_rec *cur_user) {
 							points_raise((INT32)80*cur_user->level+60);
 							news_post("`@W`4ater was poisoned today ... `%nobody was caught","","",0);
 							if(!rip) {
-								od_disp_str("\n\r");
+								od_disp_str("\r\n");
 								WaitForEnter();
 							} else {
-								od_disp_str("::^M@OK))|#|#|#\n\r");
-								od_get_answer("\n\r");
+								od_disp_str("::^M@OK))|#|#|#\r\n");
+								od_get_answer("\r\n");
 							}
 						} else {
 
@@ -4039,7 +4036,7 @@ void evil_ops(user_rec *cur_user) {
 							if(!rip)
 								WaitForEnter();
 							else
-								od_get_answer("\n\r");
+								od_get_answer("\r\n");
 						}
 					}
 				}
@@ -4063,7 +4060,7 @@ void evil_ops(user_rec *cur_user) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			} else if (key=='Y') {
 				if (cur_user->money < intval) {
 
@@ -4073,7 +4070,7 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				} else {
 					money_minus(intval);
 
@@ -4084,11 +4081,11 @@ void evil_ops(user_rec *cur_user) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					chance=xp_random(100);
 					if (chance<=busted_ch_bomb) {
 
-						od_printf("\n\r\n");
+						od_printf("\r\n\r\n");
 						ny_send_menu(BUSTED,"");
 						//od_printf("\n\r\n`bright white`BUSTED!!!! .... well the police beat the hell out of you .....");
 						//od_printf("\n\rWhy don't you try again tomorrow...\n\r");
@@ -4100,7 +4097,7 @@ void evil_ops(user_rec *cur_user) {
 						if(!rip)
 							WaitForEnter();
 						else
-							od_get_answer("\n\r");
+							od_get_answer("\r\n");
 						od_exit(10,FALSE);
 					} else {
 						chance=xp_random(100);
@@ -4108,7 +4105,7 @@ void evil_ops(user_rec *cur_user) {
 
 							ny_line(258,2,1);
 							if(rip)
-								od_get_answer("\n\r");
+								od_get_answer("\r\n");
 							//	      od_printf("\n\r\n`bright red`W`red`ow ... it didn't fall but almost ...\n\r");
 							ny_line(117,0,0);
 							od_printf("%s",D_Num((INT32)(120*cur_user->level+100) * (INT32)DrgPtsCoef()));
@@ -4116,11 +4113,11 @@ void evil_ops(user_rec *cur_user) {
 							points_raise((INT32)120*cur_user->level+100);
 							news_post("`%United Nations HQ`4 was `%bombed `4today ... 10 suspects brought in","","",0);
 							if(!rip) {
-								od_disp_str("\n\r");
+								od_disp_str("\r\n");
 								WaitForEnter();
 							} else {
-								od_disp_str("::^M@OK))|#|#|#\n\r");
-								od_get_answer("\n\r");
+								od_disp_str("::^M@OK))|#|#|#\r\n");
+								od_get_answer("\r\n");
 							}
 						} else {
 
@@ -4131,7 +4128,7 @@ void evil_ops(user_rec *cur_user) {
 							if(!rip)
 								WaitForEnter();
 							else
-								od_get_answer("\n\r");
+								od_get_answer("\r\n");
 						}
 					}
 				}
@@ -4149,11 +4146,11 @@ copfight_ops(user_rec *cur_user)  //This function operates the fights with monst
 
 	do {
 
-		key=callmenu("LYHTQ?\n\r",C_FIG,356,TRUE);
+		key=callmenu("LYHTQ?\r\n",C_FIG,356,TRUE);
 		//		key = copfight(expert);  //Getting the result of menu choice
 		while (key=='?') {
 			expert+=10;
-			key=callmenu("LYHTQ?\n\r",C_FIG,356,TRUE);
+			key=callmenu("LYHTQ?\r\n",C_FIG,356,TRUE);
 			expert-=10;
 		}
 
@@ -4167,7 +4164,7 @@ copfight_ops(user_rec *cur_user)  //This function operates the fights with monst
 			ny_line(199,2,0);
 			//Ya enter the hospital ...
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			heal_wounds();
 		} // End of healing
 		else if (key == 'Y') {
@@ -4212,7 +4209,7 @@ cop_list(void) {
 	char key;
 
 	if(!rip) {
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 
 		ny_clr_scr();
 
@@ -4234,7 +4231,7 @@ cop_list(void) {
 	ny_line(260,0,0);
 	//ny_disp_emu("`@S`4ooo... (`@0`4-`@9 [Q]`4=quit)");
 
-	key=ny_get_answer("0123456789Q\n\r");
+	key=ny_get_answer("0123456789Q\r\n");
 	if (key=='\n' || key=='\r')
 		key='Q';
 
@@ -4258,7 +4255,7 @@ void copattack_ops(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return;
 	}
 
@@ -4297,13 +4294,13 @@ void copattack_ops(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else {
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 			no_rip_m=1;
 		}
 		return;
 	}
 
-	od_printf("\n\r\n");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();
 
 
@@ -4338,7 +4335,7 @@ bam_cf:
 		ny_line(205,0,0);
 		od_printf(D_Num(hitpoints));
 		ny_line(206,1,0);
-		od_printf("%s\n\r\n",D_Num(user_on->hitpoints));
+		od_printf("%s\r\n\r\n",D_Num(user_on->hitpoints));
 		/*    od_printf("\n\r\n`bright red`[A] `red`- `bright red`A`red`ttack\n\r");
 		    od_printf("`bright red`[T] `red`- `bright red`T`red`ake `bright red`D`red`rug `bright red`A`red`nd `bright red`A`red`ttack\n\r");
 		    od_printf("`bright red`[G] `red`- `bright red`G`red`et `bright red`O`red`utta `bright red`H`red`ere\n\r");
@@ -4349,7 +4346,7 @@ bam_cf:
 		//    ny_disp_emu("\n\r`@W`4hat ya gonna do? (`@[A] T G Y`4)");
 
 
-		key=od_get_answer("ATKPRGY\n\r");
+		key=od_get_answer("ATKPRGY\r\n");
 		if (key=='\n' || key=='\r')
 			key='A';
 
@@ -4465,7 +4462,7 @@ attack_again_c:
 
 			if (hitpoints>0) {
 
-				od_printf("\n\r\n");
+				od_printf("\r\n\r\n");
 				print_cop(num);
 				ny_line(211,0,0);
 				od_printf(D_Num(en_hit_s));
@@ -4473,7 +4470,7 @@ attack_again_c:
 				user_on->hitpoints-=en_hit_s;
 				wrt_sts();
 				if (user_on->hitpoints<=0) {
-					od_printf("\n\r\n");
+					od_printf("\r\n\r\n");
 					ny_send_menu(ASS_KICKED,"");
 
 					/*	  od_printf("\n\r\n`bright white`You had yer ass kicked ... oh well that happens\n\r");
@@ -4501,7 +4498,7 @@ attack_again_c:
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				return;
 			} else {
 
@@ -4523,7 +4520,7 @@ attack_again_c:
 					en_hit_s=0;
 
 
-				od_printf("\n\r\n");
+				od_printf("\r\n\r\n");
 				print_cop(num);
 				ny_line(211,0,0);
 				od_printf(D_Num(en_hit_s));
@@ -4533,7 +4530,7 @@ attack_again_c:
 				user_on->hitpoints-=en_hit_s;
 				if (user_on->hitpoints<=0) {
 
-					od_printf("\n\r\n");
+					od_printf("\r\n\r\n");
 					ny_send_menu(ASS_KICKED,"");
 
 					/*od_printf("\n\r\n`bright white`You had yer ass kicked ... oh well that happens\n\r");
@@ -4708,30 +4705,30 @@ event_gen(user_rec *user_on) {
 
 	if(intval==1) {
 
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		if(!rip)
 			ny_clr_scr();
 		ny_line(183,0,2);
 		//od_printf("`bright`Stuff happens......\n\r\n");
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(186,0,1);
 		//    od_printf("`bright red`Y`red`a find an open car ...\n\r");
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(187,0,1);
 		//    od_printf("`bright red`T`red`here is money inside ...\n\r");
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(188,0,0);
 		//    od_printf("`bright red`T`red`ake the money? (`bright red`Y`red`/`bright red`N`red`)");
 
 		key=ny_get_answer("YN");
 
 		if(!rip)
-			od_printf("%c\n\r\n",key);
+			od_printf("%c\r\n\r\n",key);
 		else
-			od_disp_str("\n\n\r");
+			od_disp_str("\\r\n\r\n");
 		if (key=='N') {
 			ny_line(189,0,1);
 			//      od_printf("`bright red`Y`red`a consider the risks and decide it ain't a good idea\n\r");
@@ -4739,7 +4736,7 @@ event_gen(user_rec *user_on) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return 1;
 		}
 
@@ -4748,7 +4745,7 @@ event_gen(user_rec *user_on) {
 
 			ny_line(190,0,1);
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			//      od_printf("`bright red`W`red`ow, the guy that owns the car came back and kicked yer ass!\n\r");
 			ny_line(191,0,1);
 			//      od_printf("`bright red`Y`red`a lost almost all yer hitpoints and 1/2 the money on ya!\n\r");
@@ -4759,7 +4756,7 @@ event_gen(user_rec *user_on) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return 1;
 		}
 
@@ -4775,21 +4772,21 @@ event_gen(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return 1;
 	}
 	if(intval==2) {
 
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		if(!rip)
 			ny_clr_scr();
 		ny_line(183,0,2);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//    od_printf("`bright`Stuff happens......\n\r\n");
 		ny_line(184,0,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//    od_printf("`bright red`Y`red`a find a rich new car ...\n\r");
 		ny_line(185,0,0);
 		//    od_printf("`bright red`S`red`mash it? (`bright red`Y`red`/`bright red`N`red`)");
@@ -4797,9 +4794,9 @@ event_gen(user_rec *user_on) {
 		key=ny_get_answer("YN");
 
 		if(!rip)
-			od_printf("%c\n\r\n",key);
+			od_printf("%c\r\n\r\n",key);
 		else
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 		if (key=='N') {
 			ny_line(189,0,1);
 			//      od_printf("`bright red`Y`red`a consider the risks and decide it ain't a good idea\n\r");
@@ -4807,7 +4804,7 @@ event_gen(user_rec *user_on) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return 1;
 		}
 
@@ -4825,7 +4822,7 @@ event_gen(user_rec *user_on) {
 			if(!rip)
 				WaitForEnter();
 			else
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			od_exit(10,FALSE);
 		} else {
 			chance=xp_random(100);
@@ -4833,18 +4830,18 @@ event_gen(user_rec *user_on) {
 
 				ny_line(192,0,1);
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				//od_printf("\n\r\n`bright red`Y`red`ou totally smashed that car .... a very nice job...\n\r");
 				ny_line(117,0,0);
 				od_printf("%s",D_Num((INT32)(25*user_on->level+25) * (INT32)DrgPtsCoef()));
 
 				points_raise((INT32)25 * user_on->level+25);
 				if(!rip) {
-					od_disp_str("\n\r");
+					od_disp_str("\r\n");
 					WaitForEnter();
 				} else {
-					od_disp_str("::^M@OK))|#|#|#\n\r");
-					od_get_answer("\n\r");
+					od_disp_str("::^M@OK))|#|#|#\r\n");
+					od_get_answer("\r\n");
 				}
 				return 1;
 			} else {
@@ -4854,31 +4851,31 @@ event_gen(user_rec *user_on) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				return 1;
 			}
 		}
 	}
 	if(intval==3) {
 
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		if(!rip)
 			ny_clr_scr();
 		ny_line(183,0,2);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//od_printf("`bright`Stuff happens......\n\r\n");
 		ny_line(193,0,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//    od_printf("`bright red`Y`red`a find a bunch of hippies ...\n\r");
 		ny_line(194,0,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//    od_printf("`bright red`Y`red`a smoke some dope with them ...\n\r");
 		ny_line(195,0,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//    od_printf("`bright red`T`red`hey give ya hit of yer favorite drug ...\n\r");
 		ny_line(196,0,1);
 		//    od_printf("`bright red`A`red`nd yer hitpoints max out!\n\r");
@@ -4890,18 +4887,18 @@ event_gen(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return 1;
 	}
 	if(intval==4) {
 
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		if(!rip)
 			ny_clr_scr();
 		intval=randomf(pow(1.5,(user_on->level+1))*10);
 		ny_line(183,0,2);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//od_printf("`bright`Stuff happens......\n\r\n");
 		ny_line(265,0,0);
 		od_printf(D_Num(intval));
@@ -4911,22 +4908,22 @@ event_gen(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return 1;
 	}
 	if(intval==5) {
 
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		if(!rip)
 			ny_clr_scr();
 		intval=xp_random(10 * (user_on->level+1))+2;
 		ny_line(183,0,2);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//od_printf("`bright`Stuff happens......\n\r\n");
 		ny_line(197,0,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		//    od_printf("`bright red`Y`red`a fell inside a hole ...\n\r");
 		ny_line(198,0,1);
 		//od_printf("`bright red`Y`red`a lost 1/3 of yer hitpoints ...\n\r");
@@ -4936,11 +4933,11 @@ event_gen(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		return 1;
 	}
 	if(intval==6) {
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		if(!rip)
 			ny_clr_scr();
 		intval=xp_random(14)+2;
@@ -4949,7 +4946,7 @@ event_gen(user_rec *user_on) {
 		ny_line(183,0,2);
 		//Stuff happens...
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(265,0,0);
 		od_printf("%d",intval);
 		ny_line(438,0,1);
@@ -4959,7 +4956,7 @@ event_gen(user_rec *user_on) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 
 		return 1;
 	}
@@ -4998,7 +4995,7 @@ ny_send_file(const char filename[]) {
 	char *keyp;
 
 	phile=ShareFileOpen(filename,"rb");
-	if(phile=NULL)
+	if (phile == NULL)
 		return;
 
 	cnt=2;
@@ -5018,7 +5015,7 @@ ny_send_file(const char filename[]) {
 			if (cnt>od_control.user_screen_length) {
 
 				ny_disp_emu("`%More (Y/n/=)");
-				key=ny_get_answer("YN=\n\r");
+				key=ny_get_answer("YN=\r\n");
 				od_printf("\r            \r");
 				if(key=='N') {
 					fclose(phile);
@@ -5041,7 +5038,7 @@ void
 ny_get_index(void) {
 	char line[124];
 	FILE *phile;
-	char numstr[26];
+	char numstr[124];
 
 	ch_game_d();
 
@@ -5208,7 +5205,7 @@ ny_send_menu(menu_t menu,const char allowed[],INT16 onscreen) {
 	while (fgets(line,120,phile)!=NULL && line[0]!='@') {
 		if((cnt-onscreen)==2 && rip && line[0]=='$' && line[1]=='R' && line[2]=='I' && line[3]=='P' && line[4]=='$') {
 			menu_type=1;
-			od_disp_str("\n\r");
+			od_disp_str("\r\n");
 		} else {
 			if(!rip) {
 				key=od_get_key(FALSE);
@@ -5229,7 +5226,7 @@ ny_send_menu(menu_t menu,const char allowed[],INT16 onscreen) {
 			}
 
 			if(line[0]=='\0')
-				od_printf("\n\r");
+				od_printf("\r\n");
 			else
 				if(menu_type==0)
 					ny_disp_emu(line);
@@ -5244,7 +5241,7 @@ ny_send_menu(menu_t menu,const char allowed[],INT16 onscreen) {
 				if (cnt>od_control.user_screen_length) {
 
 					ny_disp_emu("`%More (Y/n/=)");
-					key=ny_get_answer("YN=\n\r");
+					key=ny_get_answer("YN=\r\n");
 					od_printf("\r            \r");
 					if(key=='N') {
 						fclose(phile);
@@ -5412,14 +5409,14 @@ ny_stat_line(INT16 line,INT16 before,INT16 after) {
 		return;
 	}
 	for(cnt=0;cnt<before;cnt++)
-		od_printf("\n\r");
+		od_printf("\r\n");
 
 	ny_disp_emu((char *)lines[line]);
 	//  printf("\n%s|%d\n\r",lines[0],line);
 	//od_putch('|');
 
 	for(cnt=0;cnt<after;cnt++)
-		od_printf("\n\r");
+		od_printf("\r\n");
 }
 
 
@@ -5511,7 +5508,7 @@ ny_line(INT16 line,INT16 before,INT16 after) {
 		*keyp='\0';
 
 	for(cnt=0;cnt<before;cnt++)
-		od_printf("\n\r");
+		od_printf("\r\n");
 
 	/*  if(before==0 && rip==TRUE && lines[0]=='!')
 	    od_printf("\n\r");*/
@@ -5520,7 +5517,7 @@ ny_line(INT16 line,INT16 before,INT16 after) {
 	ny_disp_emu(lines);
 
 	for(cnt=0;cnt<after;cnt++)
-		od_printf("\n\r");
+		od_printf("\r\n");
 
 	/*  if(after==0 && rip==TRUE && lines[0]=='!')
 	    od_printf("\n\r");*/

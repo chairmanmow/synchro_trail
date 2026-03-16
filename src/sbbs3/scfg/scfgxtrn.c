@@ -23,8 +23,8 @@
 char *daystr(char days);
 static void hotkey_cfg(void);
 
-static char* use_shell_opt = "Use Shell or New Context";
-static char* use_shell_help =
+char* use_shell_opt = "Use Shell or New Context";
+char* use_shell_help =
 	"`Use System Shell or New JavaScript Context to Execute:`\n"
 	"\n"
 	"If this command line requires the system command shell to execute\n"
@@ -36,7 +36,7 @@ static char* use_shell_help =
 	"will enable the creation and initialization of a new JavaScript run-time\n"
 	"context for it to execute within, for every invocation."
 ;
-static char* use_shell_prompt = "Use System Shell or New JavaScript Context to Execute";
+char* use_shell_prompt = "Use System Shell or New JavaScript Context to Execute";
 char*        native_help =
 	"`Native Executable:`\n"
 	"\n"
@@ -320,38 +320,144 @@ void xprogs_cfg()
 	}
 }
 
-void fevent_cfg(const char* name, fevent_t* event, const char* help)
+bool edit_fixed_event(const char* name, char* cmd, uint32_t* misc, const char* help)
 {
+	char title[128];
 	static int dflt;
 	int        i;
 
+	snprintf(title, sizeof title, "%s Event", name);
 	while (1) {
 		i = 0;
-		snprintf(opt[i++], MAX_OPLN, "%-27s%s", "Enabled", (event->misc & EVENT_DISABLED) ? "No" : "Yes");
-		snprintf(opt[i++], MAX_OPLN, "%-27s%s", native_opt, (event->misc & EX_NATIVE) ? "Yes" : "No");
-		snprintf(opt[i++], MAX_OPLN, "%-27s%s", use_shell_opt, (event->misc & EX_SH) ? "Yes" : "No");
-		snprintf(opt[i++], MAX_OPLN, "%-27s%s", "Command Line", event->cmd);
+		snprintf(opt[i++], MAX_OPLN, "%-27s%s", "Enabled", (*misc & EVENT_DISABLED) ? "No" : "Yes");
+		snprintf(opt[i++], MAX_OPLN, "%-27s%s", native_opt, (*misc & EX_NATIVE) ? "Yes" : "No");
+		snprintf(opt[i++], MAX_OPLN, "%-27s%s", use_shell_opt, (*misc & EX_SH) ? "Yes" : "No");
+		snprintf(opt[i++], MAX_OPLN, "%-27s%s", "Command Line", cmd);
 		opt[i][0] = 0;
 		uifc.helpbuf = (char*)help;
-		switch (uifc.list(WIN_ACT | WIN_SAV | WIN_RHT, 0, 0, 0, &dflt, 0, name, opt)) {
+		switch (uifc.list(WIN_ACT | WIN_SAV | WIN_MID, 0, 0, 0, &dflt, 0, title, opt)) {
 			case -1:
-				return;
+				return *cmd != '\0';
 			case 0:
-				event->misc ^= EVENT_DISABLED;
+				*misc ^= EVENT_DISABLED;
 				uifc.changes = TRUE;
 				break;
 			case 1:
-				toggle_flag(native_opt, &event->misc, EX_NATIVE, false, native_help);
+				toggle_flag(native_opt, misc, EX_NATIVE, false, native_help);
 				break;
 			case 2:
-				toggle_flag(use_shell_prompt, &event->misc, EX_SH, false, use_shell_help);
+				toggle_flag(use_shell_prompt, misc, EX_SH, false, use_shell_help);
 				break;
 			case 3:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Command"
-				           , event->cmd, sizeof event->cmd - 1, K_EDIT);
+				           , cmd, LEN_CMD, K_EDIT);
 				break;
 		}
 	}
+	return false;
+}
+
+void cfg_fixed_events(const char* name, fevent_t* event, const char* help)
+{
+	char title[128];
+	int i;
+	int cur = 0, bar = 0;
+	static char save_cmd[LEN_CMD + 1] = "";
+	static uint32_t save_misc;
+
+	snprintf(title, sizeof title, "%s Events", name);
+	while (1) {
+		for (i = 0; event->cmd != NULL && event->cmd[i] != NULL; ++i)
+			snprintf(opt[i], MAX_OPLN, "%-32.32s", event->cmd[i]);
+		opt[i][0] = 0;
+		uifc_winmode_t wmode = WIN_RHT | WIN_SAV | WIN_ACT | WIN_INS | WIN_INSACT | WIN_XTR;
+		if (save_cmd[0] != '\0')
+			wmode |= WIN_PASTE | WIN_PASTEXTR;
+		if (i > 0)
+			wmode |= WIN_DEL | WIN_CUT | WIN_COPY;
+		i = uifc.list(wmode, 2, 0, 0, &cur, &bar, title, opt);
+		if (i == -1)
+			return;
+		char cmd[LEN_CMD + 1];
+		uint32_t misc = 0;
+		int msk = i & MSK_ON;
+		i &= MSK_OFF;
+		if (msk == MSK_INS) {
+			*cmd = '\0';
+			misc = EX_NATIVE;
+			if (edit_fixed_event(name, cmd, &misc, help)) {
+				int count = strListCount(event->cmd);
+				strListInsert(&event->cmd, cmd, i);
+				event->misc = realloc_or_free(event->misc, sizeof(*event->misc) * (count + 1));
+				if (event->misc == NULL) {
+					errormsg(WHERE, ERR_ALLOC, "fixed event misc", sizeof(*event->misc) * (count + 1));
+					strListFastDelete(event->cmd, i, 1);
+					continue;
+				}
+				memmove(&event->misc[i + 1], &event->misc[i], sizeof(*event->misc) * (count - i));
+				event->misc[i] = misc;
+				uifc.changes = TRUE;
+			}
+			continue;
+		}
+		if (msk == MSK_DEL || msk == MSK_CUT) {
+			if (msk == MSK_CUT) {
+				SAFECOPY(save_cmd, event->cmd[i]);
+				save_misc = event->misc[i];
+			}
+			if (event->misc != NULL) {
+				int count = strListCount(event->cmd);
+				memmove(&event->misc[i], &event->misc[i + 1], sizeof(*event->misc) * (count - i));
+			}
+			strListFastDelete(event->cmd, i, 1);
+			uifc.changes = TRUE;
+			continue;
+		}
+		if (msk == MSK_COPY) {
+			SAFECOPY(save_cmd, event->cmd[i]);
+			save_misc = event->misc[i];
+			continue;
+		}
+		if (msk == MSK_PASTE) {
+			int count = strListCount(event->cmd);
+			strListInsert(&event->cmd, save_cmd, i);
+			event->misc = realloc_or_free(event->misc, sizeof(*event->misc) * (count + 1));
+			if (event->misc == NULL) {
+				errormsg(WHERE, ERR_ALLOC, "fixed event misc", sizeof(*event->misc) * (count + 1));
+				strListFastDelete(event->cmd, i, 1);
+				continue;
+			}
+			memmove(&event->misc[i + 1], &event->misc[i], sizeof(*event->misc) * (count - i));
+			event->misc[i] = save_misc;
+			uifc.changes = TRUE;
+			continue;
+		}
+		if (msk != 0)
+			continue;
+		if (event->cmd == NULL || event->cmd[i] == NULL)
+			continue;
+		SAFECOPY(cmd, event->cmd[i]);
+		if (edit_fixed_event(name, cmd, &event->misc[i], help)) {
+			if (strcmp(cmd, event->cmd[i]) != 0) {
+				free(event->cmd[i]);
+				event->cmd[i] = strdup(cmd);
+				uifc.changes = TRUE;
+			}
+		}
+	}
+}
+
+
+const char* first_fevent(fevent_t event)
+{
+	const char* result = "";
+	for (int i = 0; event.cmd != NULL && event.cmd[i] != NULL; ++i) {
+		if (event.misc[i] & EVENT_DISABLED)
+			result = "<DISABLED>";
+		else if (event.cmd[i][0] != '\0')
+			result = event.cmd[i];
+	}
+	return result;
 }
 
 void fevents_cfg()
@@ -361,53 +467,79 @@ void fevents_cfg()
 
 	while (1) {
 		i = 0;
-		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Logon", (cfg.sys_logon.misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.sys_logon.cmd);
-		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Logout", (cfg.sys_logout.misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.sys_logout.cmd);
-		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Daily", (cfg.sys_daily.misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.sys_daily.cmd);
-		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Weekly", (cfg.sys_weekly.misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.sys_weekly.cmd);
-		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Monthly", (cfg.sys_monthly.misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.sys_monthly.cmd);
+		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "New User", first_fevent(cfg.sys_newuser));
+		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Logon", first_fevent(cfg.sys_logon));
+		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Logout", first_fevent(cfg.sys_logout));
+		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Daily", first_fevent(cfg.sys_daily));
+		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Weekly", first_fevent(cfg.sys_weekly));
+		snprintf(opt[i++], MAX_OPLN, "%-12s%s", "Monthly", first_fevent(cfg.sys_monthly));
 		opt[i][0] = 0;
 		uifc.helpbuf =
-			"`External Events:`\n"
+			"`Fixed Events:`\n"
 			"\n"
-			"From this menu, you can configure the logon and logout events, and the\n"
-			"system daily and monthly (off-line) events.\n"
+			"From this menu, you can add/configure new user, user logon, and user\n"
+			"logout events of the Terminal Server as well as the system's daily,\n"
+			"weekly and monthly off-line events, executed at those intervals by the\n"
+			"Terminal Server `Event Thread`.\n"
+			"\n"
+			"If you wish to add `interactive` new user, logon or logoff external\n"
+			"`programs` (e.g. doors, not in-process modules/scripts) as events, you\n"
+			"probably want to use \"online\" external programs configured to run as\n"
+			"new user, logon or logoff events, respectively, instead.\n"
+			"\n"
+			"The commands configured for these events may invoke native executables,\n"
+			"shell scripts, Baja or JavaScript modules, or any combination thereof.\n"
+			"If a command line requires the system command shell to execute (e.g.\n"
+			"uses pipes/redirection or invokes a Unix shell script or DOS/Windows\n"
+			"batch/command file), then set the `Use Shell or New Context` option\n"
+			"for that event to ~Yes~.\n"
 		;
 		switch (uifc.list(WIN_ACT | WIN_SAV | WIN_CHE | WIN_BOT | WIN_RHT, 0, 0, 0, &event_dflt, 0
 		                  , "Fixed Events", opt)) {
 			case -1:
 				return;
 			case 0:
-				fevent_cfg("Logon Event", &cfg.sys_logon,
-				           "`Logon Event:`\n"
+				cfg_fixed_events("New User", &cfg.sys_newuser,
+				           "`New User Event:`\n"
 				           "\n"
-				           "This is the command line for a program that will execute during the\n"
-				           "logon sequence of every user.  The program cannot have user interaction.\n"
-				           "The program will be executed after the LOGON message is displayed and\n"
-				           "before the logon user list is displayed.  If you wish to place a program\n"
-				           "in the logon sequence of users that includes interaction or requires\n"
-				           "account information, you probably want to use an online external\n"
-				           "program configured to run as a logon event.\n"
+				           "This is the command line for a program that will execute after a new\n"
+				           "user registration has completed.\n"
 				           SCFG_CMDLINE_PREFIX_HELP
 				           SCFG_CMDLINE_SPEC_HELP
 				           );
 				break;
 			case 1:
-				fevent_cfg("Logout Event", &cfg.sys_logout,
-				           "`Logout Event:`\n"
+				cfg_fixed_events("Logon", &cfg.sys_logon,
+				           "`Logon Event:`\n"
 				           "\n"
 				           "This is the command line for a program that will execute during the\n"
-				           "logout sequence of every user.  This program cannot have user\n"
-				           "interaction because it is executed after carrier is dropped.  If you\n"
-				           "wish to have a program execute before carrier is dropped, you probably\n"
-				           "want to use an `Online External Program` configured to run as a logoff\n"
-				           "event.\n"
+				           "logon sequence of every user.\n"
+				           "\n"
+				           "The program will be executed after the LOGON messages are displayed and\n"
+				           "before the logon user list is displayed.  If you wish to place a program\n"
+				           "(e.g. door) in the logon sequence of users that includes interaction or\n"
+				           "requires account information (e.g. drop files), you probably want to use\n"
+						   "an `Online External Program` configured to run as a logon event, instead.\n"
 				           SCFG_CMDLINE_PREFIX_HELP
 				           SCFG_CMDLINE_SPEC_HELP
 				           );
 				break;
 			case 2:
-				fevent_cfg("Daily Event", &cfg.sys_daily,
+				cfg_fixed_events("Logout", &cfg.sys_logout,
+				           "`Logout Event:`\n"
+				           "\n"
+				           "This is the command line for a program that will execute during the\n"
+				           "logout sequence of every user.  This program cannot have user\n"
+				           "interaction because it is executed after user disconnection.  If you\n"
+				           "wish to have a program execute before carrier is dropped, you probably\n"
+				           "want to use an `Online External Program` configured to run as a logoff\n"
+				           "event, instead.\n"
+				           SCFG_CMDLINE_PREFIX_HELP
+				           SCFG_CMDLINE_SPEC_HELP
+				           );
+				break;
+			case 3:
+				cfg_fixed_events("Daily", &cfg.sys_daily,
 				           "`Daily Event:`\n"
 				           "\n"
 				           "This is the command line for a program that will run after the first\n"
@@ -416,8 +548,8 @@ void fevents_cfg()
 				           SCFG_CMDLINE_SPEC_HELP
 				           );
 				break;
-			case 3:
-				fevent_cfg("Weekly Event", &cfg.sys_weekly,
+			case 4:
+				cfg_fixed_events("Weekly", &cfg.sys_weekly,
 				           "`Weekly Event:`\n"
 				           "\n"
 				           "Enter a command line for a program that will run once each new week.\n"
@@ -427,8 +559,8 @@ void fevents_cfg()
 				           SCFG_CMDLINE_SPEC_HELP
 				           );
 				break;
-			case 4:
-				fevent_cfg("Monthly Event", &cfg.sys_monthly,
+			case 5:
+				cfg_fixed_events("Monthly", &cfg.sys_monthly,
 				           "`Monthly Event:`\n"
 				           "\n"
 				           "Enter a command line for a program that will run once each new month.\n"
@@ -493,7 +625,7 @@ void tevents_cfg()
 			if (!new_timed_event(i))
 				continue;
 			SAFECOPY(cfg.event[i]->code, str);
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		if (msk == MSK_DEL || msk == MSK_CUT) {
@@ -503,7 +635,7 @@ void tevents_cfg()
 			cfg.total_events--;
 			for (j = i; j < cfg.total_events; j++)
 				cfg.event[j] = cfg.event[j + 1];
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		if (msk == MSK_COPY) {
@@ -514,13 +646,14 @@ void tevents_cfg()
 			if (!new_timed_event(i))
 				continue;
 			*cfg.event[i] = savevent;
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		if (msk != 0)
 			continue;
 		done = 0;
 		while (!done) {
+			event_t* event = cfg.event[i];
 			k = 0;
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Internal Code", cfg.event[i]->code);
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Start-up Directory", cfg.event[i]->dir);
@@ -545,8 +678,11 @@ void tevents_cfg()
 				        , cfg.event[i]->time / 60, cfg.event[i]->time % 60);
 				snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Execution Time", str);
 			}
-			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Requires Exclusive Exec"
-			         , cfg.event[i]->misc & EVENT_EXCL ? "Yes":"No");
+			if (event->xtrn[0] != '\0')
+				snprintf(str, sizeof str, "XTRN: %s", event->xtrn);
+			else
+				SAFECOPY(str, (event->misc & EVENT_EXCL) ? "Yes" : "No");
+			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Requires Exclusive Exec", str);
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Force Users Off-line"
 			         , cfg.event[i]->misc & EVENT_FORCE ? "Yes":"No");
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", native_opt
@@ -733,7 +869,7 @@ void tevents_cfg()
 							cfg.event[i]->days = 0;
 						else
 							cfg.event[i]->days ^= (1 << k);
-						uifc.changes = 1;
+						uifc.changes = TRUE;
 					}
 					break;
 				case 8:
@@ -762,9 +898,12 @@ void tevents_cfg()
 						               , "Time to Execute Event (HH:MM)"
 						               , str, 5, K_UPPER | K_EDIT) > 0) {
 							cfg.event[i]->freq = 0;
+							if ((p = strchr(str, ':')) == NULL) {
+								uifc.msg("Incorrect time format");
+								break;
+							}
 							cfg.event[i]->time = atoi(str) * 60;
-							if ((p = strchr(str, ':')) != NULL)
-								cfg.event[i]->time += atoi(p + 1);
+							cfg.event[i]->time += atoi(p + 1);
 						}
 					}
 					else if (k == 1) {
@@ -790,12 +929,55 @@ void tevents_cfg()
 					}
 					break;
 				case 9:
-					toggle_flag("Exclusive Execution", &cfg.event[i]->misc, EVENT_EXCL, false,
-					            "`Exclusive Event Execution:`\n"
-					            "\n"
-					            "If this event must be run exclusively (all nodes inactive), set this\n"
-					            "option to `Yes`.\n"
-					            );
+					k = 0;
+					strcpy(opt[k++], "Yes, All Nodes Must Be Inactive");
+					strcpy(opt[k++], "Yes, An External Program Must Not Be Running");
+					strcpy(opt[k++], "No");
+					opt[k][0] = '\0';
+					uifc.helpbuf =
+				        "`Exclusive Event Execution:`\n"
+				        "\n"
+						"If this event `should not` execute unless all nodes are inactive, set this\n"
+						"option to `Yes, All Nodes Must Be Inactive` and when all nodes become\n"
+						"become inactive, the event will execute at the scheduled time or when\n"
+						"triggered via semaphore.\n"
+						"\n"
+						"Alternatively, if this event `should not` execute when a specific Online\n"
+						"Program (e.g. Door Game) is being run by a user of a node, set this\n"
+						"option to `Yes, An External Program Must Not Be Running` and you will\n"
+						"next be prompted to specify which external program requires exclusive\n"
+						"execution with this event.\n"
+						"\n"
+						"If this event can execute regardless of node activity, set this option\n"
+						"to `No`.\n"
+					;
+					k = (event->misc & EVENT_EXCL) ? 0 : (event->xtrn[0] ? 1 : 2);
+					k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &k, 0
+					              , "Requires Exclusive Execution", opt);
+					if (k == 0) {
+						event->misc |= EVENT_EXCL;
+						event->xtrn[0] = '\0';
+						uifc.changes = true;
+					}
+					else if (k == 1) {
+						str_list_t list = strListInit();
+						for (int j = 0; j < cfg.total_xtrns; ++j)
+							strListPush(&list, cfg.xtrn[j]->code);
+						k = getxtrnnum(&cfg, cfg.event[i]->xtrn);
+						static int xtrn_bar;
+						k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &k, &xtrn_bar
+								, "Exclusive with Which External Program", list);
+						if (k < 0)
+							break;
+						cfg.event[i]->misc &= ~EVENT_EXCL;
+						SAFECOPY(cfg.event[i]->xtrn, list[k]);
+						uifc.changes = true;
+					}
+					else if (k == 2) {
+						event->misc &= ~EVENT_EXCL;
+						event->xtrn[0] = '\0';
+						uifc.changes = true;
+					}
 					break;
 				case 10:
 					toggle_flag("Force Users Off-line for Event"
@@ -1126,9 +1308,9 @@ void xtrn_cfg(int section)
 			         , cfg.xtrn[i]->run_arstr);
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Multiple Concurrent Users"
 			         , cfg.xtrn[i]->misc & MULTIUSER ? "Yes" : "No");
-			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "I/O Method", io_method(cfg.xtrn[i]->misc));
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", native_opt
 			         , cfg.xtrn[i]->misc & XTRN_NATIVE ? "Yes" : "No");
+			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "I/O Method", io_method(cfg.xtrn[i]->misc));
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", use_shell_opt
 			         , cfg.xtrn[i]->misc & XTRN_SH ? "Yes" : "No");
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Modify User Data"
@@ -1225,14 +1407,16 @@ void xtrn_cfg(int section)
 					;
 					SAFECOPY(str, cfg.xtrn[i]->code);
 					if (uifc.input(WIN_MID | WIN_SAV, 0, 10, "Internal Code"
-					           , str, LEN_CODE, K_UPPER | K_EDIT | K_NOSPACE | K_CHANGED) < 1)
+					           , str, LEN_CODE, K_UPPER | K_EDIT | K_NOSPACE | K_CHANGED | K_FIND) < 1)
 						break;
 					if (xtrnnum_is_valid(&cfg, getxtrnnum(&cfg, str))) {
 						uifc.msg(strDuplicateCode);
 						break;
 					}
-					if (code_ok(str))
+					if (code_ok(str)) {
 						SAFECOPY(cfg.xtrn[i]->code, str);
+						uifc.changes = TRUE;
+					}
 					else {
 						uifc.helpbuf = invalid_code;
 						uifc.msg(strInvalidCode);
@@ -1293,11 +1477,11 @@ void xtrn_cfg(int section)
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Access", cfg.xtrn[i]->name);
-					getar(str, cfg.xtrn[i]->arstr);
+					getar(str, cfg.xtrn[i]->arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Execution", cfg.xtrn[i]->name);
-					getar(str, cfg.xtrn[i]->run_arstr);
+					getar(str, cfg.xtrn[i]->run_arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					toggle_flag("Supports Multiple Users", &cfg.xtrn[i]->misc, MULTIUSER, false,
@@ -1308,10 +1492,10 @@ void xtrn_cfg(int section)
 					            );
 					break;
 				case __COUNTER__:
-					choose_io_method(&cfg.xtrn[i]->misc);
+					toggle_flag(native_opt, &cfg.xtrn[i]->misc, XTRN_NATIVE, false, native_help);
 					break;
 				case __COUNTER__:
-					toggle_flag(native_opt, &cfg.xtrn[i]->misc, XTRN_NATIVE, false, native_help);
+					choose_io_method(&cfg.xtrn[i]->misc);
 					break;
 				case __COUNTER__:
 					toggle_flag(use_shell_prompt, &cfg.xtrn[i]->misc, XTRN_SH, false, use_shell_help);
@@ -1729,9 +1913,9 @@ void xedit_cfg()
 			snprintf(opt[k++], MAX_OPLN, "%-32s%s", "Internal Code", cfg.xedit[i]->code);
 			snprintf(opt[k++], MAX_OPLN, "%-32s%s", "Command Line", cfg.xedit[i]->rcmd);
 			snprintf(opt[k++], MAX_OPLN, "%-32s%s", "Access Requirements", cfg.xedit[i]->arstr);
-			snprintf(opt[k++], MAX_OPLN, "%-32s%s", "I/O Method", io_method(cfg.xedit[i]->misc));
 			snprintf(opt[k++], MAX_OPLN, "%-32s%s", native_opt
 			         , cfg.xedit[i]->misc & XTRN_NATIVE ? "Yes" : "No");
+			snprintf(opt[k++], MAX_OPLN, "%-32s%s", "I/O Method", io_method(cfg.xedit[i]->misc));
 			snprintf(opt[k++], MAX_OPLN, "%-32s%s", use_shell_opt
 			         , cfg.xedit[i]->misc & XTRN_SH ? "Yes" : "No");
 			snprintf(opt[k++], MAX_OPLN, "%-32s%s", "Record Terminal Width"
@@ -1862,13 +2046,13 @@ void xedit_cfg()
 					break;
 				case 3:
 					sprintf(str, "%s Message Editor", cfg.xedit[i]->name);
-					getar(str, cfg.xedit[i]->arstr);
+					getar(str, cfg.xedit[i]->arstr, /* helpbuf: */ NULL);
 					break;
 				case 4:
-					choose_io_method(&cfg.xedit[i]->misc);
+					toggle_flag(native_opt, &cfg.xedit[i]->misc, XTRN_NATIVE, false, native_help);
 					break;
 				case 5:
-					toggle_flag(native_opt, &cfg.xedit[i]->misc, XTRN_NATIVE, false, native_help);
+					choose_io_method(&cfg.xedit[i]->misc);
 					break;
 				case 6:
 					toggle_flag(use_shell_prompt, &cfg.xedit[i]->misc, XTRN_SH, false, use_shell_help);
@@ -2393,14 +2577,16 @@ void xtrnsec_cfg()
 						"abbreviation of the name.\n"
 					;
 					if (uifc.input(WIN_MID | WIN_SAV, 0, 17, "Internal Code (unique)"
-					           , str, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED) < 1)
+					           , str, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED | K_FIND) < 1)
 							break;
 					if (xtrnsec_is_valid(&cfg, getxtrnsec(&cfg, str))) {
 						uifc.msg(strDuplicateCode);
 						break;
 					}
-					if (code_ok(str))
+					if (code_ok(str)) {
 						SAFECOPY(cfg.xtrnsec[i]->code, str);
+						uifc.changes = TRUE;
+					}
 					else {
 						uifc.helpbuf = invalid_code;
 						uifc.msg(strInvalidCode);
@@ -2408,7 +2594,7 @@ void xtrnsec_cfg()
 					}
 					break;
 				case 2:
-					getar(cfg.xtrnsec[i]->name, cfg.xtrnsec[i]->arstr);
+					getar(cfg.xtrnsec[i]->name, cfg.xtrnsec[i]->arstr, /* helpbuf: */ NULL);
 					break;
 				case 3:
 					xtrn_cfg(i);

@@ -41,7 +41,6 @@ char sbbs_t::putmsg(const char *buf, int mode, int org_cols, JSObject* obj)
 	uint             org_line_delay = line_delay;
 	uint             orgcon = console;
 	uint             sys_status_sav = sys_status;
-	uint             rainbow_sav[LEN_RAINBOW + 1];
 	enum output_rate output_rate = term->cur_output_rate;
 
 	attr_sp = 0;  /* clear any saved attributes */
@@ -51,12 +50,11 @@ char sbbs_t::putmsg(const char *buf, int mode, int org_cols, JSObject* obj)
 	if (mode & P_NOPAUSE)
 		sys_status |= SS_PAUSEOFF;
 
-	memcpy(rainbow_sav, rainbow, sizeof rainbow_sav);
 	ansiParser.reset();
 	char ret = putmsgfrag(buf, mode, org_cols, obj);
 	if (ansiParser.current_state() != ansiState_none)
 		lprintf(LOG_DEBUG, "Incomplete ANSI stripped from end");
-	memcpy(rainbow, rainbow_sav, sizeof rainbow);
+	memcpy(rainbow, cfg.rainbow, sizeof rainbow);
 	if (!(mode & P_SAVEATR)) {
 		console = orgcon;
 		attr(tmpatr);
@@ -85,19 +83,21 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 	char                 tmp2[256];
 	char                 path[MAX_PATH + 1];
 	char*                str = (char*)buf;
-	uchar                exatr = 0;
+	bool                 exatr = false; // attributes should be reset to default (lightgray) before newline
 	char                 mark = '\0';
+	int                  inverse_high = 0;
 	int                  i;
 	unsigned             col = term->column;
 	uint                 l = 0;
 	uint                 lines_printed = 0;
 	struct mouse_hotspot hot_spot = {};
-	bool                 lfisnl;
 
 	hot_attr = 0;
 	hungry_hotspots = true;
 	str = auto_utf8(str, mode);
 	size_t len = strlen(str);
+
+	uint cols = term->print_cols(mode);
 
 	if (!(mode & P_NOATCODES) && memcmp(str, "@WRAPOFF@", 9) == 0) {
 		mode &= ~P_WORDWRAP;
@@ -113,7 +113,7 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 		char *wrapped;
 		if (org_cols < TERM_COLS_MIN)
 			org_cols = TERM_COLS_DEFAULT;
-		if ((wrapped = ::wordwrap((char*)str + l, term->cols - 1, org_cols - 1, /* handle_quotes: */ TRUE, mode)) == NULL)
+		if ((wrapped = ::wordwrap((char*)str + l, cols - 1, org_cols - 1, /* handle_quotes: */ TRUE, mode)) == NULL)
 			errormsg(WHERE, ERR_ALLOC, "wordwrap buffer", 0);
 		else {
 			truncsp_lines(wrapped);
@@ -127,8 +127,8 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 	}
 	if (mode & P_CENTER) {
 		size_t widest = widest_line(str + l);
-		if (widest < term->cols && term->column == 0) {
-			term->cursor_right((term->cols - widest) / 2);
+		if (widest < cols && term->column == 0) {
+			term->cursor_right((cols - widest) / 2);
 			mode |= P_INDENT;
 		}
 	}
@@ -149,17 +149,19 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 			default: // printing char
 				if ((mode & P_INDENT) && term->column < col)
 					term->cursor_right(col - term->column);
-				else if ((mode & P_TRUNCATE) && term->column >= (term->cols - 1)) {
+				else if ((mode & P_TRUNCATE) && term->column >= (cols - 1)) {
 					l++;
 					continue;
 				} else if (mode & P_WRAP) {
 					if (org_cols) {
 						if (term->column > (org_cols - 1)) {
-							term->newline();
+							term->newline(1, /* no_bg_attr */true);
+							++lines_printed;
 						}
 					} else {
-						if (term->column >= (term->cols - 1)) {
-							term->newline();
+						if (term->column >= (cols - 1)) {
+							term->newline(1, /* no_bg_attr */true);
+							++lines_printed;
 						}
 					}
 				}
@@ -199,8 +201,12 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 							attr(curatr ^ (HIGH | BLINK));
 							break;
 						case '#':
-							attr(((curatr & 0x0f) << 4) | ((curatr & 0xf0) >> 4));
+						{
+							int high = inverse_high ? 0 : (curatr & HIGH);
+							attr(((curatr & 0x07) << 4) | ((curatr & 0x70) >> 4) | inverse_high);
+							inverse_high = high;
 							break;
+						}
 					}
 					if (mark != 0 && !(mode & P_HIDEMARKS))
 						outchar(str[l]);
@@ -246,29 +252,26 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 		}
 		else if ((mode & P_PCBOARD)
 		         && str[l] == '@' && str[l + 1] == 'X'
-		         && IS_HEXDIGIT(str[l + 2]) && IS_HEXDIGIT(str[l + 3])) {
+		         && IS_UPPERHEXDIGIT(str[l + 2]) && IS_UPPERHEXDIGIT(str[l + 3])) {
 			uint val = (HEX_CHAR_TO_INT(str[l + 2]) << 4) + HEX_CHAR_TO_INT(str[l + 3]);
 			// @X00 saves the current color and @XFF restores that saved color
-			static uchar save_attr;
 			switch (val) {
 				case 0x00:
-					save_attr = curatr;
+					saved_pcb_attr = curatr;
 					break;
 				case 0xff:
-					attr(save_attr);
+					attr(saved_pcb_attr);
 					break;
 				default:
 					attr(val);
 					break;
 			}
-			exatr = 1;
 			l += 4;
 		}
 		else if ((mode & P_WILDCAT)
 		         && str[l] == '@' && str[l + 3] == '@'
-		         && IS_HEXDIGIT(str[l + 1]) && IS_HEXDIGIT(str[l + 2])) {
+		         && IS_UPPERHEXDIGIT(str[l + 1]) && IS_UPPERHEXDIGIT(str[l + 2])) {
 			attr((HEX_CHAR_TO_INT(str[l + 1]) << 4) + HEX_CHAR_TO_INT(str[l + 2]));
-			// exatr=1;
 			l += 4;
 		}
 		else if ((mode & P_RENEGADE)
@@ -283,7 +286,7 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 			else
 				i |= (curatr & 0xf0);   /* leave background alone */
 			attr(i);
-			exatr = 1;
+			exatr = true;
 			l += 3;   /* Skip |xx */
 		}
 		else if ((mode & P_CELERITY)
@@ -341,12 +344,12 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 					attr((curatr & 0x07) << 4);
 					break;
 			}
-			exatr = 1;
+			exatr = true;
 			l += 2;   /* Skip |x */
 		}  /* Skip second digit if it exists */
 		else if ((mode & P_WWIV)
 		         && str[l] == CTRL_C && IS_DIGIT(str[l + 1])) {
-			exatr = 1;
+			exatr = true;
 			switch (str[l + 1]) {
 				default:
 					attr(LIGHTGRAY);
@@ -382,15 +385,6 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 			l += 2;
 		}
 		else {
-			lfisnl = false;
-			if (!(mode & P_PETSCII) && str[l] == '\n') {
-				if (exatr)   /* clear at newline for extra attr codes */
-					attr(LIGHTGRAY);
-				if (l == 0 || str[l - 1] != '\r')  /* expand sole LF to CR/LF */
-					lfisnl = true;
-				lines_printed++;
-			}
-
 			/*
 			 * ansi escape sequence:
 			 * Strip broken sequences
@@ -465,6 +459,13 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 						l++;
 					continue;
 				}
+				if (memcmp(str + l, "@80COLS@", 8) == 0) {
+					l += 8;
+					if (cols > 80)
+						cols = 80;
+					mode |= P_80COLS;
+					continue;
+				}
 				if (memcmp(str + l, "@CENTER@", 8) == 0) {
 					l += 8;
 					i = 0;
@@ -472,7 +473,7 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 						tmp[i++] = str[l++];
 					tmp[i] = 0;
 					truncsp(tmp);
-					term->center(expand_atcodes(tmp, tmp2, sizeof tmp2));
+					term->center(expand_atcodes(tmp, tmp2, sizeof tmp2), mode);
 					if (str[l] == '\r')
 						l++;
 					if (str[l] == '\n')
@@ -485,10 +486,20 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 					l += 9;
 					continue;
 				}
+				if (memcmp(str + l, "@WRAP@", 6) == 0) {
+					l += 6;
+					mode |= P_WRAP;
+					continue;
+				}
 				if (memcmp(str + l, "@WORDWRAP@", 10) == 0) {
 					l += 10;
 					mode |= P_WORDWRAP;
 					return putmsgfrag(str + l, mode, org_cols);
+				}
+				if (memcmp(str + l, "@WRAPOFF@", 9) == 0) {
+					l += 9;
+					mode &= ~P_WRAP;
+					continue;
 				}
 				if (memcmp(str + l, "@TRUNCATE@", 10) == 0) {
 					l += 10;
@@ -505,9 +516,34 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 					mode &= ~P_NOABORT;
 					continue;
 				}
+				if (memcmp(str + l, "@STOP@", 6) == 0) {  // Wildcat!
+					l += 6;
+					mode &= ~P_NOABORT;
+					continue;
+				}
 				if (memcmp(str + l, "@QOFF@", 6) == 0) {   // Do not allow the display of the file to be aborted (PCBoard)
 					l += 6;
 					mode |= P_NOABORT;
+					continue;
+				}
+				if (memcmp(str + l, "@NOSTOP@", 8) == 0) { // Wildcat!
+					l += 8;
+					mode |= P_NOABORT;
+					continue;
+				}
+				if (memcmp(str + l, "@NOCODE@", 8) == 0) { // Wildcat!
+					l += 8;
+					mode ^= P_NOATCODES;
+					continue;
+				}
+				if (memcmp(str + l, "@XON@", 5) == 0) { // PCBoard "Enables the interpretation of @X color codes."
+					l += 5;
+					mode |= P_PCBOARD;
+					continue;
+				}
+				if (memcmp(str + l, "@XOFF@", 6) == 0) { // PCBoard "Disables the interpretation of @X color codes."
+					l += 6;
+					mode &= ~P_PCBOARD;
 					continue;
 				}
 				if (memcmp(str + l, "@LINEDELAY@", 11) == 0) {
@@ -528,7 +564,7 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 					}
 				}
 				bool was_tos = (term->row == 0);
-				i = show_atcode((char *)str + l, obj);  /* returns 0 if not valid @ code */
+				i = show_atcode((char *)str + l, cols, obj);  /* returns 0 if not valid @ code */
 				l += i;                   /* i is length of code string */
 				if (term->row > 0 && !was_tos && (sys_status & SS_ABORT) && !lines_printed)  /* Aborted at (auto) pause prompt (e.g. due to CLS)? */
 					clearabort();                /* Clear the abort flag (keep displaying the msg/file) */
@@ -562,10 +598,20 @@ char sbbs_t::putmsgfrag(const char* buf, int& mode, unsigned org_cols, JSObject*
 				else
 					skip = print_utf8_as_cp437(str + l, len - l);
 			} else if (str[l] == '\r' && str[l + 1] == '\n') {
-				term->newline();
+				if (exatr) {
+					attr(LIGHTGRAY);
+					exatr = false;
+				}
+				term->newline(1, /* no_bg_attr */(mode & P_WRAP));
+				++lines_printed;
 				skip++;
-			} else if (str[l] == '\n' && lfisnl) {
-				term->newline();
+			} else if (str[l] == '\n') {
+				if (exatr) {
+					attr(LIGHTGRAY);
+					exatr = false;
+				}
+				term->newline(1, /* no_bg_attr */(mode & P_WRAP));
+				++lines_printed;
 			} else {
 				uint atr = curatr;
 				outchar(str[l]);

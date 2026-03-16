@@ -13,6 +13,7 @@ function usage() {
 	writeln("usage: tdfiglet [options] input");
 	writeln("");
 	writeln("    -f [font] Specify font file to use");
+	writeln("    -d <dir>  Specify directory to find font files (default: " + system.ctrl_dir + "tdfonts)");
 	writeln("    -j l|r|c  Justify left, right, or center (default: left)");
 	writeln("    -w n      Set screen width  (default: auto-detect or 80)");
 	writeln("    -m n      Set margin/offset (for left or right justification)");
@@ -40,6 +41,9 @@ for(i = 0; i < argv.length; ++i) {
 
 	if (arg === "-f" && i + 1 < argv.length) {
 		fontfile = argv[i + 1];
+		++i;
+	} else if (arg === "-d" && i + 1 < argv.length) {
+		tdf.opt.fontdir = argv[i + 1];
 		++i;
 	} else if (arg === "-j" && i + 1 < argv.length) {
 		switch (argv[i + 1]) {
@@ -99,12 +103,26 @@ if (!input_string)
 	usage();
 
 if (loopfonts) {
-	var list = tdf.getlist();
+	var list = fontfile ? [fontfile] : tdf.getlist();
 	for (var i in list) {
 		if (pause && i > 0)
 			prompt("Hit enter");
 		try {
-			tdf.printstr(input_string, list[i]);
+			if (tdf.opt.index === undefined) {
+				var count = tdf.getcount(list[i]);
+				for (var fi = 0; fi < count; ++fi) {
+					tdf.opt.index = fi;
+					try {
+						tdf.printstr(input_string, list[i]);
+					} catch(e) {
+						if (tdf.opt.info)
+							print("exception: " + e);
+					}
+				}
+				tdf.opt.index = undefined;
+			} else {
+				tdf.printstr(input_string, list[i]);
+			}
 		} catch(e) {
 			if (tdf.opt.info)
 				print("exception: " + e);

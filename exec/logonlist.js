@@ -2,7 +2,7 @@
 
 // Install with 'jsexec logonlist install'
 
-// By dfeault, this module displays logons/callers 'today'
+// By default, this module displays logons/callers 'today'
 
 // Options:
 // -l [count]   Display last few logons (possibly over multiple days)
@@ -44,9 +44,7 @@ if(!js.global.bbs) {
 
 if(!bbs.mods.logonlist_lib)
 	bbs.mods.logonlist_lib = load({}, 'logonlist_lib.js');
-var options = load("modopts.js", "logonlist");
-if(!options)
-	options = {};
+var options = load("modopts.js", "logonlist", {});
 if(options.last_few_callers === undefined)
 	options.last_few_callers = 4;
 if(options.backup_level === undefined)
@@ -93,9 +91,9 @@ if(argi >= 0) { // Last few callers?
 	var count = -options.last_few_callers;
 	if(argi + 1 < argc)
 		count = -parseInt(argv[argi + 1], 10);
-	if(!this.print(options.last_few_callers_msg || "\x01n\x01g\x01hLast few callers:\x01n\r\n"
+	if(!this.print(options.last_few_callers_msg || "\x01ULast few callers:\x01n\r\n"
 		,count, options.last_few_days))
-		console.print(options.first_caller_msg || "\x01n\x01g\x01hYou are the first caller of the day!");
+		console.print(options.first_caller_msg || "\x01UYou are the first caller of the day!");
 	console.crlf();
 } else {
 	if(!this.print(format(options.logons_header_fmt || "\x01n\x01h\x01y\r\nLogons %s:\r\n", day)

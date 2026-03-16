@@ -34,7 +34,6 @@
 
 #if defined(__unix__)
 	#include <sys/ioctl.h>      /* ioctl() */
-	#include <sys/utsname.h>    /* uname() */
 	#include <signal.h>
 #elif defined(_WIN32)
 	#include <windows.h>
@@ -228,9 +227,30 @@ char c_unescape_char_ptr(const char* str, char** endptr)
 }
 
 /****************************************************************************/
-/* Unescape a C string, in place											*/
+/* Un-escape a C string, in place											*/
 /****************************************************************************/
 char* c_unescape_str(char* str)
+{
+	char  ch;
+	char* src = str;
+	char* dst = str;
+
+	if (str == NULL)
+		return NULL;
+
+	while ((ch = *(src++)) != '\0') {
+		if (ch == '\\')    /* escape */
+			ch = c_unescape_char_ptr(src, &src);
+		*(dst++) = ch;
+	}
+	*dst = '\0';
+	return str;
+}
+
+/****************************************************************************/
+/* Un-escape printable characters in a C string, in place					*/
+/****************************************************************************/
+char* c_unescape_printable(char* str)
 {
 	char  ch;
 	char* buf;
@@ -243,8 +263,11 @@ char* c_unescape_str(char* str)
 	src = buf;
 	dst = str;
 	while ((ch = *(src++)) != 0) {
-		if (ch == '\\')    /* escape */
+		if (ch == '\\') {   /* escape */
 			ch = c_unescape_char_ptr(src, &src);
+			if (!IS_PRINTABLE(ch))
+				continue;
+		}
 		*(dst++) = ch;
 	}
 	*dst = 0;
@@ -467,32 +490,49 @@ char* duration_to_vstr(double value, char* str, size_t size)
 	return str;
 }
 
+static void add_suffix(char* str, size_t size, const char* suffix)
+{
+	bool is_word = *(suffix + 1) != '\0';
+	char* plural = is_word ? "s" : "";
+	char* p = strstr(str, ".0");
+	if (p != NULL && *(p + 2) == '\0') // remove trailing ".0"
+		*p = '\0';
+	if (strcmp(str, "1") == 0)
+		plural = "";
+	if (is_word) {
+		strlcat(str, " ", size);
+		strlcat(str, suffix, size);
+		strlcat(str, plural, size);
+	} else
+		strlcat(str, suffix, size);
+}
+
 /* Convert a duration estimate (in seconds) to a string
  * with a single letter multiplier/suffix:
  * (y)ears, (w)eeks, (d)ays, (h)ours, (m)inutes, or (s)econds
  */
 char* duration_estimate_to_str(double value, char* str, size_t size, double unit, int precision)
 {
-	if (value && fmod(value, one_year) == 0)
-		safe_snprintf(str, size, "%gy", value / one_year);
-	else if (value >= one_year || unit == one_year)
-		safe_snprintf(str, size, "%1.*fy", precision, value / one_year);
-	else if (value && fmod(value, one_week) == 0)
-		safe_snprintf(str, size, "%gw", value / one_week);
-	else if (unit == one_week) // prefer "90 days" over "12.9 weeks"
-		safe_snprintf(str, size, "%1.*fw", precision, value / one_week);
-	else if (value && fmod(value, one_day) == 0)
-		safe_snprintf(str, size, "%gd", value / one_day);
-	else if (value >= one_day || unit == one_day)
-		safe_snprintf(str, size, "%1.*fd", precision, value / one_day);
-	else if (value && fmod(value, one_hour) == 0)
-		safe_snprintf(str, size, "%gh", value / one_hour);
-	else if (value >= one_hour || unit == one_hour)
-		safe_snprintf(str, size, "%1.*fh", precision, value / one_hour);
-	else if (value && fmod(value, one_minute) == 0)
-		safe_snprintf(str, size, "%gm", value / one_minute);
-	else if (value >= one_minute || unit == one_minute)
-		safe_snprintf(str, size, "%1.*fm", precision, value / one_minute);
+	if (value >= one_year || unit == one_year) {
+		safe_snprintf(str, size, "%1.*f", precision, value / one_year);
+		add_suffix(str, size, "y");
+	}
+	else if (unit == one_week) { // prefer "90 days" over "12.9 weeks"
+		safe_snprintf(str, size, "%1.*f", precision, value / one_week);
+		add_suffix(str, size, "w");
+	}
+	else if (value >= one_day || unit == one_day) {
+		safe_snprintf(str, size, "%1.*f", precision, value / one_day);
+		add_suffix(str, size, "d");
+	}
+	else if (value >= one_hour || unit == one_hour) {
+		safe_snprintf(str, size, "%1.*f", precision, value / one_hour);
+		add_suffix(str, size, "h");
+	}
+	else if (value >= one_minute || unit == one_minute) {
+		safe_snprintf(str, size, "%1.*f", precision, value / one_minute);
+		add_suffix(str, size, "m");
+	}
 	else
 		safe_snprintf(str, size, "%gs", value);
 
@@ -505,48 +545,33 @@ char* duration_estimate_to_str(double value, char* str, size_t size, double unit
  */
 char* duration_estimate_to_vstr(double value, char* str, size_t size, double unit, int precision)
 {
-	if (value && fmod(value, one_year) == 0) {
+	if (value >= one_year || unit == one_year) {
 		value /= one_year;
-		safe_snprintf(str, size, "%g year%s", value, value == 1 ? "":"s");
-	}
-	else if (value >= one_year || unit == one_year) {
-		value /= one_year;
-		safe_snprintf(str, size, "%1.*f year%s", precision, value, value == 1 ? "":"s");
-	}
-	else if (value && fmod(value, one_week) == 0) {
-		value /= one_week;
-		safe_snprintf(str, size, "%g week%s", value, value == 1 ? "":"s");
+		snprintf(str, size, "%1.*f", precision, value);
+		add_suffix(str, size, "year");
 	}
 	else if (unit == one_week) { // prefer "90 days" over "12.9 weeks"
 		value /= one_week;
-		safe_snprintf(str, size, "%1.*f week%s", precision, value, value == 1 ? "":"s");
-	}
-	else if (value && fmod(value, one_day) == 0) {
-		value /= one_day;
-		safe_snprintf(str, size, "%g day%s", value, value == 1 ? "":"s");
+		snprintf(str, size, "%1.*f", precision, value);
+		add_suffix(str, size, "week");
 	}
 	else if (value >= one_day || unit == one_day) {
 		value /= one_day;
-		safe_snprintf(str, size, "%1.*f day%s", precision, value, value == 1 ? "":"s");
-	}
-	else if (value && fmod(value, one_hour) == 0) {
-		value /= one_hour;
-		safe_snprintf(str, size, "%g hour%s", value, value == 1 ? "":"s");
+		snprintf(str, size, "%1.*f", precision, value);
+		add_suffix(str, size, "day");
 	}
 	else if (value >= one_hour || unit == one_hour) {
 		value /= one_hour;
-		safe_snprintf(str, size, "%1.*f hour%s", precision, value, value == 1 ? "":"s");
-	}
-	else if (value && fmod(value, one_minute) == 0) {
-		value /= one_minute;
-		safe_snprintf(str, size, "%g minute%s", value, value == 1 ? "":"s");
+		snprintf(str, size, "%1.*f", precision, value);
+		add_suffix(str, size, "hour");
 	}
 	else if (value >= one_minute || unit == one_minute) {
 		value /= one_minute;
-		safe_snprintf(str, size, "%1.*f minute%s", precision, value, value == 1 ? "":"s");
+		snprintf(str, size, "%1.*f", precision, value);
+		add_suffix(str, size, "minute");
 	}
 	else
-		safe_snprintf(str, size, "%g second%s", value, value == 1 ? "":"s");
+		snprintf(str, size, "%g second%s", value, value == 1 ? "":"s");
 
 	return str;
 }
@@ -779,164 +804,6 @@ char* _ui64toa(uint64_t val, char* str, int radix)
 #endif
 #endif
 
-/****************************************************************************/
-/* Write the version details of the current operating system into str		*/
-/****************************************************************************/
-char* os_version(char *str, size_t size)
-{
-#if defined(__OS2__) && defined(__BORLANDC__)
-
-	safe_snprintf(str, size, "OS/2 %u.%u (%u.%u)", _osmajor / 10, _osminor / 10, _osmajor, _osminor);
-
-#elif defined(_WIN32)
-
-	/* Windows Version */
-	char*         winflavor = "";
-	OSVERSIONINFO winver;
-
-	winver.dwOSVersionInfoSize = sizeof(winver);
-
-	#pragma warning(suppress : 4996) // error C4996: 'GetVersionExA': was declared deprecated
-	GetVersionEx(&winver);
-
-	switch (winver.dwPlatformId) {
-		case VER_PLATFORM_WIN32_NT:
-			winflavor = "NT ";
-			break;
-		case VER_PLATFORM_WIN32s:
-			winflavor = "Win32s ";
-			break;
-		case VER_PLATFORM_WIN32_WINDOWS:
-			winver.dwBuildNumber &= 0xffff;
-			break;
-	}
-
-	if (winver.dwMajorVersion == 6 && winver.dwMinorVersion == 1) {
-		winver.dwMajorVersion = 7;
-		winver.dwMinorVersion = 0;
-	}
-	else {
-		static NTSTATUS (WINAPI * pRtlGetVersion)(PRTL_OSVERSIONINFOW lpVersionInformation) = NULL;
-		if (pRtlGetVersion == NULL) {
-			HINSTANCE ntdll = LoadLibrary("ntdll.dll");
-			if (ntdll != NULL)
-				pRtlGetVersion = (NTSTATUS (WINAPI *)(PRTL_OSVERSIONINFOW))GetProcAddress(ntdll, "RtlGetVersion");
-		}
-		if (pRtlGetVersion != NULL) {
-			pRtlGetVersion((PRTL_OSVERSIONINFOW)&winver);
-			if (winver.dwMajorVersion == 10 && winver.dwMinorVersion == 0 &&  winver.dwBuildNumber >= 22000)
-				winver.dwMajorVersion = 11;
-		}
-	}
-
-	safe_snprintf(str, size, "Windows %sVersion %lu.%lu"
-	              , winflavor
-	              , winver.dwMajorVersion, winver.dwMinorVersion);
-	if (winver.dwBuildNumber)
-		sprintf(str + strlen(str), " (Build %lu)", winver.dwBuildNumber);
-	if (winver.szCSDVersion[0])
-		sprintf(str + strlen(str), " %s", winver.szCSDVersion);
-
-#elif defined(__unix__)
-	FILE* fp = fopen("/etc/os-release", "r");
-	if (fp == NULL)
-		fp = fopen("/usr/lib/os-release", "r");
-	if (fp != NULL) {
-		char  value[INI_MAX_VALUE_LEN];
-		char* p = iniReadString(fp, NULL, "PRETTY_NAME", "Unix", value);
-		fclose(fp);
-		SKIP_CHAR(p, '"');
-		strncpy(str, p, size);
-		p = lastchar(str);
-		if (*p == '"')
-			*p = '\0';
-	} else {
-		struct utsname unixver;
-
-		if (uname(&unixver) != 0)
-			safe_snprintf(str, size, "Unix (uname errno: %d)", errno);
-		else
-			safe_snprintf(str, size, "%s %s"
-			              , unixver.sysname /* e.g. "Linux" */
-			              , unixver.release /* e.g. "2.2.14-5.0" */
-			              );
-	}
-#else   /* DOS */
-
-	safe_snprintf(str, size, "DOS %u.%02u", _osmajor, _osminor);
-
-#endif
-
-	return str;
-}
-
-/****************************************************************************/
-/* Write the CPU architecture according to the Operating System into str	*/
-/****************************************************************************/
-char* os_cpuarch(char *str, size_t size)
-{
-#if defined(_WIN32)
-	SYSTEM_INFO sysinfo;
-
-#if _WIN32_WINNT < 0x0501
-	GetSystemInfo(&sysinfo);
-#else
-	GetNativeSystemInfo(&sysinfo);
-#endif
-	switch (sysinfo.wProcessorArchitecture) {
-		case PROCESSOR_ARCHITECTURE_AMD64:
-			safe_snprintf(str, size, "x64");
-			break;
-		case PROCESSOR_ARCHITECTURE_ARM:
-			safe_snprintf(str, size, "ARM");
-			break;
-#if defined PROCESSOR_ARCHITECTURE_ARM64
-		case PROCESSOR_ARCHITECTURE_ARM64:
-			safe_snprintf(str, size, "ARM64");
-			break;
-#endif
-		case PROCESSOR_ARCHITECTURE_IA64:
-			safe_snprintf(str, size, "IA-64");
-			break;
-		case PROCESSOR_ARCHITECTURE_INTEL:
-			safe_snprintf(str, size, "x86");
-			break;
-		default:
-			safe_snprintf(str, size, "unknown");
-			break;
-	}
-
-#elif defined(__unix__)
-
-	struct utsname unixver;
-
-	if (uname(&unixver) == 0)
-		safe_snprintf(str, size, "%s", unixver.machine);
-	else
-		safe_snprintf(str, size, "unknown");
-
-#endif
-
-	return str;
-}
-
-char* os_cmdshell(void)
-{
-	char* shell = getenv(OS_CMD_SHELL_ENV_VAR);
-
-#if defined(__unix__)
-	if (shell == NULL)
-#ifdef _PATH_BSHELL
-		shell = _PATH_BSHELL;
-#else
-		shell = "/bin/sh";
-#endif
-#endif
-
-	return shell;
-}
-
-/********************************************************/
 /* Stupid real-time system clock implementation.	*/
 /********************************************************/
 clock_t msclock(void)

@@ -1,5 +1,7 @@
 // Library for dealing with user Avatars (ex-ASCII/ANSI block art)
 
+require("sbbsdefs.js", "U_NAME");
+
 const defs = {
 	width: 10,
 	height: 6,
@@ -193,9 +195,9 @@ function read_netuser(username, netaddr)
 	return obj;
 }
 
-function read(usernum, username, netaddr, bbsid)
+function read(usernumber, username, netaddr, bbsid)
 {
-	var usernum = parseInt(usernum, 10);
+	var usernum = parseInt(usernumber, 10);
 	if(!usernum && !username)
 		return false;
 	var obj = cache_get(usernum >= 1 ? usernum : username, netaddr);
@@ -203,8 +205,11 @@ function read(usernum, username, netaddr, bbsid)
 		return obj;
 	if(usernum >= 1)
 		obj = read_localuser(usernum);
-	else if(!netaddr)
+	else if(!netaddr) {
 		obj = read_localuser(system.matchuser(username));
+		if (!obj)
+			obj = read_localuser(system.matchuserdata(U_NAME, username));
+	}
 	else {
 		obj = read_netuser(username, netaddr);
 		if(!obj && bbsid)
@@ -215,6 +220,13 @@ function read(usernum, username, netaddr, bbsid)
 			if(!obj && bbsid)
 				obj = read_netuser(namehash, bbsid);
 		}
+	}
+	if ((obj === undefined || obj === null || obj === false) && options.auto_identicon !== false) {
+		if (!username) {
+			var uobj = new User(usernum);
+			username = uobj.alias;
+		}
+		obj = {disabled: false, data: base64_encode(load({}, "identicon.js").identicon(username).BIN)};
 	}
 	cache_set(usernum >= 1 ? usernum : username, obj, netaddr);
 	return obj;
@@ -228,6 +240,11 @@ function update_localuser(usernum, data)
 	obj.data = data;
 	obj.updated = new Date();
 	return write_localuser(usernum, obj);
+}
+
+function set_identicon(user)
+{
+	return update_localuser(user.number, base64_encode(load({}, "identicon.js").identicon(user.alias).BIN));
 }
 
 function import_file(usernum, filename, offset)
@@ -272,16 +289,22 @@ function is_enabled(obj)
 }
 
 // Uses Graphic.draw() at an absolute screen coordinate
-function draw(usernum, username, netaddr, above, right, top)
+function draw(usernum, username, netaddr, above, right, top, cols)
 {
+	if (options.enabled === false)
+		return false;
 	var avatar = this.read(usernum, username, netaddr, usernum);
 	if(!is_enabled(avatar))
 		return false;
-	return draw_bin(avatar.data, above, right, top);
+	return draw_bin(avatar.data, above, right, top, cols);
 }
 
-function draw_bin(data, above, right, top)
+function draw_bin(data, above, right, top, cols)
 {
+	if (options.enabled === false)
+		return false;
+	if(!cols || (cols > console.screen_columns))
+		cols = console.screen_columns;
 	load('graphic.js');
 	var graphic = new Graphic(this.defs.width, this.defs.height);
 	try {
@@ -295,7 +318,7 @@ function draw_bin(data, above, right, top)
 		else if(above)
 			y -= this.defs.height;
 		if(right)
-			x = console.screen_columns - (this.defs.width + 1);
+			x = cols - (this.defs.width + 1);
 		graphic.attr_mask = ~graphic.defs.BLINK;	// Disable blink attribute (consider iCE colors?)
 		graphic.draw(x, y, this.defs.width, this.defs.height);
 		console.gotoxy(pos);
@@ -309,6 +332,8 @@ function draw_bin(data, above, right, top)
 // Uses console.write() where-ever the cursor happens to be
 function show(usernum, username, netaddr)
 {
+	if (options.enabled === false)
+		return false;
 	var avatar = this.read(usernum, username, netaddr, usernum);
 	if(!is_enabled(avatar))
 		return false;
@@ -317,6 +342,8 @@ function show(usernum, username, netaddr)
 
 function show_bin(data)
 {
+	if (options.enabled === false)
+		return false;
 	load('graphic.js');
 	var graphic = new Graphic(this.defs.width, this.defs.height);
 	graphic.attr_mask = ~graphic.defs.BLINK;	// Disable blink attribute (consider iCE colors?)
@@ -329,5 +356,6 @@ function show_bin(data)
 	return true;
 }
 
+var options = load({}, "modopts.js", "avatars", {});
 
 this;

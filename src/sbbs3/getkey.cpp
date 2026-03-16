@@ -110,7 +110,7 @@ char sbbs_t::getkey(int mode)
 		if (sys_status & SS_USERON && !(sys_status & SS_LCHAT))
 			gettimeleft();
 		else if (online && now - answertime > SEC_LOGON && !(sys_status & SS_LCHAT)) {
-			console &= ~(CON_R_ECHOX | CON_L_ECHOX);
+			console &= ~CON_PASSWORD;
 			bputs(text[TakenTooLongToLogon]);
 			hangup();
 		}
@@ -147,7 +147,7 @@ char sbbs_t::getkey(int mode)
 			}
 			if (now - getkey_last_activity >= cfg.max_getkey_inactivity) {
 				if (online == ON_REMOTE) {
-					console &= ~CON_R_ECHOX;
+					console &= ~CON_PASSWORD;
 				}
 				bputs(text[CallBackWhenYoureThere]);
 				logline(LOG_NOTICE, nulstr, "Maximum user input inactivity exceeded");
@@ -172,13 +172,14 @@ char sbbs_t::getkey(int mode)
 /****************************************************************************/
 /* Outputs a string highlighting characters preceded by a tilde             */
 /****************************************************************************/
-void sbbs_t::mnemonics(const char *instr)
+void sbbs_t::mnemonics(const char *instr, int mode)
 {
+	char keys[128] = "";
 	size_t l;
 
 	if (!strchr(instr, '~')) {
 		mnestr = instr;
-		bputs(instr);
+		bputs(instr, mode);
 		return;
 	}
 	bool ctrl_a_codes = contains_ctrl_a_attr(instr);
@@ -186,7 +187,7 @@ void sbbs_t::mnemonics(const char *instr)
 		const char* last = lastchar(instr);
 		if (instr[0] == '@' && *last == '@' && strchr(instr + 1, '@') == last && strchr(instr, ' ') == NULL) {
 			mnestr = instr;
-			bputs(instr);
+			bputs(instr, mode);
 			return;
 		}
 	}
@@ -209,6 +210,10 @@ void sbbs_t::mnemonics(const char *instr)
 			if (!(term->can_highlight()))
 				outchar('(');
 			l++;
+			if (strchr(keys, str[l]))
+				lprintf(LOG_WARNING, "Duplicate mnemonic key '%c' in string: %s", str[l], instr);
+			else if (strlen(keys) < sizeof keys - 1)
+				sprintf(keys + strlen(keys), "%c", str[l]);
 			if (!ctrl_a_codes)
 				attr(mneattr_high);
 			term->add_hotspot(str[l], /* hungry: */ true);
@@ -223,6 +228,10 @@ void sbbs_t::mnemonics(const char *instr)
 			if (!(term->can_highlight()))
 				outchar('[');
 			l++;
+			if (strchr(keys, str[l]))
+				lprintf(LOG_WARNING, "Duplicate mnemonic key '%c' in string: %s", str[l], instr);
+			else if (strlen(keys) < sizeof keys - 1)
+				sprintf(keys + strlen(keys), "%c", str[l]);
 			if (!ctrl_a_codes)
 				attr(mneattr_high);
 			term->add_hotspot(str[l], /* hungry: */ false);

@@ -23,17 +23,21 @@ function gettext(orig, key) {
 	if (gettext_cache[key || orig] !== undefined)
 		return gettext_cache[key || orig];
 	var text;
-	var charset = console.charset.toLowerCase();
-	if (user.lang)
-		text = get_text_from_ini(charset + "/text." + user.lang + ".ini", orig, key);
-	if (text === undefined)
-		text = get_text_from_ini(charset + "/text.ini", orig, key);
+	if (js.global.console !== undefined && typeof js.global.console.charset === 'string') {
+		var charset = console.charset.toLowerCase();
+		if (user.lang)
+			text = get_text_from_ini(charset + "/text." + user.lang + ".ini", orig, key);
+		if (text === undefined)
+			text = get_text_from_ini(charset + "/text.ini", orig, key);
+	}
 	if (text === undefined && user.lang)
 		text = get_text_from_ini("text." + user.lang + ".ini", orig, key);
 	if (text === undefined)
 		text = get_text_from_ini("text.ini", orig, key);
 	if (text === undefined)
 		text = orig;
+	if (key === undefined && orig.length > 0 && orig.indexOf(':') == orig.length - 1)
+		log(LOG_WARNING, "gettext() called with a value ending in colon: '" + orig + "'");
 	return gettext_cache[key || orig] = text;
 }
 

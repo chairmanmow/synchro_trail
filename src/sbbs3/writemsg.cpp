@@ -1284,7 +1284,6 @@ bool sbbs_t::editfile(char *fname, uint maxlines, int wmode, const char* to, con
 {
 	char *   buf, path[MAX_PATH + 1];
 	char     msgtmp[MAX_PATH + 1];
-	char     str[MAX_PATH + 1];
 	int      file;
 	long     length, l, ex_mode = 0;
 	FILE*    stream;
@@ -1340,9 +1339,8 @@ bool sbbs_t::editfile(char *fname, uint maxlines, int wmode, const char* to, con
 			return false;
 		l = process_edited_file(msgtmp, path, wmode | WM_EDIT, &lines, maxlines);
 		if (l > 0) {
-			SAFEPRINTF3(str, "created or edited file: %s (%ld bytes, %u lines)"
+			llprintf(LOG_NOTICE, nulstr, "created or edited file: %s (%ld bytes, %u lines)"
 			            , path, l, lines);
-			logline(LOG_NOTICE, nulstr, str);
 		} else if (l < 0)
 			errormsg(WHERE, ERR_CREATE, path, l);
 		rioctl(IOSM | PAUSE | ABORT);
@@ -1389,9 +1387,8 @@ bool sbbs_t::editfile(char *fname, uint maxlines, int wmode, const char* to, con
 	bprintf(text[SavedNBytes], l, lines);
 	fclose(stream);
 	free(buf);
-	SAFEPRINTF3(str, "created or edited file: %s (%ld bytes, %u lines)"
+	llprintf(nulstr, "created or edited file: %s (%ld bytes, %u lines)"
 	            , fname, l, lines);
-	logline(nulstr, str);
 	return true;
 }
 
@@ -1464,7 +1461,7 @@ bool sbbs_t::forwardmsg(smb_t* smb, smbmsg_t* orgmsg, const char* to, const char
 		usernumber = finduser(to);
 		if (usernumber < 1)
 			return false;
-	} else if (!is_supported_netmail_addr(&cfg, to)) {
+	} else if (!netmail_addr_is_supported(&cfg, to)) {
 		bprintf(text[InvalidNetMailAddr], to);
 		return false;
 	}
@@ -1642,8 +1639,7 @@ bool sbbs_t::forwardmsg(smb_t* smb, smbmsg_t* orgmsg, const char* to, const char
 	}
 
 	bprintf(text[Forwarded], touser, usernumber);
-	SAFEPRINTF(str, "forwarded mail to %s", touser);
-	logline("E+", str);
+	llprintf("E+", "forwarded mail to %s", touser);
 
 	if (usernumber == 1) {
 		useron.fbacks = (uint)adjustuserval(&cfg, &useron, USER_FBACKS, 1);
@@ -1682,9 +1678,7 @@ bool sbbs_t::forwardmsg(smb_t* smb, smbmsg_t* orgmsg, const char* to, const char
 /****************************************************************************/
 void sbbs_t::automsg()
 {
-	if (cfg.automsg_mod[0])
-		exec_bin(cfg.automsg_mod, &main_csi);
-	else
+	if (exec_mod("auto message", cfg.automsg_mod) != 0)
 		bputs(text[R_AutoMsg]);
 }
 
@@ -1818,7 +1812,7 @@ bool sbbs_t::editmsg(smb_t* smb, smbmsg_t *msg)
 /****************************************************************************/
 bool sbbs_t::movemsg(smbmsg_t* msg, int subnum)
 {
-	char     str[256], *buf;
+	char     *buf;
 	int      i;
 	int      newgrp, newsub, storage;
 	off_t    offset;
@@ -1934,67 +1928,68 @@ bool sbbs_t::movemsg(smbmsg_t* msg, int subnum)
 
 	bprintf("\r\nMoved to %s %s\r\n\r\n"
 	        , cfg.grp[usrgrp[newgrp]]->sname, cfg.sub[newsub]->lname);
-	safe_snprintf(str, sizeof(str), "moved message from %s %s to %s %s"
+	llprintf("M+", "moved message from %s %s to %s %s"
 	              , cfg.grp[cfg.sub[subnum]->grp]->sname, cfg.sub[subnum]->sname
 	              , cfg.grp[newgrp]->sname, cfg.sub[newsub]->sname);
-	logline("M+", str);
 	signal_sub_sem(&cfg, newsub);
 
 	return true;
 }
 
-ushort sbbs_t::chmsgattr(const smbmsg_t* msg)
+ushort sbbs_t::chmsgattr(const smbmsg_t* org_msg)
 {
 	int      ch;
-	uint16_t attr = msg->hdr.attr;
+	smbmsg_t msg = *org_msg;
 
 	while (online && !(sys_status & SS_ABORT)) {
 		term->newline();
-		show_msgattr(msg);
+		show_msgattr(&msg);
 		menu("msgattr");
 		ch = getkey(K_UPPER);
+		if (sys_status & SS_ABORT)
+			break;
 		if (ch)
 			bprintf("%c\r\n", ch);
 		switch (ch) {
 			case 'P':
-				attr ^= MSG_PRIVATE;
+				msg.hdr.attr ^= MSG_PRIVATE;
 				break;
 			case 'S':
-				attr ^= MSG_SPAM;
+				msg.hdr.attr ^= MSG_SPAM;
 				break;
 			case 'R':
-				attr ^= MSG_READ;
+				msg.hdr.attr ^= MSG_READ;
 				break;
 			case 'K':
-				attr ^= MSG_KILLREAD;
+				msg.hdr.attr ^= MSG_KILLREAD;
 				break;
 			case 'A':
-				attr ^= MSG_ANONYMOUS;
+				msg.hdr.attr ^= MSG_ANONYMOUS;
 				break;
 			case 'N':   /* Non-purgeable */
-				attr ^= MSG_PERMANENT;
+				msg.hdr.attr ^= MSG_PERMANENT;
 				break;
 			case 'M':
-				attr ^= MSG_MODERATED;
+				msg.hdr.attr ^= MSG_MODERATED;
 				break;
 			case 'V':
-				attr ^= MSG_VALIDATED;
+				msg.hdr.attr ^= MSG_VALIDATED;
 				break;
 			case 'D':
-				attr ^= MSG_DELETE;
+				msg.hdr.attr ^= MSG_DELETE;
 				break;
 			case 'L':
-				attr ^= MSG_LOCKED;
+				msg.hdr.attr ^= MSG_LOCKED;
 				break;
 			case 'C':
-				attr ^= MSG_NOREPLY;
+				msg.hdr.attr ^= MSG_NOREPLY;
 				break;
 			case 'E':
-				attr ^= MSG_REPLIED;
+				msg.hdr.attr ^= MSG_REPLIED;
 				break;
 			default:
-				return attr;
+				return msg.hdr.attr;
 		}
 	}
-	return attr;
+	return org_msg->hdr.attr;
 }

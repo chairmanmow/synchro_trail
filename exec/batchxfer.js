@@ -1,5 +1,5 @@
-// Bach File Transfer menu
-// Usable as a system "Batch Transfer" loadable module
+// Batch File Transfer menu
+// The default system "Batch Transfer" loadable module for Synchronet v3.21
 // i.e. in SCFG->System->Loadable Modules->Batch Transfer
 
 require("sbbsdefs.js", "USER_RIP");
@@ -84,10 +84,12 @@ function batchmenu()
 			case 'L':
 				var list = batch_list_read(user.batch_upload_list);
 				if(list && list.length) {
-					if(sort === undefined)
+					if(sort === undefined && list.length > 1)
 						sort = console.yesno(bbs.text(bbs.text.SortAlphaQ));
-					if(sort)
+					if(sort) {
 						bbs.batch_sort(/* upload */true);
+						list = batch_list_read(user.batch_upload_list);
+					}
 					console.print(bbs.text(bbs.text.UploadQueueLstHdr));
 					for(var i in list) {
 						var f = list[i];
@@ -105,10 +107,12 @@ function batchmenu()
 				var totalcdt = 0;
 				list = batch_list_read(user.batch_download_list);
 				if(list && list.length) {
-					if(sort === undefined)
+					if(sort === undefined && list.length > 1)
 						sort = console.yesno(bbs.text(bbs.text.SortAlphaQ));
-					if(sort)
+					if(sort) {
 						bbs.batch_sort(/* upload */false);
+						list = batch_list_read(user.batch_download_list);
+					}
 					console.print(bbs.text(bbs.text.DownloadQueueLstHdr));
 					for(var i in list) {
 						var f = batch_file_load(list[i]);
@@ -124,7 +128,7 @@ function batchmenu()
 						if(console.aborted)
 							break;
 					}
-					if(!console.aborted)
+					if(list.length > 1 && !console.aborted)
 						console.print(format(bbs.text(bbs.text.DownloadQueueTotals)
 							,file_size_float(totalcdt, 1, 1)
 							,file_size_float(totalsize, 1, 1)

@@ -51,6 +51,10 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+#ifdef ODPLAT_WIN32
+#include <processenv.h>
+#endif
+
 #include "OpenDoor.h"
 #include "ODStr.h"
 #include "ODPlat.h"
@@ -93,6 +97,7 @@ typedef enum
    kParamSocketDescriptor,
    kParamSilentMode,
    kParamOption,
+   kParamCP436UTF8,
    kParamUnknown
 } tCommandLineParameter;
 
@@ -109,6 +114,149 @@ static tCommandLineParameter ODGetCommandLineParameter(char *pszArgument);
 #define CONFIG_FILENAME_SIZE 80
 static char szConfigFilename[CONFIG_FILENAME_SIZE];
 
+/* ----------------------------------------------------------------------------
+ * od_split_cmd_line()
+ *
+ * Function to split an arguments string into argc/argv. Used by
+ * od_parse_cmd_line() on Windows.
+ *
+ * Parameters: pszCmdLine     - Pointer to the command line string, as passed
+ *                              to WinMain().
+ * 
+ *             nArgCount      - Pointer to an INT that will hold the number of
+ *                              arguments found.
+ * 
+ *     Return: char**
+ */
+ODAPIDEF char ** ODCALL od_split_cmd_line(const char* pszCmdLine, INT *nArgCount)
+{
+   char *pszCmdLineCopy;
+   char *pchCurrent;
+   char **papszArguments = calloc(4097, sizeof(char*)); // We'll shrink this before we return...
+   char **papszArgumentsRe;
+#ifdef ODPLAT_WIN32
+   LPSTR pszFullCmdLine = GetCommandLine();
+#endif
+
+   /* Log function entry if running in trace mode. */
+   TRACE(TRACE_API, "od_split_cmd_line()");
+
+   if (pszCmdLine == NULL || nArgCount == NULL) {
+      od_control.od_error = ERR_PARAMETER;
+      if (nArgCount)
+         *nArgCount = 0;
+      return NULL;
+   }
+
+   *nArgCount = 0;
+   if(papszArguments == NULL)
+   {
+      od_control.od_error = ERR_MEMORY;
+      return NULL;
+   }
+
+   // Try to get papszArguments[0]...
+#ifdef ODPLAT_WIN32
+   if (pszFullCmdLine == NULL) {
+      papszArguments[(*nArgCount)++] = strdup("");
+      if (papszArguments[0] == NULL) {
+         od_control.od_error = ERR_MEMORY;
+         *nArgCount = 0;
+         free(papszArguments);
+         return NULL;
+      }
+   }
+   else {
+      pchCurrent = strstr(pszFullCmdLine, pszCmdLine);
+      if (pchCurrent == NULL || pchCurrent == pszFullCmdLine) {
+         papszArguments[(*nArgCount)++] = strdup("");
+         if (papszArguments[0] == NULL) {
+            od_control.od_error = ERR_MEMORY;
+            *nArgCount = 0;
+            free(papszArguments);
+            return NULL;
+         }
+      }
+      else {
+         size_t argStrLen = pchCurrent - pszFullCmdLine;
+         papszArguments[(*nArgCount)] = malloc(argStrLen);
+         if (papszArguments[(*nArgCount)++] == NULL) {
+            od_control.od_error = ERR_MEMORY;
+            *nArgCount = 0;
+            free(papszArguments);
+            return NULL;
+         }
+         memcpy(papszArguments[0], pszFullCmdLine, argStrLen - 1);
+         papszArguments[0][argStrLen - 1] = '\0';
+      }
+   }
+#else
+   papszArguments[(*nArgCount)++] = strdup("");
+   if (papszArguments[0] == NULL) {
+      od_control.od_error = ERR_MEMORY;
+      *nArgCount = 0;
+      free(papszArguments);
+      return NULL;
+   }
+#endif
+
+   pszCmdLineCopy = strdup(pszCmdLine);
+   if(pszCmdLineCopy == NULL)
+   {
+      od_control.od_error = ERR_MEMORY;
+      *nArgCount = 0;
+      free(papszArguments[0]);
+      free(papszArguments);
+      return NULL;
+   }
+
+   /* Loop, building papszArguments and nArgCount. */
+   pchCurrent = pszCmdLineCopy;
+   for(; *nArgCount < 4096 && *pchCurrent != '\0'; ++(*nArgCount))
+   {
+      /* Store address of the next command line argument. */
+      papszArguments[*nArgCount] = pchCurrent;
+
+      /* Skip forward to the next white space. */
+      while(*pchCurrent != '\0' && !isspace(*pchCurrent))
+      {
+         ++pchCurrent;
+      }
+
+      /* Replace white space characters with '\0' string terminators, until */
+      /* we reach the next command line argument, or the end of the string. */
+      while(*pchCurrent != '\0' && isspace(*pchCurrent))
+      {
+         *pchCurrent = '\0';
+         ++pchCurrent;
+      }
+   }
+   papszArgumentsRe = realloc(papszArguments, (*nArgCount + 1) * sizeof(*papszArguments));
+   if (papszArgumentsRe != NULL)
+      return papszArgumentsRe;
+   return papszArguments;
+}
+
+/* ----------------------------------------------------------------------------
+ * od_free_split_cmd_line()
+ *
+ * Frees the memory allocated by od_split_cmd_line()
+ *
+ * Parameters: papszArguments - Value returned by call to od_split_cmd_line()
+ * 
+ *     Return: void
+ */
+ODAPIDEF void ODCALL od_free_split_cmd_line(char **papszArguments)
+{
+   if (papszArguments == NULL) {
+      od_control.od_error = ERR_PARAMETER;
+      return;
+   }
+
+   free(papszArguments[0]);
+   free(papszArguments[1]);
+   free(papszArguments);
+}
 
 /* ----------------------------------------------------------------------------
  * od_parse_cmd_line()
@@ -148,47 +296,16 @@ ODAPIDEF void ODCALL od_parse_cmd_line(INT nArgCount, char *papszArguments[])
    INT n;
 #ifdef ODPLAT_WIN32
    INT nArgCount;
-   char *papszArguments[MAX_ARGS];
-   char *pszCmdLineCopy;
-   char *pchCurrent
+   char **papszArguments;
 #endif /* ODPLAT_WIN32 */
 
    /* Log function entry if running in trace mode. */
    TRACE(TRACE_API, "od_parse_cmd_line()");
 
 #ifdef ODPLAT_WIN32
-   /* Attempt to allocate space for a copy of the command line. */
-   pszCmdLineCopy = malloc(strlen(pszCmdLine) + 1);
-   if(pszCmdLineCopy == NULL)
-   {
-      od_control.od_error = ERR_MEMORY;
+   papszArguments = od_split_cmd_line(pszCmdLine, &nArgCount);
+   if (papszArguments == NULL)
       return;
-   }
-
-   /* Copy the command line text into our working copy. */
-   strcpy(pszCmdLineCopy, pszCmdLine);
-
-   /* Loop, building papszArguments and nArgCount. */
-   pchCurrent = pszCmdLineCopy;
-   for(nArgCount = 0; nArgCount < MAX_ARGS && *pchCurrent != '\0'; ++nArgCount)
-   {
-      /* Store address of the next command line argument. */
-      papszArguments[nArgCount] = pchCurrent;
-
-      /* Skip forward to the next white space. */
-      while(*pchCurrent != '\0' && !isspace(*pchCurrent))
-      {
-         ++pchCurrent;
-      }
-
-      /* Replace white space characters with '\0' string terminators, until */
-      /* we reach the next command line argument, or the end of the string. */
-      while(*pchCurrent != '\0' && isspace(*pchCurrent))
-      {
-         *pchCurrent = '\0';
-         ++pchCurrent;
-      }
-   }
 #endif /* ODPLAT_WIN32 */
 
 #ifndef ODPLAT_WIN32
@@ -208,11 +325,7 @@ ODAPIDEF void ODCALL od_parse_cmd_line(INT nArgCount, char *papszArguments[])
    od_control.user_ansi = TRUE;
    od_control.user_timelimit = 60;
 
-#ifdef ODPLAT_WIN32
-   for(nCurrentArg = 0; nCurrentArg < nArgCount; ++nCurrentArg)
-#else /* !ODPLAT_WIN32 */
    for(nCurrentArg = 1; nCurrentArg < nArgCount; ++nCurrentArg)
-#endif /* !ODPLAT_WIN32 */
    {
       pszCurrentArg = papszArguments[nCurrentArg];
 
@@ -290,36 +403,36 @@ ODAPIDEF void ODCALL od_parse_cmd_line(INT nArgCount, char *papszArguments[])
                   szODWorkString, MB_ICONINFORMATION | MB_OK);
             }
 #else /* !ODPLAT_WIN32 */
-            printf("AVALIABLE COMMAND LINE OPTIONS ");
+            puts("AVALIABLE COMMAND LINE OPTIONS \r");
             if(od_control.od_cmd_line_help != NULL)
             {
-               printf(od_control.od_cmd_line_help);
+               fputs(od_control.od_cmd_line_help, stdout);
             }
             else
             {
-               printf("(Some can be overriden by config/drop file)\n");
-               printf(" -C or -CONFIG    - Specfies configuration filename.\n");
-               printf(" -L or -LOCAL     - Causes door to operate in local mode, without requiring a\n");
-               printf("                    door information (drop) file.\n");
-               printf(" -D or -DROPFILE  - Door information file directory and/or filename.\n");
-               printf(" -N x or -NODE x  - Sets the node number to use.\n");
-               printf(" -B x or -BPS x   - Sets the serial port <---> modem bps (baud) rate to use.\n");
-               printf(" -P x or -PORT x  - Sets serial port to use. For COM1: use -P 0 or -P COM1, for\n");
-               printf("                    COM2: use -P 1 or -P COM2, etc.\n");
-               printf(" -ADDRESS x       - Sets serial port address in HEXIDECIMAL (if no FOSSIL).\n");
-               printf(" -IRQ x           - Sets the serial port IRQ line (if FOSSIL is not used).\n");
-               printf(" -NOFOSSIL        - Disables use of FOSSIL driver, even if available.\n");
-               printf(" -NOFIFO          - Disables use of 16550 FIFO buffers (only if no FOSSIL).\n");
-               printf(" -MAXTIME x       - Sets the maximum number of minutes that any user will be\n");
-               printf("                    permitted to access the door, regardless of time left.\n");
-               printf(" -SILENT          - Operate in silent mode, with no local display.\n");
-               printf(" -G or -GRAPHICS  - Unless followed by 0 or N, turns on ANSI display mode.\n");
-               printf(" -BBSNAME x       - Name of BBS.\n");
-               printf(" -USERNAME x      - Name of user who is currently online.\n");
-               printf(" -TIMELEFT x      - User's time remaining online.\n");
-               printf(" -SECURITY x      - User's security level.\n");
-               printf(" -LOCATION x      - Location from which user is calling.\n");
-               printf(" -?, -H or -HELP  - Displays command-line help and exits.\n");
+               puts("(Some can be overriden by config/drop file)\r");
+               puts(" -C or -CONFIG    - Specfies configuration filename.\r");
+               puts(" -L or -LOCAL     - Causes door to operate in local mode, without requiring a\r");
+               puts("                    door information (drop) file.\r");
+               puts(" -D or -DROPFILE  - Door information file directory and/or filename.\r");
+               puts(" -N x or -NODE x  - Sets the node number to use.\r");
+               puts(" -B x or -BPS x   - Sets the serial port <---> modem bps (baud) rate to use.\r");
+               puts(" -P x or -PORT x  - Sets serial port to use. For COM1: use -P 0 or -P COM1, for\r");
+               puts("                    COM2: use -P 1 or -P COM2, etc.\r");
+               puts(" -ADDRESS x       - Sets serial port address in HEXIDECIMAL (if no FOSSIL).\r");
+               puts(" -IRQ x           - Sets the serial port IRQ line (if FOSSIL is not used).\r");
+               puts(" -NOFOSSIL        - Disables use of FOSSIL driver, even if available.\r");
+               puts(" -NOFIFO          - Disables use of 16550 FIFO buffers (only if no FOSSIL).\r");
+               puts(" -MAXTIME x       - Sets the maximum number of minutes that any user will be\r");
+               puts("                    permitted to access the door, regardless of time left.\r");
+               puts(" -SILENT          - Operate in silent mode, with no local display.\r");
+               puts(" -G or -GRAPHICS  - Unless followed by 0 or N, turns on ANSI display mode.\r");
+               puts(" -BBSNAME x       - Name of BBS.\r");
+               puts(" -USERNAME x      - Name of user who is currently online.\r");
+               puts(" -TIMELEFT x      - User's time remaining online.\r");
+               puts(" -SECURITY x      - User's security level.\r");
+               puts(" -LOCATION x      - Location from which user is calling.\r");
+               puts(" -?, -H or -HELP  - Displays command-line help and exits.\r");
             }
 #endif /* !ODPLAT_WIN32 */
             exit(1);
@@ -415,6 +528,13 @@ ODAPIDEF void ODCALL od_parse_cmd_line(INT nArgCount, char *papszArguments[])
             break;
 
          case kParamUnknown:
+            /* If the client application provided a custom command line */
+            /* flag function, then pass this unrecognized command-line  */
+            /* parameter callback function.                             */
+            if(od_control.od_cmd_line_flag_handler != NULL) {
+               if (od_control.od_cmd_line_flag_handler(pszCurrentArg))
+                  break;
+            }
             /* If the client application provided a custom command line   */
             /* handler function, then pass this unrecognized command-line */
             /* parameter and any options to that callback function.       */
@@ -427,11 +547,18 @@ ODAPIDEF void ODCALL od_parse_cmd_line(INT nArgCount, char *papszArguments[])
                   szCustomOptions);
             }
             break;
+         case kParamPersonality:
+         case kParamOption:
+            // Ignore by OpenDoors
+            break;
+         case kParamCP436UTF8:
+            od_control.od_cp437_to_utf8_out = TRUE;
+            break;
       }
    }
 
 #ifdef ODPLAT_WIN32
-   free(pszCmdLineCopy);
+   od_free_split_cmd_line(papszArguments);
 #endif /* ODPLAT_WIN32 */
 }
 
@@ -457,7 +584,7 @@ static void ODAdvanceToNextArg(INT *pnCurrentArg, INT nArgCount,
 
    if(++*pnCurrentArg >= nArgCount)
    {
-      printf("Missing parameter for option: %s\n", pszOption);
+      printf("Missing parameter for option: %s\r\n", pszOption);
       exit(1);
    }
 }
@@ -495,7 +622,7 @@ static void ODGetNextArgName(INT *pnCurrentArg, INT nArgCount,
 
    if((*pnCurrentArg) + 1 >= nArgCount)
    {
-      printf("Missing parameter for option: %s\n",
+      printf("Missing parameter for option: %s\r\n",
          papszArguments[(*pnCurrentArg) - 1]);
       exit(1);
    }
@@ -656,6 +783,10 @@ static tCommandLineParameter ODGetCommandLineParameter(char *pszArgument)
    else if(stricmp(pszArgument, "SILENT") == 0)
    {
       return(kParamSilentMode);
+   }
+   else if(stricmp(pszArgument, "CP437UTF8") == 0)
+   {
+      return(kParamCP436UTF8);
    }
    else
    {

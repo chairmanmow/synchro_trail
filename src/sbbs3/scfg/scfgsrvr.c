@@ -111,7 +111,7 @@ static void login_attempt_cfg(struct login_attempt_settings* login_attempt)
 					login_attempt->tempban_threshold = atoi(str);
 				break;
 			case 4:
-				SAFECOPY(str, duration(login_attempt->tempban_duration, false, false));
+				SAFECOPY(str, duration(login_attempt->tempban_duration, false, NULL));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Lifetime of Temporary-Ban of IP", str, 10, K_EDIT) > 0)
 					login_attempt->tempban_duration = (uint)parse_duration(str);
 				break;
@@ -189,7 +189,7 @@ static void global_cfg(void)
 	static int       cur, bar;
 	char             str[256];
 	char             tmp[256];
-	global_startup_t startup = {0};
+	global_startup_t startup = { .size = sizeof startup };
 
 	FILE*            fp = iniOpenFile(cfg.filename, /* for_modify? */ false);
 	if (fp == NULL) {
@@ -197,7 +197,7 @@ static void global_cfg(void)
 		return;
 	}
 	uifc.pop(strReadingIniFile);
-	sbbs_read_ini(
+	bool result = sbbs_read_ini(
 		fp
 		, cfg.filename
 		, &startup
@@ -214,6 +214,10 @@ static void global_cfg(void)
 		);
 	iniCloseFile(fp);
 	uifc.pop(NULL);
+	if (!result) {
+		uifc.msgf("Error reading %s", cfg.filename);
+		return;
+	}
 	global_startup_t saved_startup = startup;
 
 	while (1) {
@@ -267,16 +271,16 @@ static void global_cfg(void)
 				break;
 			case 5:
 				SAFECOPY(str, duration(startup.bind_retry_delay, false, strDisabled));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Port Bind Retry Delay", str, 6, K_EDIT) > 0)
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Port Bind Retry Delay", str, 10, K_EDIT) > 0)
 					startup.bind_retry_delay = (uint)parse_duration(str);
 				break;
 			case 6:
 				SAFECOPY(str, duration(startup.sem_chk_freq, false, strDefault));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Semaphore File Check Interval", str, 6, K_EDIT) > 0)
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Semaphore File Check Interval", str, 10, K_EDIT) > 0)
 					startup.sem_chk_freq = (uint16_t)parse_duration(str);
 				break;
 			case 7:
-				getar("Global Server Login", startup.login_ars);
+				getar("Global Server Login", startup.login_ars, /* helpbuf: */ NULL);
 				break;
 			case 8:
 				js_startup_cfg(&startup.js);
@@ -403,7 +407,7 @@ static void ssh_srvr_cfg(bbs_startup_t* startup)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "File Transfer (SFTP) Support"
 		         , startup->options & BBS_OPT_ALLOW_SSH ? (startup->options & BBS_OPT_ALLOW_SFTP ? "Yes" : "No") : "N/A");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max SFTP Inactivity"
-		         , (startup->options & BBS_OPT_ALLOW_SSH) && (startup->options & BBS_OPT_ALLOW_SFTP) ? vduration(startup->max_sftp_inactivity, NULL) : "N/A");
+		         , (startup->options & BBS_OPT_ALLOW_SSH) && (startup->options & BBS_OPT_ALLOW_SFTP) ? vduration(startup->max_sftp_inactivity, strDisabled) : "N/A");
 
 		opt[i][0] = '\0';
 
@@ -456,7 +460,7 @@ static void ssh_srvr_cfg(bbs_startup_t* startup)
 					break;
 				if (!(startup->options & BBS_OPT_ALLOW_SFTP))
 					break;
-				SAFECOPY(str, duration(startup->max_sftp_inactivity, false, NULL));
+				SAFECOPY(str, duration(startup->max_sftp_inactivity, false, strDisabled));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Socket Inactivity during SFTP Session", str, 10, K_EDIT) > 0)
 					startup->max_sftp_inactivity = (uint16_t)parse_duration(str);
 				break;
@@ -513,7 +517,7 @@ static void termsrvr_cfg(void)
 	static int    cur, bar;
 	char          str[256];
 	bool          enabled = false;
-	bbs_startup_t startup = {0};
+	bbs_startup_t startup = { .size = sizeof startup };
 
 	FILE*         fp = iniOpenFile(cfg.filename, /* for_modify? */ false);
 	if (fp == NULL) {
@@ -521,7 +525,7 @@ static void termsrvr_cfg(void)
 		return;
 	}
 	uifc.pop(strReadingIniFile);
-	sbbs_read_ini(
+	bool result = sbbs_read_ini(
 		fp
 		, cfg.filename
 		, NULL
@@ -538,6 +542,10 @@ static void termsrvr_cfg(void)
 		);
 	iniCloseFile(fp);
 	uifc.pop(NULL);
+	if (!result) {
+		uifc.msgf("Error reading %s", cfg.filename);
+		return;
+	}
 	bbs_startup_t saved_startup = startup;
 
 	while (1) {
@@ -558,7 +566,8 @@ static void termsrvr_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "80 Column PETSCII Support", startup.pet80_port  ? str : strDisabled);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "DOS Program Support", startup.options & BBS_OPT_NO_DOS ? "No" : "Yes");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Concurrent Connections", maximum(startup.max_concurrent_connections));
-		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Login Inactivity", vduration(startup.max_login_inactivity, strDisabled));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Dumb Login Inactivity", vduration(startup.max_dumbterm_inactivity, strDisabled));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max User Login Inactivity", vduration(startup.max_login_inactivity, strDisabled));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max New User Inactivity", vduration(startup.max_newuser_inactivity, strDisabled));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max User Inactivity", vduration(startup.max_session_inactivity, strDisabled));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%u ms", "Output Buffer Drain Timeout", startup.outbuf_drain_timeout);
@@ -630,49 +639,83 @@ static void termsrvr_cfg(void)
 #define SOCKET_INACTIVITY_HELP  "\n" \
 		"An `Inactivity Alert` (by default, 3 BELLs) can be sent to the client\n" \
 		"before socket disconnection by setting `User Inactivity Warning` in\n" \
-		"`System->Advanced Options` (by default, `75 percent` of maximum inactivity).\n" \
-		"\n" \
+		"`System->Advanced Options` (by default, `75 percent` of maximum inactivity).\n"
+#define EXTRA_INACTIVITY_HELP  "\n" \
 		"For higher-level inactive user warning/detection/disconnection, see the\n" \
 		"`Maximum User Inactivity` setting in `System->Advanced Options`.\n" \
 		"Normally, if enabled, this socket inactivity duration should be `longer`\n" \
 		"than the `Maximum User Inactivity` setting in `System->Advanced Options`.\n"
 			case 10:
 				uifc.helpbuf =
-					"`Maximum Socket Inactivity at Login:`\n"
+					"`Maximum Socket Inactivity for Dumb Terminal Login:`\n"
 					"\n"
 					"This is the duration of time the socket must be inactive before the\n"
-					"socket will be automatically disconnected while a client is attempting\n"
-					"to login.  A setting of `0` will disable this socket inactivity detection\n"
-					"feature.  Default is `10 minutes`.\n"
+					"client will be automatically disconnected while a dumb terminal is\n"
+					"attempting to login.  Since dumb terminal connections are usually\n"
+					"from door knocking or brute force attack bots, it is best to have\n"
+					"this duration set low to free up Terminal Server Nodes for \"real users\"\n"
+					"more quickly.\n"
+					"\n"
+					"A setting of `0` will disable the socket inactivity detection feature\n"
+					"during dumb terminal logins.\n"
+					"\n"
+					"The default setting is `1 minute`.\n"
 					SOCKET_INACTIVITY_HELP
 				;
-				SAFECOPY(str, duration(startup.max_login_inactivity, false, strDisabled));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Socket Inactivity at Login", str, 10, K_EDIT) > 0)
-					startup.max_login_inactivity = (uint16_t)parse_duration(str);
+				SAFECOPY(str, duration(startup.max_dumbterm_inactivity, false, strDisabled));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Socket Inactivity for Dumb Terminal Login", str, 10, K_EDIT) > 0)
+					startup.max_dumbterm_inactivity = (uint16_t)parse_duration(str);
 				break;
 			case 11:
+				uifc.helpbuf =
+					"`Maximum Socket Inactivity for User Terminal Login:`\n"
+					"\n"
+					"This is the duration of time the socket must be inactive before the\n"
+					"client will be automatically disconnected while an apparent \"real user\"\n"
+					"is attempting to login via an auto-detected terminal type (e.g. ANSI).\n"
+					"\n"
+					"A setting of `0` will disable this socket inactivity detection feature\n"
+					"during user terminal logins.\n"
+					"\n"
+					"The default setting is `10 minutes`.\n"
+					SOCKET_INACTIVITY_HELP
+					EXTRA_INACTIVITY_HELP
+				;
+				SAFECOPY(str, duration(startup.max_login_inactivity, false, strDisabled));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Socket Inactivity for User Terminal Login", str, 10, K_EDIT) > 0)
+					startup.max_login_inactivity = (uint16_t)parse_duration(str);
+				break;
+			case 12:
 				uifc.helpbuf =
 					"`Maximum Socket Inactivity at New User Registration:`\n"
 					"\n"
 					"This is the duration of time the socket must be inactive before the\n"
-					"socket will be automatically disconnected while a new user is\n"
-					"registering.  A setting of `0` will disable this socket inactivity\n"
-					"detection feature.  Default is `60 minutes`.\n"
+					"client will be automatically disconnected while a new user is\n"
+					"creating a new user account (registering).\n"
+					"\n"
+					"A setting of `0` will disable the socket inactivity detection feature\n"
+					"during new user registration.\n"
+					"\n"
+					"The default setting is `60 minutes`.\n"
 					SOCKET_INACTIVITY_HELP
+					EXTRA_INACTIVITY_HELP
 				;
 				SAFECOPY(str, duration(startup.max_newuser_inactivity, false, strDisabled));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Socket Inactivity at New User Registration", str, 10, K_EDIT) > 0)
 					startup.max_newuser_inactivity = (uint16_t)parse_duration(str);
 				break;
-			case 12:
+			case 13:
 				uifc.helpbuf =
 					"`Maximum Socket Inactivity during User Session:`\n"
 					"\n"
 					"This is the duration of time the socket must be inactive before the\n"
-					"socket will be automatically disconnected after a user has authenticated\n"
-					"and successfully logged-in.  A setting of `0` will disable this socket\n"
-					"inactivity detection feature.  Default is `10 minutes`.\n"
+					"client will be automatically disconnected after a user has authenticated\n"
+					"and successfully logged-in.\n"
+					"\n"
+					"A setting of `0` will disable the socket inactivity detection feature\n"
+					"during user sessions.  The default setting is `10 minutes`.\n"
 					SOCKET_INACTIVITY_HELP
+					EXTRA_INACTIVITY_HELP
 					"\n"
 					"`H`-exempt users will not be disconnected due to socket inactivity."
 				;
@@ -680,34 +723,34 @@ static void termsrvr_cfg(void)
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Socket Inactivity during User Session", str, 10, K_EDIT) > 0)
 					startup.max_session_inactivity = (uint16_t)parse_duration(str);
 				break;
-			case 13:
+			case 14:
 				SAFEPRINTF(str, "%u", startup.outbuf_drain_timeout);
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Output Buffer Drain Timeout (milliseconds)", str, 5, K_NUMBER | K_EDIT) > 0)
 					startup.outbuf_drain_timeout = atoi(str);
 				break;
-			case 14:
-				startup.options ^= BBS_OPT_NO_EVENTS;
-				break;
 			case 15:
-				if (startup.options & BBS_OPT_NO_EVENTS)
-					break;
-				startup.options ^= BBS_OPT_NO_QWK_EVENTS;
+				startup.options ^= BBS_OPT_NO_EVENTS;
 				break;
 			case 16:
 				if (startup.options & BBS_OPT_NO_EVENTS)
 					break;
-				uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &startup.event_log_level, 0, "Event Log Level", iniLogLevelStringList());
+				startup.options ^= BBS_OPT_NO_QWK_EVENTS;
 				break;
 			case 17:
-				startup.options ^= BBS_OPT_NO_HOST_LOOKUP;
+				if (startup.options & BBS_OPT_NO_EVENTS)
+					break;
+				uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &startup.event_log_level, 0, "Event Log Level", iniLogLevelStringList());
 				break;
 			case 18:
-				getar("Terminal Server Login", startup.login_ars);
+				startup.options ^= BBS_OPT_NO_HOST_LOOKUP;
 				break;
 			case 19:
-				js_startup_cfg(&startup.js);
+				getar("Terminal Server Login", startup.login_ars, /* helpbuf: */ NULL);
 				break;
 			case 20:
+				js_startup_cfg(&startup.js);
+				break;
+			case 21:
 				login_attempt_cfg(&startup.login_attempt);
 				break;
 			default:
@@ -931,7 +974,7 @@ static void websrvr_cfg(void)
 	char          tmp[256];
 	char          str[256];
 	bool          enabled = false;
-	web_startup_t startup = {0};
+	web_startup_t startup = { .size = sizeof startup };
 
 	FILE*         fp = iniOpenFile(cfg.filename, /* for_modify? */ false);
 	if (fp == NULL) {
@@ -939,7 +982,7 @@ static void websrvr_cfg(void)
 		return;
 	}
 	uifc.pop(strReadingIniFile);
-	sbbs_read_ini(
+	bool result = sbbs_read_ini(
 		fp
 		, cfg.filename
 		, NULL
@@ -956,6 +999,10 @@ static void websrvr_cfg(void)
 		);
 	iniCloseFile(fp);
 	uifc.pop(NULL);
+	if (!result) {
+		uifc.msgf("Error reading %s", cfg.filename);
+		return;
+	}
 	web_startup_t saved_startup = startup;
 
 	while (1) {
@@ -971,19 +1018,31 @@ static void websrvr_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Content Root Directory", startup.root_dir);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Error Sub-directory", startup.error_dir);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Virtual Host Support", startup.options & WEB_OPT_VIRTUAL_HOSTS ? "Yes" : "No");
-		SAFECOPY(str, startup.logfile_base);
-		if (*str == '\0')
-			SAFEPRINTF(str, "[%slogs/http-*]", cfg.logs_dir);
+		const char* host = "";
+		if ((startup.options & WEB_OPT_VIRTUAL_HOSTS) && !(startup.options & WEB_OPT_ONE_HTTP_LOG))
+			host = "<host>-";
+		if (*startup.logfile_base == '\0')
+			snprintf(str, sizeof str, "[%slogs/http-%s<date>.log]", cfg.logs_dir, host);
+		else
+			snprintf(str, sizeof str, "%s-%s<date>.log", startup.logfile_base, host);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Access Logging", startup.options & WEB_OPT_HTTP_LOGGING ? str : strDisabled);
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Access Log Format"
+			, startup.options & WEB_OPT_HTTP_LOGGING ? (*startup.custom_log_fmt ? startup.custom_log_fmt : "<Combined Log Format>") : "N/A");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Clients", maximum(startup.max_clients));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Inactivity", vduration(startup.max_inactivity, strDefault));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Concurrent Connections", maximum(startup.max_concurrent_connections));
+		if (startup.max_requests_per_period < 1 || startup.request_rate_limit_period < 1)
+			SAFECOPY(str, strDisabled);
+		else
+			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period, duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Authentication Methods", startup.default_auth_list);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%u ms", "Output Buffer Drain Timeout", startup.outbuf_drain_timeout);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Lookup Client Hostname", startup.options & BBS_OPT_NO_HOST_LOOKUP ? "No" : "Yes");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "CGI Support...",  startup.options & WEB_OPT_NO_CGI ? strDisabled : startup.cgi_dir);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Filebase Support...", startup.options & WEB_OPT_NO_FILEBASE ? strDisabled: startup.file_vpath_prefix);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Requirements", startup.login_ars);
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Info Save", startup.login_info_save);
 		strcpy(opt[i++], "JavaScript Settings...");
 		strcpy(opt[i++], "Failed Login Attempts...");
 		opt[i][0] = '\0';
@@ -1044,55 +1103,81 @@ static void websrvr_cfg(void)
 				break;
 			case 9:
 				i = startup.options & WEB_OPT_HTTP_LOGGING ? 0 : 1;
-				i = uifc.list(WIN_SAV | WIN_MID, 0, 0, 0, &i, 0, "Log Requests to Files in Combined Log Format", uifcYesNoOpts);
+				i = uifc.list(WIN_SAV | WIN_MID, 0, 0, 0, &i, 0, "Log Requests to HTTP Access Log", uifcYesNoOpts);
 				if (i == 0) {
 					startup.options |= WEB_OPT_HTTP_LOGGING;
 					uifc.input(WIN_MID | WIN_SAV, 0, 0, "Base path/filename (blank = default)"
 					           , startup.logfile_base, sizeof(startup.logfile_base) - 1, K_EDIT);
+					if (startup.options & WEB_OPT_VIRTUAL_HOSTS) {
+						i = (startup.options & WEB_OPT_ONE_HTTP_LOG) ? 0 : 1;
+						i = uifc.list(WIN_SAV | WIN_MID, 0, 0, 0, &i, 0, "Use Single Log File for All Virtual Hosts", uifcYesNoOpts);
+						if (i == 0)
+							startup.options |= WEB_OPT_ONE_HTTP_LOG;
+						else if (i == 1)
+							startup.options &= ~WEB_OPT_ONE_HTTP_LOG;
+					}
 				} else if (i == 1)
 					startup.options &= ~WEB_OPT_HTTP_LOGGING;
 				break;
 			case 10:
+				if (startup.options & WEB_OPT_HTTP_LOGGING)
+					uifc.input(WIN_MID | WIN_SAV, 0, 0, "Log Format (blank for Combined Log Format)"
+						, startup.custom_log_fmt, sizeof(startup.custom_log_fmt) - 1, K_EDIT);
+				break;
+			case 11:
 				SAFECOPY(str, maximum(startup.max_clients));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Client Count (0=Unlimited)", str, 10, K_EDIT) > 0)
 					startup.max_clients = atoi(str);
 				break;
-			case 11:
+			case 12:
 				SAFECOPY(str, duration(startup.max_inactivity, false, strDefault));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Client Inactivity", str, 10, K_EDIT) > 0)
 					startup.max_inactivity = (uint16_t)parse_duration(str);
 				break;
-			case 12:
+			case 13:
 				SAFECOPY(str, maximum(startup.max_concurrent_connections));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Concurrent Connections (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
 					startup.max_concurrent_connections = atoi(str);
 				break;
-			case 13:
+			case 14:
+				SAFECOPY(str, maximum(startup.max_requests_per_period));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
+					startup.max_requests_per_period = atoi(str);
+				if (startup.max_requests_per_period < 1)
+					break;
+				duration_to_vstr(startup.request_rate_limit_period, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
+					startup.request_rate_limit_period = (uint)parse_duration(str);
+				break;
+			case 15:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Authentication Methods"
 				           , startup.default_auth_list, sizeof(startup.default_auth_list) - 1, K_EDIT);
 				break;
-			case 14:
+			case 16:
 				SAFEPRINTF(str, "%u", startup.outbuf_drain_timeout);
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Output Buffer Drain Timeout (milliseconds)"
 				               , str, 5, K_NUMBER | K_EDIT) > 0)
 					startup.outbuf_drain_timeout = atoi(str);
 				break;
-			case 15:
+			case 17:
 				startup.options ^= BBS_OPT_NO_HOST_LOOKUP;
 				break;
-			case 16:
+			case 18:
 				websrvr_cgi_cfg(&startup);
 				break;
-			case 17:
+			case 19:
 				websrvr_filebase_cfg(&startup);
 				break;
-			case 18:
-				getar("Web Server Login", startup.login_ars);
+			case 20:
+				getar("Web Server Login", startup.login_ars, /* helpbuf: */ NULL);
 				break;
-			case 19:
+			case 21:
+				getar("Web Server Login Info Saved", startup.login_info_save, /* helpbuf: */ NULL);
+				break;
+			case 22:
 				js_startup_cfg(&startup.js);
 				break;
-			case 20:
+			case 23:
 				login_attempt_cfg(&startup.login_attempt);
 				break;
 			default:
@@ -1143,7 +1228,7 @@ static void ftpsrvr_cfg(void)
 	char          tmp[256];
 	char          str[256];
 	bool          enabled = false;
-	ftp_startup_t startup = {0};
+	ftp_startup_t startup = { .size = sizeof startup };
 
 	FILE*         fp = iniOpenFile(cfg.filename, /* for_modify? */ false);
 	if (fp == NULL) {
@@ -1151,7 +1236,7 @@ static void ftpsrvr_cfg(void)
 		return;
 	}
 	uifc.pop(strReadingIniFile);
-	sbbs_read_ini(
+	bool result = sbbs_read_ini(
 		fp
 		, cfg.filename
 		, NULL
@@ -1168,6 +1253,10 @@ static void ftpsrvr_cfg(void)
 		);
 	iniCloseFile(fp);
 	uifc.pop(NULL);
+	if (!result) {
+		uifc.msgf("Error reading %s", cfg.filename);
+		return;
+	}
 	ftp_startup_t saved_startup = startup;
 
 	while (1) {
@@ -1185,10 +1274,22 @@ static void ftpsrvr_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Clients", maximum(startup.max_clients));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Inactivity", vduration(startup.max_inactivity, strDefault));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Concurrent Connections", maximum(startup.max_concurrent_connections));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s bytes", "Min Uploaded File Size", byte_count_to_str(startup.min_fsize, tmp, sizeof tmp));
+		if (startup.max_fsize == 0)
+			SAFECOPY(str, "Unlimited");
+		else
+			snprintf(str, sizeof str, "%s bytes", byte_count_to_str(startup.max_fsize, tmp, sizeof tmp));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Uploaded File Size", str);
+		if (startup.max_requests_per_period < 1 || startup.request_rate_limit_period < 1)
+			SAFECOPY(str, strDisabled);
+		else
+			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period, duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Sysop File System Access", startup.options & FTP_OPT_NO_LOCAL_FSYS ? "No" : "Yes");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Allow Bounce Transfers", startup.options & FTP_OPT_ALLOW_BOUNCE ? "Yes" : "No");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Lookup Client Hostname", startup.options & BBS_OPT_NO_HOST_LOOKUP ? "No" : "Yes");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Requirements", startup.login_ars);
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Info Save", startup.login_info_save);
 		strcpy(opt[i++], "Failed Login Attempts...");
 
 		opt[i][0] = '\0';
@@ -1284,18 +1385,41 @@ static void ftpsrvr_cfg(void)
 					startup.max_concurrent_connections = atoi(str);
 				break;
 			case 12:
-				startup.options ^= FTP_OPT_NO_LOCAL_FSYS;
+				byte_count_to_str(startup.min_fsize, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Minimum Uploaded File Size (in bytes)", str, 10, K_EDIT) >= 0)
+					startup.min_fsize = parse_byte_count(str, 1);
 				break;
 			case 13:
-				startup.options ^= FTP_OPT_ALLOW_BOUNCE;
+				byte_count_to_str(startup.max_fsize, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Uploaded File Size (in bytes, 0 = Unlimited)", str, 10, K_EDIT) >= 0)
+					startup.max_fsize = parse_byte_count(str, 1);
 				break;
 			case 14:
-				startup.options ^= BBS_OPT_NO_HOST_LOOKUP;
+				SAFECOPY(str, maximum(startup.max_requests_per_period));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
+					startup.max_requests_per_period = atoi(str);
+				if (startup.max_requests_per_period < 1)
+					break;
+				duration_to_vstr(startup.request_rate_limit_period, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
+					startup.request_rate_limit_period = (uint)parse_duration(str);
 				break;
 			case 15:
-				getar("FTP Server Login", startup.login_ars);
+				startup.options ^= FTP_OPT_NO_LOCAL_FSYS;
 				break;
 			case 16:
+				startup.options ^= FTP_OPT_ALLOW_BOUNCE;
+				break;
+			case 17:
+				startup.options ^= BBS_OPT_NO_HOST_LOOKUP;
+				break;
+			case 18:
+				getar("FTP Server Login", startup.login_ars, /* helpbuf: */ NULL);
+				break;
+			case 19:
+				getar("FTP Server Login Info Saved", startup.login_info_save, /* helpbuf: */ NULL);
+				break;
+			case 20:
 				login_attempt_cfg(&startup.login_attempt);
 				break;
 			default:
@@ -1595,7 +1719,7 @@ static void mailsrvr_cfg(void)
 	char           str[256];
 	const char*    p;
 	bool           enabled = false;
-	mail_startup_t startup = {0};
+	mail_startup_t startup = { .size = sizeof startup };
 
 	FILE*          fp = iniOpenFile(cfg.filename, /* for_modify? */ false);
 	if (fp == NULL) {
@@ -1603,7 +1727,7 @@ static void mailsrvr_cfg(void)
 		return;
 	}
 	uifc.pop(strReadingIniFile);
-	sbbs_read_ini(
+	bool result = sbbs_read_ini(
 		fp
 		, cfg.filename
 		, NULL
@@ -1620,6 +1744,10 @@ static void mailsrvr_cfg(void)
 		);
 	iniCloseFile(fp);
 	uifc.pop(NULL);
+	if (!result) {
+		uifc.msgf("Error reading %s", cfg.filename);
+		return;
+	}
 	mail_startup_t saved_startup = startup;
 
 	while (1) {
@@ -1647,6 +1775,11 @@ static void mailsrvr_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Recipients Per Message", maximum(startup.max_recipients));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Messages Waiting", maximum(startup.max_msgs_waiting));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s bytes", "Max Receive Message Size", byte_count_to_str(startup.max_msg_size, tmp, sizeof(tmp)));
+		if (startup.max_requests_per_period < 1 || startup.request_rate_limit_period < 1)
+			SAFECOPY(str, strDisabled);
+		else
+			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period, duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Post Recipient", startup.post_to);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Default Recipient", startup.default_user);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Receive By Sysop Aliases", startup.options & MAIL_OPT_ALLOW_SYSOP_ALIASES ? "Yes" : "No");
@@ -1766,32 +1899,42 @@ static void mailsrvr_cfg(void)
 					startup.max_msg_size = (uint32_t)parse_byte_count(str, 1);
 				break;
 			case 16:
+				SAFECOPY(str, maximum(startup.max_requests_per_period));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
+					startup.max_requests_per_period = atoi(str);
+				if (startup.max_requests_per_period < 1)
+					break;
+				duration_to_vstr(startup.request_rate_limit_period, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
+					startup.request_rate_limit_period = (uint)parse_duration(str);
+				break;
+			case 17:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Override Recipient of SMTP Posts"
 						   , startup.post_to, sizeof startup.post_to -1, K_EDIT);
 				break;
-			case 17:
+			case 18:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Default Recipient (user alias)"
 				           , startup.default_user, sizeof(startup.default_user) - 1, K_EDIT);
 				break;
-			case 18:
+			case 19:
 				startup.options ^= MAIL_OPT_ALLOW_SYSOP_ALIASES;
 				break;
-			case 19:
+			case 20:
 				startup.options ^= MAIL_OPT_NO_NOTIFY;
 				break;
-			case 20:
+			case 21:
 				startup.notify_offline_users = !startup.notify_offline_users;
 				break;
-			case 21:
+			case 22:
 				startup.options ^= MAIL_OPT_ALLOW_RELAY;
 				break;
-			case 22:
+			case 23:
 				startup.options ^= BBS_OPT_NO_HOST_LOOKUP;
 				break;
-			case 23:
+			case 24:
 				startup.options ^= MAIL_OPT_DNSBL_CHKRECVHDRS;
 				break;
-			case 24:
+			case 25:
 				i = 0;
 				strcpy(opt[i++], "Refuse Session");
 				strcpy(opt[i++], "Silently Ignore");
@@ -1827,30 +1970,30 @@ static void mailsrvr_cfg(void)
 				else
 					startup.options &= ~MAIL_OPT_DNSBL_THROTTLE;
 				break;
-			case 25:
+			case 26:
 				startup.options ^= MAIL_OPT_DNSBL_SPAMHASH;
 				break;
-			case 26:
+			case 27:
 				startup.options ^= MAIL_OPT_KILL_READ_SPAM;
 				break;
-			case 27:
+			case 28:
 				SAFECOPY(str, duration(startup.spam_block_duration, false, strInfinite));
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Lifetime of ban of SPAM-bait taker IP", str, 8, K_EDIT) > 0)
 					startup.spam_block_duration = (uint)parse_duration(str);
 				break;
-			case 28:
+			case 29:
 				sendmail_cfg(&startup);
 				break;
-			case 29:
-				getar("Mail Server Login", startup.login_ars);
-				break;
 			case 30:
-				getar("Mail Archive", startup.archive_ars);
+				getar("Mail Server Login", startup.login_ars, /* helpbuf: */ NULL);
 				break;
 			case 31:
-				js_startup_cfg(&startup.js);
+				getar("Mail Archive", startup.archive_ars, /* helpbuf: */ NULL);
 				break;
 			case 32:
+				js_startup_cfg(&startup.js);
+				break;
+			case 33:
 				login_attempt_cfg(&startup.login_attempt);
 				break;
 			default:
@@ -1901,7 +2044,7 @@ static void services_cfg(void)
 	char               tmp[256];
 	char               str[256];
 	bool               enabled = false;
-	services_startup_t startup = {0};
+	services_startup_t startup = { .size = sizeof startup };
 
 	FILE*              fp = iniOpenFile(cfg.filename, /* for_modify? */ false);
 	if (fp == NULL) {
@@ -1909,7 +2052,7 @@ static void services_cfg(void)
 		return;
 	}
 	uifc.pop(strReadingIniFile);
-	sbbs_read_ini(
+	bool result = sbbs_read_ini(
 		fp
 		, cfg.filename
 		, NULL
@@ -1926,6 +2069,10 @@ static void services_cfg(void)
 		);
 	iniCloseFile(fp);
 	uifc.pop(NULL);
+	if (!result) {
+		uifc.msgf("Error reading %s", cfg.filename);
+		return;
+	}
 	services_startup_t saved_startup = startup;
 
 	while (1) {
@@ -1936,6 +2083,12 @@ static void services_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Lookup Client Hostname", startup.options & BBS_OPT_NO_HOST_LOOKUP ? "No" : "Yes");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Configuration File", startup.services_ini);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Requirements", startup.login_ars);
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Info Save", startup.login_info_save);
+		if (startup.max_connects_per_period < 1 || startup.connect_rate_limit_period < 1)
+			SAFECOPY(str, strDisabled);
+		else
+			snprintf(str, sizeof str, "%u per %s", startup.max_connects_per_period, duration_to_vstr(startup.connect_rate_limit_period, tmp, sizeof tmp));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Connections", str);
 		strcpy(opt[i++], "JavaScript Settings...");
 		strcpy(opt[i++], "Failed Login Attempts...");
 		opt[i][0] = '\0';
@@ -1970,12 +2123,25 @@ static void services_cfg(void)
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Services Configuration File", startup.services_ini, sizeof(startup.services_ini) - 1, K_EDIT);
 				break;
 			case 5:
-				getar("Services Login", startup.login_ars);
+				getar("Services Login", startup.login_ars, /* helpbuf: */ NULL);
 				break;
 			case 6:
-				js_startup_cfg(&startup.js);
+				getar("Services Login Info Saved", startup.login_info_save, /* helpbuf: */ NULL);
 				break;
 			case 7:
+				SAFECOPY(str, maximum(startup.max_connects_per_period));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Connections (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
+					startup.max_connects_per_period = atoi(str);
+				if (startup.max_connects_per_period < 1)
+					break;
+				duration_to_vstr(startup.connect_rate_limit_period, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Connection Rate Limit Period", str, 10, K_EDIT) > 0)
+					startup.connect_rate_limit_period = (uint)parse_duration(str);
+				break;
+			case 8:
+				js_startup_cfg(&startup.js);
+				break;
+			case 9:
 				login_attempt_cfg(&startup.login_attempt);
 				break;
 			default:
@@ -2032,7 +2198,7 @@ void server_cfg(void)
 			return;
 		}
 		uifc.pop(strReadingIniFile);
-		sbbs_read_ini(
+		bool result = sbbs_read_ini(
 			fp
 			, cfg.filename
 			, NULL //&global_startup
@@ -2049,6 +2215,10 @@ void server_cfg(void)
 			);
 		iniCloseFile(fp);
 		uifc.pop(NULL);
+		if (!result) {
+			uifc.msgf("Error reading %s", cfg.filename);
+			return;
+		}
 
 		int i = 0;
 		strcpy(opt[i++], "Global Settings");

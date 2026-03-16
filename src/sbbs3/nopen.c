@@ -52,7 +52,7 @@ int nopen(const char* str, uint access)
 #endif
 	while (((file = sopen(str, access, share, DEFFILEMODE)) == -1)
 	       && FILE_RETRY_ERRNO(errno) && count++ < LOOP_NOPEN)
-		FILE_RETRY_DELAY(count);
+		FILE_RETRY_DELAY(count, LOCK_RETRY_DELAY);
 	return file;
 }
 
@@ -125,6 +125,7 @@ static
 bool _fmutex_open(fmutex_t* fm, const char* text, long max_age, bool auto_remove)
 {
 	size_t len;
+	time_t now;
 #if !defined(NO_SOCKET_SUPPORT)
 	char   hostname[128];
 #endif
@@ -135,9 +136,10 @@ bool _fmutex_open(fmutex_t* fm, const char* text, long max_age, bool auto_remove
 
 	if (fm == NULL)
 		return false;
+	now = time(NULL);
 	fm->fd = -1;
 	fm->time = fdate(fm->name);
-	if (max_age > 0 && fm->time != -1 && (time(NULL) - fm->time) > max_age) {
+	if (max_age > 0 && fm->time != -1 && now > fm->time && (now - fm->time) > max_age) {
 		if (remove(fm->name) != 0)
 			return false;
 	}
@@ -255,7 +257,7 @@ bool backup(const char *fname, int backup_level, bool ren)
 {
 	char  oldname[MAX_PATH + 1];
 	char  newname[MAX_PATH + 1];
-	char* ext;
+	const char* ext;
 	int   i;
 	int   len;
 

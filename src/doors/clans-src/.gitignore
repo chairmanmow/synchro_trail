@@ -1,3 +1,13 @@
-debug.log
-Win32_Debug/*
-Win32_Release/*
+stage
+stagedk
+obj
+bin
+src/Win32_Debug
+src/Win32_Release
+src/mstrings.h
+tests/tmp
+test
+.claude
+Clans-*.tar.gz
+Clans-*.zip
+ClansDevKit-*.zip

@@ -1,13 +1,10 @@
 // logon.js
 
-// Synchronet v3.1 Default Logon Module
+// Synchronet v3.21 Default Logon Module
 
 // @format.tab-size 4, @format.use-tabs true
 
 "use strict";
-
-//if(user.number == 1)
-//	js.exec("jsdocs.js", {});
 
 require("sbbsdefs.js", 'SS_RLOGIN');
 require("nodedefs.js", 'NODE_QUIET');
@@ -36,14 +33,12 @@ if(options.guest_location === undefined || options.guest_location == true)
 if(options.guest_referral === undefined || options.guest_referral === true)
 	options.guest_referral = "\x01y\x01hWhere did you hear about this BBS?\r\n: \x01w";
 if(options.sysop_available) {
-	require("text.js", 'LiSysopAvailable');
 	var list = options.sysop_available.split(',');
-	bbs.replace_text(LiSysopAvailable, list[random(list.length)].trim());
+	bbs.replace_text(bbs.text.LiSysopAvailable, list[random(list.length)].trim());
 }
 if(options.sysop_unavailable) {
-	require("text.js", 'LiSysopNotAvailable');
 	var list = options.sysop_unavailable.split(',');
-	bbs.replace_text(LiSysopNotAvailable, list[random(list.length)].trim());
+	bbs.replace_text(bbs.text.LiSysopNotAvailable, list[random(list.length)].trim());
 }
 
 if(options.eval_first)
@@ -54,8 +49,8 @@ if(user.settings & USER_ICE_COLOR) {
 	cterm.bright_background(true);
 }
 
-if(options.email_validation == true) {
-	load({}, "emailval.js");
+if(options.email_validation !== undefined && options.email_validation === true) {
+	js.exec("emailval.js", {});
 	if(!bbs.online)
 		exit();
 }
@@ -73,7 +68,19 @@ if ((options.rlogin_auto_xtrn) && (bbs.sys_status & SS_RLOGIN) && (console.termi
 //Disable spinning cursor at pause prompts
 //bbs.node_settings|=NM_NOPAUSESPIN	
 
+var prompts = bbs.mods.prompts || load(bbs.mods.prompts = {}, "user_info_prompts.js");
+prompts.operation = "logon";
+
 if(user.security.restrictions&UFLAG_G) {
+	console.cond_newline();
+	if (system.version_hex >= 0x32100) { // Replaces the 3.20 Guest Logon user prompts
+		var guest_options = load("modopts.js", "logon:guest_prompts");
+		if(!guest_options)
+			guest_options = {};
+		if (guest_options.lang)
+			prompts.get_lang();
+		prompts.get_terminal(user, guest_options);
+	}
 	while(options.guest_name && bbs.online) {
 		write(options.guest_name);
 		const name = console.getstr(LEN_NAME,K_UPRLWR);
@@ -126,6 +133,33 @@ if(user.security.restrictions&UFLAG_G) {
 		}
 	}
 }
+else { // !Guest
+
+	// Replaces the 3.20 Logon user prompts
+	if(!user.name)
+		prompts.get_name();
+	if((system.newuser_questions & UQ_HANDLE) && !user.handle)
+		prompts.get_handle();
+	if((system.newuser_questions & UQ_ADDRESS) && !user.address)
+		prompts.get_address();
+	if((system.newuser_questions & (UQ_ADDRESS | UQ_LOCATION)) && !user.location)
+		prompts.get_location();
+	if((system.newuser_questions & UQ_ADDRESS) && !user.zipcode)
+		prompts.get_zipcode();
+	if((system.newuser_questions & UQ_PHONE) && !user.phone)
+		prompts.get_phone();
+	if((system.newuser_questions & UQ_SEX) && !user.gender)
+		prompts.get_gender();
+	if((system.newuser_questions & UQ_BIRTH)
+		&& typeof system.check_birthdate == "function"
+		&& !system.check_birthdate(user.birthdate))
+		prompts.get_birthdate();
+	if(!(system.newuser_questions & UQ_NONETMAIL) && !user.netmail)
+		prompts.get_netmail();
+}
+
+if(!bbs.online)
+	exit(1);
 
 // Force split-screen chat on ANSI users
 if(!(user.chat_settings&CHAT_SPLITP) && console.term_supports(USER_ANSI))
@@ -184,6 +218,9 @@ if (!(bbs.sys_status&SS_RLOGIN) || options.rlogin_xtrn_logon !== false) {
 		}
 	}
 
+	if(!bbs.online)
+		exit(1);
+
 	// Last few callers
 	console.aborted=false;
 	console.clear(LIGHTGRAY);
@@ -204,7 +241,11 @@ if (!(bbs.sys_status&SS_RLOGIN) || options.rlogin_xtrn_logon !== false) {
 
 	if(options.show_avatar && console.term_supports(USER_ANSI)) {
 		if(options.draw_avatar_above || options.draw_avatar_right)
-			bbs.mods.avatar_lib.draw(user.number, /* name: */null, /* netaddr: */null, options.draw_avatar_above, options.draw_avatar_right);
+			bbs.mods.avatar_lib.draw(user.number
+				, /* name: */null, /* netaddr: */null
+				, options.draw_avatar_above, options.draw_avatar_right
+				, /* top */false
+				, /* columns */ 80);
 		else
 			bbs.mods.avatar_lib.show(user.number);
 		console.attributes = 7;	// Clear the background attribute
@@ -225,14 +266,15 @@ if(options.rlogin_xtrn_menu
 		if (options.rlogin_xtrn_logoff == "full")
 			bbs.logoff(/* prompt: */true);
 		else {
-			if (console.yesno(bbs.text("LogOffQ")))
+			if (console.yesno(bbs.text(bbs.text.LogOffQ)))
 				break;
 		}
 	}
 	bbs.hangup();
 } else if(!(user.security.restrictions&UFLAG_G)
 	&& console.term_supports(USER_ANSI) 
-	&& options.set_avatar == true) {
+	&& options.set_avatar == true
+	&& bbs.mods.avatar_lib.options.enabled !== false) {
 	var avatar = bbs.mods.avatar_lib.read(user.number);
 	if(!avatar || (!avatar.data && !avatar.disabled)) {
 		alert("You have not selected an avatar.");

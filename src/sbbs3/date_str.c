@@ -34,9 +34,9 @@ char* date_format(scfg_t* cfg, char* buf, size_t size, bool verbal)
 {
 	if (verbal) {
 		switch (cfg->sys_date_fmt) {
-			case MMDDYY: snprintf(buf, size, "MonDD%cYY", cfg->sys_date_sep); return buf;
-			case DDMMYY: snprintf(buf, size, "DD%cMonYY", cfg->sys_date_sep); return buf;
-			case YYMMDD: snprintf(buf, size, "YY%cMonDD", cfg->sys_date_sep); return buf;
+			case MMDDYY: snprintf(buf, size, "MonDD%cYY", cfg->sys_vdate_sep); return buf;
+			case DDMMYY: snprintf(buf, size, "DD%cMonYY", cfg->sys_vdate_sep); return buf;
+			case YYMMDD: snprintf(buf, size, "YY%cMonDD", cfg->sys_vdate_sep); return buf;
 		}
 	}
 	else switch (cfg->sys_date_fmt) {
@@ -159,11 +159,11 @@ char* unixtodstr(scfg_t* cfg, time32_t t, char *str)
 }
 
 /****************************************************************************/
-/* Return 8-char numeric or verbal date	or "never" when passed 0			*/
+/* Return 8-char numeric or verbal date	or "never" when t is <= 0			*/
 /****************************************************************************/
 char* datestr(scfg_t* cfg, time_t t, char* str)
 {
-	if (t == 0)
+	if (t <= 0)
 		return cfg->text == NULL ? "--------" : cfg->text[Never];
 	if (!cfg->sys_date_verbal)
 		return unixtodstr(cfg, (time32_t)t, str);
@@ -181,13 +181,13 @@ char* verbal_datestr(scfg_t* cfg, time_t t, char* str)
 	char      fmt[32] = "";
 	switch (cfg->sys_date_fmt) {
 		case MMDDYY:
-			snprintf(fmt, sizeof fmt, "%%b%%d%c%%y", cfg->sys_date_sep);
+			snprintf(fmt, sizeof fmt, "%%b%%d%c%%y", cfg->sys_vdate_sep);
 			break;
 		case DDMMYY:
-			snprintf(fmt, sizeof fmt, "%%d%c%%b%%y", cfg->sys_date_sep);
+			snprintf(fmt, sizeof fmt, "%%d%c%%b%%y", cfg->sys_vdate_sep);
 			break;
 		case YYMMDD:
-			snprintf(fmt, sizeof fmt, "%%y%c%%b%%d", cfg->sys_date_sep);
+			snprintf(fmt, sizeof fmt, "%%y%c%%b%%d", cfg->sys_vdate_sep);
 			break;
 	}
 	strftime(str, 9, fmt, &tm);
@@ -195,35 +195,95 @@ char* verbal_datestr(scfg_t* cfg, time_t t, char* str)
 }
 
 /****************************************************************************/
-/* Takes the value 'sec' and makes a string the format HH:MM:SS             */
+/* Takes the value 'seconds' and makes a string in the format HH:MM:SS      */
 /****************************************************************************/
-char* sectostr(uint sec, char *str)
+char* sectostr(uint seconds, char *str)
 {
-	uchar hour, min, sec2;
-
-	hour = (sec / 60) / 60;
-	min = (sec / 60) - (hour * 60);
-	sec2 = sec - ((min + (hour * 60)) * 60);
-	sprintf(str, "%2.2d:%2.2d:%2.2d", hour, min, sec2);
+	sprintf(str, "%02d:%02d:%02d"
+		, seconds / (60 * 60), (seconds % (60 * 60)) / 60, seconds % 60);
 	return str;
 }
 
-/* Returns a shortened version of "HH:MM:SS" formatted seconds value */
-char* seconds_to_str(uint seconds, char* str)
+/****************************************************************************/
+/* skipping leading zeros and colons in the return (pointer) value			*/
+/****************************************************************************/
+static char* skip_zeroes(char* p)
 {
-	char* p = sectostr(seconds, str);
-	while (*p == '0' || *p == ':')
+	while ((*p == '0' || *p == ':') && *(p + 1) != '\0')
 		p++;
 	return p;
 }
 
-/* Returns a duration in minutes into a string */
-char* minutes_to_str(uint min, char* str, size_t size)
+/****************************************************************************/
+/* Returns a shortened version of "HH:MM:SS" formatted seconds value		*/
+/* by skipping leading zeros and colons in the return (pointer) value		*/
+/* The returned string will be at least one character long					*/
+/****************************************************************************/
+char* seconds_to_str(uint seconds, char* str)
 {
-	safe_snprintf(str, size, "%ud %uh %um"
-	              , min / (24 * 60)
-	              , (min % (24 * 60)) / 60
-	              , min % 60);
+	return skip_zeroes(sectostr(seconds, str));
+}
+
+/****************************************************************************/
+/* Takes the value 'minutes' and makes a string in the format HH:MM         */
+/* When not verbose, skips leading zeros and colon in return (pointer) val	*/
+/* The returned string will be at least one character long					*/
+/****************************************************************************/
+char* minutes_as_hhmm(uint minutes, char *str, size_t size, bool verbose)
+{
+	snprintf(str, size, "%02d:%02d", minutes / 60, minutes % 60);
+	if (!verbose)
+		return skip_zeroes(str);
+	return str;
+}
+
+/****************************************************************************/
+/* Format a duration in minutes into a string with one or more suffixes		*/
+/* The returned string will be at least two characters long					*/
+/****************************************************************************/
+char* minutes_to_str(uint minutes, char* str, size_t size, bool estimate, bool words)
+{
+	if (minutes > 60 && estimate) {
+		if (words)
+			duration_estimate_to_vstr(minutes * 60, str, size, /* unit (one hour): */ 60 * 60, /* precision: */ 1);
+		else
+			duration_estimate_to_str(minutes * 60, str, size, /* unit (one hour): */ 60 * 60, /* precision: */ 1);
+	} else {
+		const char* m_suffix = "m";
+		const char* h_suffix = "h";
+		const char* d_suffix = "d";
+		const char* plural = "";
+
+		if (words) {
+			m_suffix = " minute";
+			h_suffix = " hour";
+			d_suffix = " day";
+			plural = "s";
+		}
+		if (minutes < 60)
+			safe_snprintf(str, size, "%u%s%s"
+				, minutes, m_suffix
+				, minutes == 1 ? "" : plural);
+		else if (minutes < 24 * 60) {
+			if (minutes % 60 == 0)
+				safe_snprintf(str, size, "%u%s%s"
+					, minutes / 60, h_suffix
+					, minutes / 60 == 1 ? "" : plural);
+			else
+				safe_snprintf(str, size, "%u%s%s %u%s%s"
+					, minutes / 60, h_suffix
+					, minutes / 60 == 1 ? "" : plural
+					, minutes % 60, m_suffix
+					, minutes % 60 == 1 ? "" : plural);
+		} else
+			safe_snprintf(str, size, "%u%s%s %u%s%s %u%s%s"
+				, minutes / (24 * 60), d_suffix
+				, minutes / (24 * 60) == 1 ? "" : plural
+				, (minutes % (24 * 60)) / 60, h_suffix
+				, ((minutes % (24 * 60)) / 60) == 1 ? "" : plural
+				, minutes % 60, m_suffix
+				, (minutes % 60) == 1 ? "" : plural);
+	}
 	return str;
 }
 
@@ -243,6 +303,7 @@ char* tm_as_hhmm(scfg_t* cfg, struct tm* tm, char* str)
 }
 
 /****************************************************************************/
+/* Convert time_t to string representation of *localtime* in hh:mm[a|p]		*/
 /* Returns 5 or 6 character string, depending on configuration				*/
 /****************************************************************************/
 char* time_as_hhmm(scfg_t* cfg, time_t t, char* str)
@@ -253,6 +314,35 @@ char* time_as_hhmm(scfg_t* cfg, time_t t, char* str)
 		return str;
 	}
 	return tm_as_hhmm(cfg, &tm, str);
+}
+
+/****************************************************************************/
+/* Returns 8 character string (e.g. hh:mm:ss or hh:mm am/pm)				*/
+/****************************************************************************/
+char* tm_as_hhmmss(scfg_t* cfg, struct tm* tm, char* str, size_t size)
+{
+	if (cfg != NULL && (cfg->sys_misc & SM_MILITARY))
+		snprintf(str, size, "%02d:%02d:%02d"
+		        , tm->tm_hour, tm->tm_min, tm->tm_sec);
+	else
+		snprintf(str, size, "%02d:%02d %cm"
+		        , tm->tm_hour > 12 ? tm->tm_hour - 12 : tm->tm_hour == 0 ? 12 : tm->tm_hour
+		        , tm->tm_min, tm->tm_hour >= 12 ? 'p' : 'a');
+	return str;
+}
+
+/****************************************************************************/
+/* Convert time_t to string representation of *localtime* in hh:mm:ss 		*/
+/* or hh:mm am/pm depending on configuration								*/
+/****************************************************************************/
+char* time_as_hhmmss(scfg_t* cfg, time_t t, char* str, size_t size)
+{
+	struct tm tm;
+	if (t == INVALID_TIME || localtime_r(&t, &tm) == NULL) {
+		snprintf(str, size, "??:??:??");
+		return str;
+	}
+	return tm_as_hhmmss(cfg, &tm, str, size);
 }
 
 /****************************************************************************/

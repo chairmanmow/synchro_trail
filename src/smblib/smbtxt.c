@@ -45,6 +45,10 @@ char* smb_getmsgtxt(smb_t* smb, smbmsg_t* msg, uint mode)
 	uint32_t lzh_decoded;
 	int      l = 0, length;
 
+	if (smb->sdt_fp == NULL) {
+		safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s msgbase not open", __FUNCTION__);
+		return NULL;
+	}
 	if ((buf = (char*)malloc(sizeof(char))) == NULL) {
 		safe_snprintf(smb->last_error, sizeof(smb->last_error)
 		              , "%s malloc failure of %" XP_PRIsize_t "u bytes for buffer"
@@ -326,18 +330,18 @@ static bool mime_getattachment(const char* beg, const char* end, char* attachmen
 			FIND_CHAR(p, '\n');
 			continue;
 		}
-		char* filename = strstr(p, "filename=");
+		const char* filename = strstr(p, "filename=");
 		if (filename == NULL) {
 			FIND_CHAR(p, '\n');
 			continue;
 		}
 		filename += 9;
-		char* term;
+		const char* term;
 		if (*filename == '"') {
 			filename++;
 			term = strchr(filename, '"');
 		} else {
-			char* wsp = filename;
+			const char* wsp = filename;
 			FIND_WHITESPACE(wsp);
 			term = strchr(filename, ';');
 			if (term > wsp)
@@ -482,12 +486,12 @@ static const char* mime_getpart(const char* buf, const char* content_type, const
 		*p = 0;
 	truncsp(boundary); // RC2046: "NOT ending with white space"
 	txt = buf;
-	while ((p = strstr(txt, boundary)) != NULL) {
+	while ((p = (char*)strstr(txt, boundary)) != NULL) {
 		txt = p + strlen(boundary);
 		if (strncmp(txt, "--\r\n", 4) == 0)
 			break;
 		SKIP_WHITESPACE(txt);
-		p = strstr(txt, "\r\n\r\n");    /* End of header */
+		p = (char*)strstr(txt, "\r\n\r\n");    /* End of header */
 		if (p == NULL)
 			continue;
 		for (content_type = txt; content_type < p; content_type++) {
@@ -520,7 +524,7 @@ static const char* mime_getpart(const char* buf, const char* content_type, const
 
 		txt = p + 4;    // strlen("\r\n\r\n")
 		SKIP_WHITESPACE(txt);
-		if ((p = strstr(txt, boundary)) != NULL)
+		if ((p = (char*)strstr(txt, boundary)) != NULL)
 			*p = 0;
 		return txt;
 	}

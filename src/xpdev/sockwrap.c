@@ -480,13 +480,16 @@ int nonblocking_connect(SOCKET sock, struct sockaddr* addr, size_t size, unsigne
 	if (result == SOCKET_ERROR) {
 		result = SOCKET_ERRNO;
 		if (result == EWOULDBLOCK || result == EINPROGRESS) {
+			optlen = sizeof(result);
 			if (socket_writable(sock, timeout * 1000)) {
-				result = 0;
-			}
-			else {
-				optlen = sizeof(result);
 				if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (void*)&result, &optlen) == SOCKET_ERROR)
 					result = SOCKET_ERRNO;
+			}
+			else {
+				if (getsockopt(sock, SOL_SOCKET, SO_ERROR, (void*)&result, &optlen) == SOCKET_ERROR)
+					result = SOCKET_ERRNO;
+				if (result == 0)
+					result = ETIMEDOUT;
 			}
 		}
 	}
@@ -631,7 +634,7 @@ DLLEXPORT int xp_inet_pton(int af, const char *src, void *dst)
 	if (getaddrinfo(src, NULL, &hints, &res))
 		return -1;
 
-	for (cur = res; cur; cur++) {
+	for (cur = res; cur; cur = cur->ai_next) {
 		if (cur->ai_addr->sa_family == af)
 			break;
 	}

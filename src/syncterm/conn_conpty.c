@@ -28,18 +28,18 @@ get_utf8_span(const uint8_t *b, size_t sz)
 			b++;
 		}
 		else if ((*b & 0xe0) == 0xc0) {
-			b+= 2;
-			if ((b + 1) <= (last))
+			b += 2;
+			if ((b - 1) <= last)
 				ret += 2;
 		}
 		else if ((*b & 0xf0) == 0xe0) {
-			b+= 3;
-			if ((b + 2) <= (last))
+			b += 3;
+			if ((b - 1) <= last)
 				ret += 3;
 		}
 		else if ((*b & 0xf8) == 0xf0) {
-			b+= 4;
-			if ((b + 3) <= (last))
+			b += 4;
+			if ((b - 1) <= last)
 				ret += 4;
 		}
 		else
@@ -54,7 +54,6 @@ conpty_input_thread(void *args)
 	DWORD  rd;
 	size_t buffered;
 	size_t buffer;
-	int    i;
 	DWORD  ec;
 	size_t fill = 0;
 	size_t utf8_span = 0;
@@ -158,9 +157,9 @@ int conpty_connect(struct bbslist *bbs)
 			.cb = sizeof(STARTUPINFOEXA)
 		}
 	};
-	SIZE_T sz;
+	SIZE_T sz = 0;
 	// "Note  This initial call will return an error by design. This is expected behavior."
-	!InitializeProcThreadAttributeList(NULL, 1, 0, &sz);
+	InitializeProcThreadAttributeList(NULL, 1, 0, &sz);
 	si.lpAttributeList = HeapAlloc(heap, 0, sz);
 	if (si.lpAttributeList == NULL) {
 		uifcmsg("TODO", "HeapAlloc Failed");
@@ -297,6 +296,7 @@ conpty_close(void)
 	CloseHandle(inputWrite);
 	CloseHandle(outputRead);
 	CloseHandle(outputWrite);
+	return 0;
 }
 
 #endif

@@ -30,12 +30,12 @@
 #include "OpenDoor.h"          // Include the OpenDoors Library!
 #include "xpendian.h"
 
+#include "netmail.h"  //The Inter-BBS Kit (defines _PACK)
 #include "gamestru.h"   // found in the game's own directory
 #ifdef KEEP_REG
 #include "regkey.h"          // Include the RegKey Library!
 #endif
 #include "display.h"                 // To display internally imbedded ANS,AVT,RIP,ASC files
-#include "netmail.h"  //The Inter-BBS Kit
 #include "gregedit.h"  // needed for editor
 
 
@@ -61,6 +61,9 @@ EXT tMessageHeader MessageHeader;
 //#include "art/plylst.h"
 
 #include "gen_defs.h"
+#ifndef FAR16
+#define FAR16
+#endif
 #include "genwrap.h"
 #include "dirwrap.h"
 #include "filewrap.h"
@@ -74,7 +77,7 @@ EXT tMessageHeader MessageHeader;
 //#include <dir.h>
 #include <ctype.h>
 #include <stdio.h>
-#include <ciolib.h>
+//#include <ciolib.h>
 #include <fcntl.h>
 #include <string.h>
 #include <stdlib.h>
@@ -191,7 +194,7 @@ void MakeTopBBS(INT16 average);         // Get a list of top BBSs into memory (a
 void SortBBSList( struct bbs_list *temp_bbs ); // Sort bbss according to wealth
 INT16 CheckHandle(char *input); // Checks to make sure only one player on each BBS has the same handle
 void g_clr_scr(void);
-char PromptBox( char prompt1[200], char prompt2[200], char responses[20], INT16 bottom );
+char PromptBox( const char *prompt1, const char *prompt2, const char *responses, INT16 bottom );
 void SendIBBSMsg( INT16 reply); // The function to allow a user to send a msg to other users.
 #ifdef OPEN_DOOR_6
 tODEditMenuResult EditQuit( void *unused );
@@ -207,6 +210,7 @@ void UpdateTime( void );
 #define ANS_FILE -4
 #define ASC_FILE -5
 INT16 g_send_file( char *filename);
+INT16 g_send_file_pause( char *filename);
 INT16 SendArchive(char *file, INT16 type);
 void HelpDecrypt( char *line);
 void ListBBSs( void ); // Lists the BBS in the Tournament League

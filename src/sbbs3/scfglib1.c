@@ -28,6 +28,8 @@
 #include "sockwrap.h"    // IPPORT_MQTT
 #include "str_util.h"
 
+const char* scfg_addr_list_separator = ",";
+
 bool allocerr(char* error, size_t maxerrlen, const char* fname, const char *item, size_t size)
 {
 	snprintf(error, maxerrlen, "%s: allocating %u bytes of memory for %s"
@@ -62,8 +64,8 @@ bool read_node_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 		result = true;
 
 	SAFECOPY(cfg->node_phone, iniGetString(ini, ROOT_SECTION, "phone", "", value));
-	SAFECOPY(cfg->node_daily.cmd, iniGetString(ini, ROOT_SECTION, "daily", "", value));
-	cfg->node_daily.misc = iniGetUInteger(ini, ROOT_SECTION, "daily_settings", 0);
+	SAFECOPY(cfg->node_daily_cmd, iniGetString(ini, ROOT_SECTION, "daily", "", value));
+	cfg->node_daily_misc = iniGetUInteger(ini, ROOT_SECTION, "daily_settings", 0);
 	SAFECOPY(cfg->text_dir, iniGetString(ini, ROOT_SECTION, "text_dir", "../text/", value));
 	SAFECOPY(cfg->temp_dir, iniGetString(ini, ROOT_SECTION, "temp_dir", "temp", value));
 	SAFECOPY(cfg->node_arstr, iniGetString(ini, ROOT_SECTION, "ars", "", value));
@@ -74,6 +76,62 @@ bool read_node_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	iniFreeStringList(ini);
 
 	return result;
+}
+
+/****************************************************************************/
+/****************************************************************************/
+static struct loadable_module read_loadable_mod(scfg_t* cfg, str_list_t ini, const char* name, const char* default_cmd)
+{
+	struct loadable_module mod = {};
+	uint count = 0;
+	char* cmd;
+	char cmd_key[INI_MAX_VALUE_LEN];
+	char ars_key[INI_MAX_VALUE_LEN];
+	char value[INI_MAX_VALUE_LEN];
+
+	while(1) {
+		if (count < 1) {
+			SAFECOPY(cmd_key, name);
+			snprintf(ars_key, sizeof ars_key, "%s.ars", name);
+		} else {
+			snprintf(cmd_key, sizeof cmd_key, "%s.%u", name, count);
+			snprintf(ars_key, sizeof ars_key, "%s.%u.ars", name, count);
+			default_cmd = NULL;
+		}
+		if ((cmd = iniGetString(ini, NULL, cmd_key, default_cmd, value)) == NULL)
+			break;
+		strListPush(&mod.cmd, cmd);
+		strListPush(&mod.ars, iniGetString(ini, NULL, ars_key, "", value));
+		++count;
+	}
+	return mod;
+}
+
+/****************************************************************************/
+/****************************************************************************/
+static fevent_t read_fixed_event(scfg_t* cfg, str_list_t ini, const char* name)
+{
+	fevent_t event = {};
+	uint count = 0;
+	char* cmd;
+	char section[INI_MAX_VALUE_LEN];
+	char value[INI_MAX_VALUE_LEN];
+
+	while(1) {
+		if (count < 1)
+			snprintf(section, sizeof section, "%s_event", name);
+		else
+			snprintf(section, sizeof section, "%s_event.%u", name, count);
+		if ((cmd = iniGetString(ini, section, "cmd", NULL, value)) == NULL)
+			break;
+		strListPush(&event.cmd, cmd);
+		if ((event.misc = realloc_or_free(event.misc, (count + 1) * sizeof (*event.misc))) == NULL) {
+			break;
+		}
+		event.misc[count] = iniGetUInteger(ini, section, "settings", 0);
+		++count;
+	}
+	return event;
 }
 
 /****************************************************************************/
@@ -117,6 +175,7 @@ bool read_main_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	cfg->sys_misc = iniGetUInteger(ini, ROOT_SECTION, "settings", 0);
 	cfg->sys_date_fmt = iniGetInteger(ini, ROOT_SECTION, "date_fmt", cfg->sys_misc & SM_EURODATE ? DDMMYY : MMDDYY);
 	cfg->sys_date_sep = *iniGetString(ini, NULL, "date_sep", "/", value);
+	cfg->sys_vdate_sep = *iniGetString(ini, NULL, "vdate_sep", "'", value);
 	cfg->sys_date_verbal = iniGetBool(ini, NULL, "date_verbal", false);
 	cfg->sys_login = iniGetUInteger(ini, ROOT_SECTION, "login", 0);
 	cfg->sys_pwdays = iniGetInteger(ini, ROOT_SECTION, "pwdays", 0);
@@ -148,18 +207,16 @@ bool read_main_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	cfg->valuser = iniGetUInteger(ini, ROOT_SECTION, "valuser", 0);
 	cfg->erruser = iniGetUInteger(ini, ROOT_SECTION, "erruser", 0);
 	cfg->errlevel = (uchar)iniGetUInteger(ini, ROOT_SECTION, "errlevel", LOG_CRIT);
+	cfg->stats_interval = iniGetUInteger(ini, ROOT_SECTION, "stats_interval", 5);
+	cfg->cache_filter_files = iniGetUInteger(ini, ROOT_SECTION, "cache_filter_files", 5);
 
 	// fixed events
-	SAFECOPY(cfg->sys_logon.cmd, iniGetString(ini, "logon_event", "cmd", "", value));
-	cfg->sys_logon.misc = iniGetUInt32(ini, "logon_event", "settings", 0);
-	SAFECOPY(cfg->sys_logout.cmd, iniGetString(ini, "logout_event", "cmd", "", value));
-	cfg->sys_logout.misc = iniGetUInt32(ini, "logout_event", "settings", 0);
-	SAFECOPY(cfg->sys_daily.cmd, iniGetString(ini, "daily_event", "cmd", "", value));
-	cfg->sys_daily.misc = iniGetUInt32(ini, "daily_event", "settings", 0);
-	SAFECOPY(cfg->sys_monthly.cmd, iniGetString(ini, "monthly_event", "cmd", "", value));
-	cfg->sys_monthly.misc = iniGetUInt32(ini, "monthly_event", "settings", 0);
-	SAFECOPY(cfg->sys_weekly.cmd, iniGetString(ini, "weekly_event", "cmd", "", value));
-	cfg->sys_weekly.misc = iniGetUInt32(ini, "weekly_event", "settings", 0);
+	cfg->sys_newuser = read_fixed_event(cfg, ini, "newuser");
+	cfg->sys_logon = read_fixed_event(cfg, ini, "logon");
+	cfg->sys_logout = read_fixed_event(cfg, ini, "logout");
+	cfg->sys_daily = read_fixed_event(cfg, ini, "daily");
+	cfg->sys_monthly = read_fixed_event(cfg, ini, "monthly");
+	cfg->sys_weekly = read_fixed_event(cfg, ini, "weekly");
 
 	named_str_list_t** sections = iniParseSections(ini);
 
@@ -253,35 +310,39 @@ bool read_main_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	/* Modules */
 	/***********/
 	section = iniGetParsedSection(sections, "module", /* cut: */ true);
-	SAFECOPY(cfg->logon_mod, iniGetString(section, NULL, "logon", "logon", value));
-	SAFECOPY(cfg->logoff_mod, iniGetString(section, NULL, "logoff", "", value));
-	SAFECOPY(cfg->newuser_mod, iniGetString(section, NULL, "newuser", "newuser", value));
-	SAFECOPY(cfg->usercfg_mod, iniGetString(section, NULL, "usercfg", "", value));
-	SAFECOPY(cfg->login_mod, iniGetString(section, NULL, "login", "login", value));
-	SAFECOPY(cfg->logout_mod, iniGetString(section, NULL, "logout", "", value));
-	SAFECOPY(cfg->sync_mod, iniGetString(section, NULL, "sync", "", value));
-	SAFECOPY(cfg->expire_mod, iniGetString(section, NULL, "expire", "", value));
-	SAFECOPY(cfg->readmail_mod, iniGetString(section, NULL, "readmail", "", value));
-	SAFECOPY(cfg->scanposts_mod, iniGetString(section, NULL, "scanposts", "", value));
-	SAFECOPY(cfg->scansubs_mod, iniGetString(section, NULL, "scansubs", "", value));
-	SAFECOPY(cfg->listmsgs_mod, iniGetString(section, NULL, "listmsgs", "", value));
-	SAFECOPY(cfg->textsec_mod, iniGetString(section, NULL, "textsec", "text_sec", value));
-	SAFECOPY(cfg->chatsec_mod, iniGetString(section, NULL, "chatsec", "chat_sec", value));
-	SAFECOPY(cfg->automsg_mod, iniGetString(section, NULL, "automsg", "automsg", value));
-	SAFECOPY(cfg->feedback_mod, iniGetString(section, NULL, "feedback", "", value));
-	SAFECOPY(cfg->xtrnsec_mod, iniGetString(section, NULL, "xtrnsec", "xtrn_sec", value));
-	SAFECOPY(cfg->nodelist_mod, iniGetString(section, NULL, "nodelist", "nodelist", value));
-	SAFECOPY(cfg->userlist_mod, iniGetString(section, NULL, "userlist", "", value));
-	SAFECOPY(cfg->whosonline_mod, iniGetString(section, NULL, "whosonline", "nodelist -active", value));
-	SAFECOPY(cfg->privatemsg_mod, iniGetString(section, NULL, "privatemsg", "privatemsg", value));
-	SAFECOPY(cfg->logonlist_mod, iniGetString(section, NULL, "logonlist", "logonlist", value));
-	SAFECOPY(cfg->prextrn_mod, iniGetString(section, NULL, "prextrn", "prextrn", value));
-	SAFECOPY(cfg->postxtrn_mod, iniGetString(section, NULL, "postxtrn", "postxtrn", value));
-	SAFECOPY(cfg->scandirs_mod, iniGetString(section, NULL, "scandirs", "", value));
-	SAFECOPY(cfg->listfiles_mod, iniGetString(section, NULL, "listfiles", "", value));
-	SAFECOPY(cfg->fileinfo_mod, iniGetString(section, NULL, "fileinfo", "", value));
-	SAFECOPY(cfg->batxfer_mod, iniGetString(section, NULL, "batxfer", "", value));
-	SAFECOPY(cfg->tempxfer_mod, iniGetString(section, NULL, "tempxfer", "tempxfer", value));
+	cfg->logon_mod = read_loadable_mod(cfg, section, "logon", "logon");
+	cfg->logoff_mod = read_loadable_mod(cfg, section, "logoff", "");
+	cfg->newuser_prompts_mod = read_loadable_mod(cfg, section, "newuser_prompts", "newuser_prompts");
+	cfg->newuser_info_mod = read_loadable_mod(cfg, section, "newuser_info", "newuser_info");
+	cfg->newuser_mod = read_loadable_mod(cfg, section, "newuser", "newuser");
+	cfg->usercfg_mod = read_loadable_mod(cfg, section, "usercfg", "user_settings");
+	cfg->login_mod = read_loadable_mod(cfg, section, "login", "login");
+	cfg->logout_mod = read_loadable_mod(cfg, section, "logout", "");
+	cfg->sync_mod = read_loadable_mod(cfg, section, "sync", "");
+	cfg->expire_mod = read_loadable_mod(cfg, section, "expire", "");
+	cfg->emailsec_mod = read_loadable_mod(cfg, section, "emailsec", "email_sec");
+	cfg->readmail_mod = read_loadable_mod(cfg, section, "readmail", "");
+	cfg->scanposts_mod = read_loadable_mod(cfg, section, "scanposts", "");
+	cfg->scansubs_mod = read_loadable_mod(cfg, section, "scansubs", "");
+	cfg->listmsgs_mod = read_loadable_mod(cfg, section, "listmsgs", "");
+	cfg->textsec_mod = read_loadable_mod(cfg, section, "textsec", "text_sec");
+	cfg->chatsec_mod = read_loadable_mod(cfg, section, "chatsec", "chat_sec");
+	cfg->automsg_mod = read_loadable_mod(cfg, section, "automsg", "automsg");
+	cfg->feedback_mod = read_loadable_mod(cfg, section, "feedback", "");
+	cfg->xtrnsec_mod = read_loadable_mod(cfg, section, "xtrnsec", "xtrn_sec");
+	cfg->nodelist_mod = read_loadable_mod(cfg, section, "nodelist", "nodelist");
+	cfg->userlist_mod = read_loadable_mod(cfg, section, "userlist", "");
+	cfg->whosonline_mod = read_loadable_mod(cfg, section, "whosonline", "nodelist -active");
+	cfg->privatemsg_mod = read_loadable_mod(cfg, section, "privatemsg", "privatemsg");
+	cfg->logonlist_mod = read_loadable_mod(cfg, section, "logonlist", "logonlist");
+	cfg->prextrn_mod = read_loadable_mod(cfg, section, "prextrn", "prextrn");
+	cfg->postxtrn_mod = read_loadable_mod(cfg, section, "postxtrn", "postxtrn");
+	cfg->scandirs_mod = read_loadable_mod(cfg, section, "scandirs", "");
+	cfg->listfiles_mod = read_loadable_mod(cfg, section, "listfiles", "");
+	cfg->fileinfo_mod = read_loadable_mod(cfg, section, "fileinfo", "");
+	cfg->batxfer_mod = read_loadable_mod(cfg, section, "batxfer", "batchxfer");
+	cfg->tempxfer_mod = read_loadable_mod(cfg, section, "tempxfer", "tempxfer");
+	cfg->uselect_mod = read_loadable_mod(cfg, section, "uselect", "");
 
 	/*******************/
 	/* Validation Sets */
@@ -514,7 +575,7 @@ bool read_msgs_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	/* FidoNet */
 	/***********/
 	section = iniGetParsedSection(sections, "fidonet", /* cut: */ true);
-	str_list_t faddr_list = iniGetStringList(section, NULL, "addr_list", ",", "");
+	str_list_t faddr_list = iniGetStringList(section, NULL, "addr_list", scfg_addr_list_separator, "");
 	cfg->total_faddrs = strListCount(faddr_list);
 
 	if ((cfg->faddr = (faddr_t *)malloc(sizeof(faddr_t) * cfg->total_faddrs)) == NULL)
@@ -833,6 +894,8 @@ int getxtrnnum(scfg_t* cfg, const char* code)
 {
 	int i;
 
+	if (*code == '\0')
+		return cfg->total_xtrns;
 	for (i = 0; i < cfg->total_xtrns; i++) {
 		if (stricmp(cfg->xtrn[i]->code, code) == 0)
 			break;

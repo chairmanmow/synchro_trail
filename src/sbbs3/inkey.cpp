@@ -122,10 +122,14 @@ int sbbs_t::inkey(int mode, unsigned int timeout)
 	getkey_last_activity = time(NULL);
 
 	/* Is this a control key */
-	if (!(mode & K_CTRLKEYS) && ch < ' ') {
+	if (!(mode & (K_CTRLKEYS | K_EXTKEYS)) && ch < ' ') {
 		if (cfg.ctrlkey_passthru & (1 << ch))    /*  flagged as passthru? */
 			return ch;                    /* do not handle here */
 		return handle_ctrlkey(ch, mode);
+	} else if (ch == ESC && (mode & K_EXTKEYS)) {
+		char key = ch;
+		if (term->parse_input_sequence(key, mode))
+			return key;
 	}
 
 	/* Translate (not control character) input into CP437 */
@@ -181,12 +185,8 @@ char sbbs_t::handle_ctrlkey(char ch, int mode)
 		term->saveline();
 		attr(LIGHTGRAY);
 		term->newline();
-		bputs(text[RawMsgInputModeIsNow]);
-		if (console & CON_RAW_IN)
-			bputs(text[Off]);
-		else
-			bputs(text[On]);
 		console ^= CON_RAW_IN;
+		bputs(text[RawMsgInputModeIsNow]);
 		term->newline(2);
 		term->restoreline();
 		term->lncntr = 0;
@@ -238,7 +238,7 @@ char sbbs_t::handle_ctrlkey(char ch, int mode)
 
 	switch (ch) {
 		case CTRL_O:    /* Ctrl-O toggles pause temporarily */
-			console ^= CON_PAUSEOFF;
+			console ^= CON_PAUSE;
 			return 0;
 		case CTRL_P:    /* Ctrl-P Private node-node comm */
 			if (!(sys_status & SS_USERON))
@@ -302,7 +302,7 @@ char sbbs_t::handle_ctrlkey(char ch, int mode)
 			bprintf(text[TiLogon], timestr(logontime));
 			bprintf(text[TiNow], timestr(now), smb_zonestr(sys_timezone(&cfg), NULL));
 			bprintf(text[TiTimeon]
-			        , sectostr((uint)(now - logontime), tmp));
+			        , sectostr(timeon(), tmp));
 			bprintf(text[TiTimeLeft]
 			        , sectostr(timeleft, tmp));
 			if (sys_status & SS_EVENT)

@@ -20,13 +20,15 @@ const MessageWindow_Attr=7;
 const MessageTimeout=50;		/* 100ths of a second */
 
 
-load("sbbsdefs.js");
-load("nodedefs.js");
-load("lightbar.js");
-load("graphic.js");
+require("sbbsdefs.js", "SYS_CLOSED");
+require("nodedefs.js", "NODE_WFC");
+require("lightbar.js", "Lightbar");
+require("graphic.js", "Graphic");
 bbs.command_str='';	// Clear STR (Contains the EXEC for default.js)
-load("text.js");
-load("str_cmds.js");
+require("text.js", "MsgSubj");
+require("str_cmds.js", "str_cmds");
+require("cterm_lib.js", "supports_jpegxl");
+require('syncterm_cache.js', 'SyncTERMCache');
 var ansiterm = bbs.mods.ansiterm_lib;
 if(!ansiterm)
 	ansiterm = bbs.mods.ansiterm_lib = load({}, "ansiterm_lib.js");
@@ -41,6 +43,72 @@ var bg_names;
 bg_names=directory(system.text_dir+"/backgrounds/*.bin");
 if(bg_names.length>0) {
 	bg_filename=bg_names[random(bg_names.length)];
+}
+var jxl_bg_filename;
+jxl_bg_names = directory(system.text_dir+"/backgrounds/*.jxl");
+var use_jxl = false;
+var cache;
+var screen_dims;
+var font_dims;
+
+function recreate_jxl_buffer()
+{
+	if (use_jxl) {
+		// hardcoded dimensions for now...
+		var sw = 640;
+		var sh = 400;
+		var sx = 0;
+		var sy = 0;
+		if (screen_dims.width < sw) {
+			sx = (sw - screen_dims.width) / 2;
+			sw = screen_dims.width;
+		}
+		if (screen_dims.height < sh) {
+			sy = (sh - screen_dims.height) / 2;
+			sh = screen_dims.height;
+		}
+		var dx = (screen_dims.width - sw) / 2;
+		var dy = (screen_dims.height - sh) / 2;
+		var fname = jxl_bg_names[random(jxl_bg_names.length)];
+		console.write('\x1b_SyncTERM:C;LoadJXL;B=0;'+file_getname(fname)+'\x1b\\');
+		console.write('\x1b_SyncTERM:P;Paste;SX='+sx+';SY='+sy+';SW='+sw+';SH='+sh+';DX='+dx+';DY='+dy+';B=0\x1b\\');
+		console.write('\x1b_SyncTERM:P;Copy\x1b\\');
+	}
+}
+
+function update_jxl_cache()
+{
+	var i;
+	var ret = false;
+	var fname;
+	var newlist = [];
+
+	for (i = 0; i < jxl_bg_names.length; i++) {
+		jxl_bg_names[i];
+		if (cache.upload(jxl_bg_names[i], file_getname(jxl_bg_names[i]))) {
+			ret = true;
+			newlist.push(jxl_bg_names[i]);
+		}
+	}
+
+	jxl_bg_names = newlist;
+	return ret;
+}
+
+if (jxl_bg_names.length > 0) {
+	cache = new(SyncTERMCache);
+	if (cache.supported) {
+		screen_dims = query_graphicsdim();
+		if (screen_dims !== null && screen_dims !== undefined) {
+			font_dims = query_fontdims();
+			if (font_dims) {
+				if (supports_jpegxl()) {
+					if (update_jxl_cache())
+						use_jxl = true;
+				}
+			}
+		}
+	}
 }
 var use_bg=BackGround.load(bg_filename);
 var MessageWindow=new Graphic(80,console.screen_rows,MessageWindow_Attr,' ');
@@ -289,7 +357,7 @@ function Filemenu()
 {
 	this.items=new Array();
 	// Width of longest line with no dynamic variables
-	var width=0;
+	var width=33;
 	var scantime=system.datestr(bbs.new_file_time);
 	// Expand for scan time line.
 	if(width < 27+scantime.length)
@@ -457,7 +525,7 @@ function Messagemenu()
 		,"T",width
 	);
 	this.add("|Post In "+msg_area.grp_list[bbs.curgrp].sub_list[bbs.cursub].name,"P",width,undefined,undefined,bbs.compare_ars("REST P"));
-	if(bbs.compare_ars("REST N") && (msg_area.grp_list[bbs.curgrp].sub_list[bbs.crusub] & (SUB_QNET|SUB_PNET|SUB_FIDO)))
+	if (!msg_area.grp_list[bbs.curgrp].sub_list[bbs.cursub].can_post)
 		this.items[6].disabed=true;
 	this.add("Read/Post |Auto-Message","A",width);
 	this.add("|QWK Packet Transfer Menu","Q",width);
@@ -764,6 +832,7 @@ while(bbs.online) {
 					case 'Y':
 						menu_opt(function() {
 							bbs.user_info();
+							console.crlf();
 							console.pause();
 						});
 						break;
@@ -862,9 +931,13 @@ function todone_getfiles(lib, dir)
 
 function mouse_enable(enable)
 {
-	if(console.term_supports(USER_ANSI)) {
-		ansiterm.send('mouse', enable ? 'set' : 'clear', 'x10_compatible');
-		ansiterm.send('mouse', enable ? 'set' : 'clear', 'extended_coord');
+	if (enable) {
+		console.mouse_mode = MOUSE_MODE_X10 | MOUSE_MODE_EXT;
+		console.status |= (CON_MOUSE_CLK_PASSTHRU | CON_MOUSE_REL_PASSTHRU);
+	}
+	else {
+		console.mouse_mode = MOUSE_MODE_OFF;
+		console.status &= ~(CON_MOUSE_CLK_PASSTHRU | CON_MOUSE_REL_PASSTHRU);
 	}
 }
 
@@ -906,6 +979,7 @@ function draw_main(topline)
 	if(topline) {
 		console.line_counter=0;
 		console.clear();
+		recreate_jxl_buffer();
 		cleararea(1,1,console.screen_columns,console.screen_rows,true);
 	}
 	else
@@ -1508,12 +1582,12 @@ function show_filemenu()
 							console.putmsg("\r\nchView File Information\r\n");
 							str=bbs.get_filespec();
 							if(str!=null) {
-								if(!bbs.list_file_info(file_area.lib_list[bbs.curlib].dir_list[bbs.curdir].number, str, FI_INFO)) {
+								if(!bbs.list_file_info(file_area.lib_list[bbs.curlib].dir_list[bbs.curdir].number, str, FI_INFO) && str !== '*') {
 									console.putmsg(bbs.text(SearchingAllDirs));
 									for(i=0; i<file_area.lib_list[bbs.curlib].dir_list.length; i++) {
 										if(i==bbs.curdir)
 											continue;
-										if(bbs.list_files(file_area.lib_list[bbs.curlib].dir_list[i].number, str, FI_INFO))
+										if(bbs.list_file_info(file_area.lib_list[bbs.curlib].dir_list[i].number, str, FI_INFO))
 											break;
 									}
 									if(i<file_area.lib_list[bbs.curlib].dir_list.length)
@@ -1523,7 +1597,7 @@ function show_filemenu()
 										if(i==bbs.curlib)
 											continue;
 										for(j=0; j<file_area.lib_list[i].dir_list.length; j++) {
-											if(bbs.list_files(file_area.lib_list[i].dir_list[j].number, str, FI_INFO))
+											if(bbs.list_file_info(file_area.lib_list[i].dir_list[j].number, str, FI_INFO))
 											break libloop;
 										}
 									}
@@ -1553,6 +1627,11 @@ function show_filemenu()
 							});
 							break;
 						case 'S':
+							menu_opt(function() {
+								bbs.user_info();
+								console.crlf();
+								console.pause();
+							});
 							break;
 						case KEY_RIGHT:
 							filemenu.erase();
@@ -2199,13 +2278,13 @@ function show_emailmenu()
 				break;
 			case 'R':
 				menu_opt(function() {
-					bbs.read_mail(MAIL_YOUR);
+					bbs.read_mail(MAIL_YOUR, false);
 					console.pause();
 				});
 				break;
 			case 'M':
 				menu_opt(function() {
-					bbs.read_mail(MAIL_SENT);
+					bbs.read_mail(MAIL_SENT, false);
 					console.pause();
 				});
 				break;
@@ -2438,6 +2517,24 @@ function cleararea(xpos,ypos,width,height,eol_allowed)
 	var x;
 	var y;
 
+	if (use_jxl) {
+		/* Redraw main menu line if asked */
+		if(ypos==1) {
+			console.gotoxy(1,1);
+			console.attributes=0x17;
+			console.cleartoeol();
+			mainbar.draw();
+			ypos++;
+			height--;
+		}
+
+		var sx = (xpos - 1) * font_dims.width;
+		var sw = width * font_dims.width;
+		var sy = (ypos - 1) * font_dims.height;
+		var sh = height * font_dims.height;
+		console.write('\x1b_SyncTERM:P;Paste;SX='+sx+';SY='+sy+';SW='+sw+'SH='+sh+';DX='+sx+';DY='+sy+';B=0\x1b\\');
+		return;
+	}
 	if(use_bg) {
 		var bgx;
 		var bgy;

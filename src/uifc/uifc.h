@@ -201,7 +201,9 @@ typedef int64_t uifc_winmode_t;
 #define K_FIND      (1 << 17) /* Don't set the "changes" flag				*/
 #define K_TRIM      (1 << 23) /* Don't allow leading or trailing wsp		*/
 #define K_NOSPACE   (1 << 26) /* Don't allow any wsp chars				*/
+#define K_SPACE     (1 << 27) // Allow wsp chars (defeat K_TRIM and K_NOSPACE)
 #define K_CHANGED   (1 << 28) /* Return -1 if string was not changed (w/K_EDIT) */
+#define K_NEGATIVE  (1 << 29) /* Allow negative K_NUMERIC and K_DECIMAL values */
 
 
 /* Extra exit flags */
@@ -434,15 +436,15 @@ typedef struct {
 /* Popup a message, maybe wait for the user to hit a key or click button.	*/
 /****************************************************************************/
 	int (*msg)  (const char* str);
-	int (*msgf) (char* fmt, ...);
-	BOOL (*deny) (char* fmt, ...);
-	BOOL (*confirm) (char* fmt, ...);
+	int (*msgf) (const char* fmt, ...);
+	BOOL (*deny) (const char* fmt, ...);
+	BOOL (*confirm) (const char* fmt, ...);
 /****************************************************************************/
 /* Popup/down a status message.												*/
 /* str is the message to display on popup.									*/
 /* if str==NULL, then the the status is to be cleared (popdown).			*/
 /****************************************************************************/
-	void (*pop)  (const char* str);
+	void (*pop)  (const char* str, ...);
 /****************************************************************************/
 /* General menu function.													*/
 /* mode contains WIN_* flags to control display and functionality.			*/

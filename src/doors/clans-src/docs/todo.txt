@@ -1,12 +1,53 @@
-        - when village attacked and ruler ousted, reset all votes
+The Clans -- Open Issues
+-------------------------------------------------------------------------------
 
 
-Game Notes:
-        * Keep in mind that since we have *_Inits for Game_, User_, and
-          Village_, we can use CRCs now.  That is, after *_Read is called
-          within *_Init, we can check its CRC value.  If the CRC value is
-          wrong, called *_Destroy and then System_Error("CRC Value is WRONG!")
-          This way, the data is not updated to file like it should be and so
-          we don't have to worry about bypassing anything to prevent the
-          data from being accidentally written to file with a correct CRC
-          value.  The CRC value can be determined WITHIN *_Write.
+
+[0.0]  Table of Contents
+-------------------------------------------------------------------------------
+
+Unknown Future Release
+======================
+Clean up mstrings.h GNUmakefile dependencies ..................   1.2
+Village types defined but never assigned ......................   1.7
+mail.c: Mail_Maint() -- expire messages by age .................  1.10
+
+
+
+Unknown Future Release
+===============================================================================
+
+[1.2]  Clean up mstrings.h GNUmakefile dependencies
+-------------------------------------------------------------------------------
+The mstrings.h target in src/GNUmakefile and the native-devkit dependency in
+data/GNUmakefile both grew organically to solve the chicken-and-egg problem of
+langcomp needing to exist before mstrings.h can be generated.  The current
+approach works but could be cleaner -- the NATIVEEXEFILE computation and the
+filter-out workaround for shared langcomp objects are worth revisiting.
+
+[1.7]  Village types defined but never assigned
+-------------------------------------------------------------------------------
+defines.h declares three village types (V_WOODLAND=1, V_COASTAL=2,
+V_WASTELAND=3) and items can be tagged with a VillageType so they only
+appear in matching villages (items.c:798).  However, Village.Data.VillageType
+is never set -- not by readcfg.c, config.c, reset.c, village.c, or any
+other code path.  It stays at its struct-zero default (0 == V_ALL), so items
+with VillageType 1-3 can never appear in the market.  The separate
+village_data.TownType field is always hardcoded to -1 ("unknown for now").
+
+The type names "Woodland", "Coastal", "Wasteland" come only from the
+#define identifiers; they appear nowhere in any user-facing string, menu,
+or documentation.
+
+Options: (a) finish the feature by adding a VillageType config keyword
+(or per-BBS assignment in InterBBS setup) so sysops can designate village
+types and the item filtering becomes meaningful; (b) remove the dead
+defines, the struct field, and the items.c filter if the feature is not
+wanted.
+
+[1.10]  mail.c: Mail_Maint() -- expire messages by age
+-------------------------------------------------------------------------------
+Mail_Maint() discards MF_DELETED messages but never expires messages by age.
+A disabled condition: DaysBetween(Message.Date, GameInfo.TheDate) > 7 was
+removed; implementing it would prevent unbounded growth of the mail store.
+

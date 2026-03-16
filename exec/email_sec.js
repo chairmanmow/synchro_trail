@@ -5,92 +5,49 @@
 
 require("sbbsdefs.js", "WM_NONE");
 require("userdefs.js", "USER_EXPERT");
-var text = bbs.mods.text;
-if(!text)
-	text = load(bbs.mods.text = {}, "text.js");
+var shell = load({}, "shell_lib.js");
 var userprops = bbs.mods.userprops;
 if(!userprops)
 	userprops = load(bbs.mods.userprops = {}, "userprops.js");
 const ini_section = "netmail sent";
 
-const NetmailAddressHistoryLength = 10;
-
 while(bbs.online) {
 	if(!(user.settings & USER_EXPERT))
 		bbs.menu("e-mail");
 	bbs.nodesync();
-	console.print("\r\n\1_\1y\1hE-mail: \1n");
+	console.print("\r\n\x01_\x01y\x01hE-mail: \x01n");
 	var wm_mode = WM_NONE;
 	var cmdkeys = "LSARUFNKQ?\r";
-	switch(console.getkeys(cmdkeys,K_UPPER)) {
+	var key = console.getkeys(cmdkeys, 0, K_UPPER);
+	switch(key) {
 		case 'L':	// List/read your mail
 			bbs.exec("?msglist.js mail -preview");
 			break;
 		case 'R':	// Read your mail
+		case 'U':	// Read your un-read mail
+		case 'K':	// Read/Kill sent mail
 			const MAIL_LM_MODE = LM_REVERSE;
 			var lm_mode = user.mail_settings & MAIL_LM_MODE;
-			var new_lm_mode = bbs.read_mail(MAIL_YOUR, user.number, lm_mode) & MAIL_LM_MODE;
-			if(new_lm_mode != lm_mode) {
+			if(key == 'U')
+				lm_mode |= LM_UNREAD;
+			var new_lm_mode = bbs.read_mail(key == 'K' ? MAIL_SENT : MAIL_YOUR, user.number, lm_mode) & MAIL_LM_MODE;
+			if(new_lm_mode != (lm_mode & MAIL_LM_MODE)) {
 				if(new_lm_mode & MAIL_LM_MODE)
 					user.mail_settings |= MAIL_LM_MODE;
 				else
 					user.mail_settings &= ~MAIL_LM_MODE;
 			}
 			break;
-		case 'U':	// Read your un-read mail
-			bbs.read_mail(MAIL_YOUR, user.number, LM_UNREAD|LM_REVERSE);
-			break;
-		case 'K':	// Read/Kill sent mail
-			bbs.read_mail(MAIL_SENT, user.number, LM_REVERSE);
-			break;
 		case 'F':	// Send Feedback
-			bbs.email(/* user # */1, bbs.text(text.ReFeedback));
+			shell.send_feedback();
 			break;
 		case 'A':	// Send file attachment
 			wm_mode = WM_FILE;
 		case 'S':	// Send Mail
-			console.putmsg(bbs.text(text.Email));
-			var name = console.getstr(40, K_TRIM);
-			if(!name)
-				break;
-			if(name.indexOf('@') > 0) {
-				bbs.netmail(name);
-				break;
-			}
-			var number = bbs.finduser(name);
-			if(console.aborted)
-				break;
-			if(!number)
-				number = system.matchuser(name);
-			if(!number && (msg_area.settings&MM_REALNAME))
-				number = system.matchuserdata(U_NAME, name);
-			if(number)
-				bbs.email(number, wm_mode);
-			else
-				console.putmsg(bbs.text(text.UnknownUser));
+			shell.send_email();
 			break;
 		case 'N':	// Send NetMail
-			var netmail = msg_area.fido_netmail_settings | msg_area.inet_netmail_settings;
-			console.crlf();
-			if((netmail&NMAIL_FILE) && !console.noyes("Attach a file"))
-				wm_mode = WM_FILE;
-			if(console.aborted)
-				break;
-			console.putmsg(bbs.text(text.EnterNetMailAddress));
-			var addr_list = userprops.get(ini_section, "address", []) || [];
-			var addr = console.getstr(256, K_LINE | K_TRIM, addr_list);
-			if(!addr || console.aborted)
-				break;
-			if(bbs.netmail(addr.split(','), wm_mode)) {
-				var addr_idx = addr_list.indexOf(addr);
-				if(addr_idx >= 0)
-					addr_list.splice(addr_idx, 1);
-				addr_list.unshift(addr);
-				if(addr_list.length > NetmailAddressHistoryLength)
-					addr_list.length = NetmailAddressHistoryLength;
-				userprops.set(ini_section, "address", addr_list);
-				userprops.set(ini_section, "localtime", new Date().toString());
-			}
+			shell.send_netmail();
 			break;
 		default:
 			exit(0);

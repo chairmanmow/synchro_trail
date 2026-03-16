@@ -7,6 +7,7 @@
 // @format.tab-size 4, @format.use-tabs true
 
 require("sbbsdefs.js", "P_NOERROR");
+require("gettext.js", 'gettext');
 
 "use strict";
 
@@ -14,17 +15,9 @@ require("sbbsdefs.js", "P_NOERROR");
 
 var i=0;
 var b=0;
-var html=user.settings&USER_HTML;
 
-if(html) {
-	if(!file_exists(system.text_dir+"bullseye.html"))
-		html=0;
-}
-
-if(!html) {
-	writeln("");
-	writeln("Synchronet BullsEye! Version 3.00 by Rob Swindell");
-}
+writeln("");
+writeln("Synchronet BullsEye! Version 3.00 by Rob Swindell");
 
 console.line_counter=0;
 var file=new File(system.text_dir+"bullseye.cfg");
@@ -33,7 +26,9 @@ if(!file.open("r", true)) {
 	writeln("!ERROR "+file.error+" opening "+ file.name);
 	exit(1);
 }
-file.readln(); // First line is not used (mode?)
+var p_mode = file.readln();
+if (p_mode)
+	p_mode = eval(p_mode);
 bull = file.readAll();
 file.close();
 
@@ -48,7 +43,8 @@ if(bull.length < 1) {
 
 while(bbs.online && !js.terminated) {
 	if(bbs.menu("../bullseye", P_NOERROR)) {
-		console.mnemonics("\r\nEnter number of bulletin or [~Quit]: ");
+	console.newline();
+	console.mnemonics(gettext("Enter number of bulletin or [~Quit]: ", "choose_bulletin"));
 		b = console.getnum(bull.length);
 	} else {
 		for(i = 0; i < bull.length; ++i)
@@ -65,11 +61,11 @@ while(bbs.online && !js.terminated) {
 		var ext = file_getext(fname);
 		var success = false;
 		if(ext == ".*")
-			success = bbs.menu(fname.slice(0, -2));
+			success = bbs.menu(fname.slice(0, -2), p_mode);
 		else if(fname.search(/\.htm/)!=-1)
-			success = load(new Object, "typehtml.js", "-color", fname);
+			success = load(new Object, "typehtml.js", "-color", fname);		
 		else
-			success = load(new Object, "typeasc.js", fname, "BullsEye Bulletin #"+b);
+			success = console.printfile(fname, p_mode);
 		if(success)
 			log("viewed bulletin #" + b + ": "+fname);
 		else

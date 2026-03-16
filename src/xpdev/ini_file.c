@@ -29,6 +29,12 @@
 #include "filewrap.h"   /* chsize */
 #include "netwrap.h"
 
+#if defined(_WIN32)
+        #define QSORT_CALLBACK_TYPE __cdecl
+#else
+        #define QSORT_CALLBACK_TYPE
+#endif
+
 /* Maximum length of entire line, includes '\0' */
 #define INI_MAX_LINE_LEN        (INI_MAX_VALUE_LEN * 2)
 #define INI_COMMENT_CHAR        ';'
@@ -41,11 +47,19 @@
 #define INI_INCLUDE_DIRECTIVE   "!include "
 #define INI_INCLUDE_MAX         10000
 
+// Can be exported if needed by someone who wants to poke under the hood.
+static char iniParsedRootValue[1] = {0};
+
 static ini_style_t default_style;
 
 void iniSetDefaultStyle(ini_style_t style)
 {
 	default_style = style;
+}
+
+static const char* default_sep(const char* sep)
+{
+	return sep == NULL ? "," : sep;
 }
 
 /* These correlate with the LOG_* definitions in syslog.h/gen_defs.h */
@@ -246,6 +260,7 @@ static char* key_name(char* p, char** vp, bool literals_supported)
 				*tp = 0;
 			}
 		}
+		c_unescape_str(p);
 		c_unescape_str(*vp);
 	} else
 		truncsp(*vp);       /* "key = value" - truncate all white-space chars */
@@ -289,7 +304,7 @@ static char* read_value(FILE* fp, const char* section, const char* key, char* va
 		if (vp == NULL)
 			break;
 		/* key found */
-		sprintf(value, "%.*s", INI_MAX_VALUE_LEN - 1, vp);
+		strlcpy(value, vp, INI_MAX_VALUE_LEN);
 		return clean_value(value);
 	}
 
@@ -321,7 +336,7 @@ static size_t get_value(str_list_t list, const char* section, const char* key, c
 		if (stricmp(p, key) != 0)
 			continue;
 		if (value != NULL) {
-			sprintf(value, "%.*s", INI_MAX_VALUE_LEN - 1, vp);
+			strlcpy(value, vp, INI_MAX_VALUE_LEN);
 			clean_value(value);
 		}
 		if (vpp != NULL)
@@ -435,9 +450,18 @@ bool iniRemoveSection(str_list_t* list, const char* section)
 {
 	size_t i;
 
-	i = find_section_index(*list, section);
-	if ((*list)[i] == NULL)    /* not found */
-		return false;
+	if (section == ROOT_SECTION) {
+		if (list == NULL || (*list) == NULL || (*list)[0] == NULL || *(*list)[0] == INI_OPEN_SECTION_CHAR)
+			return false;
+		i = 0;
+	} else {
+		i = find_section_index(*list, section);
+		if ((*list)[i] == NULL)    /* not found */
+			return false;
+		// Remove blank lines before this section
+		while (i > 0 && (*list)[i - 1] != NULL && *(*list)[i - 1] == '\0')
+			strListDelete(list, --i);
+	}
 	do {
 		strListDelete(list, i);
 	} while ((*list)[i] != NULL && *(*list)[i] != INI_OPEN_SECTION_CHAR);
@@ -449,9 +473,15 @@ bool iniRemoveSectionFast(str_list_t list, const char* section)
 {
 	size_t i;
 
-	i = find_section_index(list, section);
-	if (list[i] == NULL)   /* not found */
-		return false;
+	if (section == ROOT_SECTION) {
+		if (list == NULL || list[0] == NULL || *list[0] == INI_OPEN_SECTION_CHAR)
+			return false;
+		i = 0;
+	} else {
+		i = find_section_index(list, section);
+		if (list[i] == NULL)   /* not found */
+			return false;
+	}
 	do {
 		strListFastDelete(list, i, /* count: */ 1);
 	} while (list[i] != NULL && *list[i] != INI_OPEN_SECTION_CHAR);
@@ -471,18 +501,22 @@ str_list_t iniCutSection(str_list_t list, const char *section)
 bool iniRemoveSections(str_list_t* list, const char* prefix)
 {
 	str_list_t  sections;
-	const char* section;
+	char*       section;
+	bool        result = true;
 
 	if (list == NULL)
 		return false;
 	sections = iniGetSectionList(*list, prefix);
-	while ((section = strListPop(&sections)) != NULL)
-		if (!iniRemoveSection(list, section))
-			return false;
+	while ((section = strListPop(&sections)) != NULL) {
+		result = iniRemoveSection(list, section);
+		free(section);
+		if (result == false)
+			break;
+	}
 
 	strListFree(&sections);
 
-	return true;
+	return result;
 }
 
 // This sorts comments too, so should not be used on human created/edited files
@@ -888,9 +922,7 @@ char* iniSetEnumList(str_list_t* list, const char* section, const char* key
 
 	value[0] = 0;
 
-	if (sep == NULL)
-		sep = ",";
-
+	sep = default_sep(sep);
 	if (val_list != NULL) {
 		name_count = strListCount(names);
 		for (i = 0; i < count; i++) {
@@ -987,10 +1019,7 @@ char* iniSetStringList(str_list_t* list, const char* section, const char* key
 {
 	char value[INI_MAX_VALUE_LEN];
 
-	if (sep == NULL)
-		sep = ",";
-
-	return iniSetString(list, section, key, strListCombine(val_list, value, sizeof(value), sep), style);
+	return iniSetString(list, section, key, strListCombine(val_list, value, sizeof(value), default_sep(sep)), style);
 }
 
 char* iniSetIntList(str_list_t* list, const char* section, const char* key
@@ -999,8 +1028,7 @@ char* iniSetIntList(str_list_t* list, const char* section, const char* key
 	unsigned i;
 	char     value[INI_MAX_VALUE_LEN];
 
-	if (sep == NULL)
-		sep = ",";
+	sep = default_sep(sep);
 	for (i = 0; i < count; i++) {
 		if (i) {
 			int len = strlen(value);
@@ -1016,8 +1044,9 @@ char* iniSetIntList(str_list_t* list, const char* section, const char* key
 
 static char* default_value(const char* deflt, char* value)
 {
-	if (deflt != NULL && deflt != value && value != NULL)
-		sprintf(value, "%.*s", INI_MAX_VALUE_LEN - 1, deflt);
+	if (deflt != NULL && deflt != value && value != NULL) {
+		strlcpy(value, deflt, INI_MAX_VALUE_LEN);
+	}
 
 	return (char*)deflt;
 }
@@ -1207,9 +1236,7 @@ static str_list_t splitList(char* list, const char* sep)
 	if ((lp = strListInit()) == NULL)
 		return NULL;
 
-	if (sep == NULL)
-		sep = ",";
-
+	sep = default_sep(sep);
 	token = strtok_r(list, sep, &tmp);
 	while (token != NULL) {
 		SKIP_WHITESPACE(token);
@@ -1256,13 +1283,33 @@ str_list_t iniGetStringList(str_list_t list, const char* section, const char* ke
 	return splitList(value, sep);
 }
 
-void* iniFreeStringList(str_list_t list)
+str_list_t iniGetSparseStringList(str_list_t list, const char* section, const char* key
+                            , const char* sep, const char* deflt, size_t min_len)
+{
+	char value[INI_MAX_VALUE_LEN];
+	str_list_t result;
+	size_t     count;
+
+	get_value(list, section, key, value, NULL, /* literals_supported: */ true);
+
+	if (*value == 0 /* blank value or missing key */) {
+		if (deflt != NULL)
+			SAFECOPY(value, deflt);
+	}
+
+	result = strListDivide(/* list **/NULL, value, default_sep(sep));
+	for (count = strListCount(result); count < min_len; ++count)
+		strListPush(&result, "");
+	return result;
+}
+
+str_list_t iniFreeStringList(str_list_t list)
 {
 	strListFree(&list);
 	return list;
 }
 
-void* iniFreeNamedStringList(named_string_t** list)
+named_string_t** iniFreeNamedStringList(named_string_t** list)
 {
 	ulong i;
 
@@ -1287,6 +1334,7 @@ static str_list_t ini_read_section_list(FILE* fp, const char* prefix, bool inclu
 	char       str[INI_MAX_LINE_LEN];
 	ulong      items = 0;
 	str_list_t lp;
+	size_t     prefixLen = 0;
 
 	if ((lp = strListInit()) == NULL)
 		return NULL;
@@ -1296,6 +1344,9 @@ static str_list_t ini_read_section_list(FILE* fp, const char* prefix, bool inclu
 
 	rewind(fp);
 
+	if (prefix != NULL)
+		prefixLen = strlen(prefix);
+
 	while (!feof(fp)) {
 		if (fgets(str, sizeof(str), fp) == NULL)
 			break;
@@ -1303,9 +1354,10 @@ static str_list_t ini_read_section_list(FILE* fp, const char* prefix, bool inclu
 			break;
 		if ((p = section_name(str)) == NULL)
 			continue;
-		if (prefix != NULL)
-			if (strnicmp(p, prefix, strlen(prefix)) != 0)
+		if (prefixLen != 0) {
+			if (strnicmp(p, prefix, prefixLen) != 0)
 				continue;
+		}
 		if (!include_dupes && strListFind(lp, p, /* case_sensitive */ false) >= 0)
 			continue;
 		if (strListAppend(&lp, p, items++) == NULL)
@@ -1331,6 +1383,7 @@ static str_list_t ini_get_section_list(str_list_t list, const char* prefix, bool
 	char       str[INI_MAX_LINE_LEN];
 	ulong      i, items = 0;
 	str_list_t lp;
+	size_t     prefixLen = 0;
 
 	if ((lp = strListInit()) == NULL)
 		return NULL;
@@ -1338,16 +1391,20 @@ static str_list_t ini_get_section_list(str_list_t list, const char* prefix, bool
 	if (list == NULL)
 		return lp;
 
+	if (prefix != NULL)
+		prefixLen = strlen(prefix);
+
 	for (i = 0; list[i] != NULL; i++) {
 		SAFECOPY(str, list[i]);
 		if (is_eof(str))
 			break;
 		if ((p = section_name(str)) == NULL)
 			continue;
-		if (prefix != NULL)
-			if (strnicmp(p, prefix, strlen(prefix)) != 0)
+		if (prefixLen != 0) {
+			if (strnicmp(p, prefix, prefixLen) != 0)
 				continue;
-		if (include_dupes && strListFind(lp, p, /* case_sensitive */ false) >= 0)
+		}
+		if (!include_dupes && strListFind(lp, p, /* case_sensitive */ false) >= 0)
 			continue;
 		if (strListAppend(&lp, p, items++) == NULL)
 			break;
@@ -1371,9 +1428,13 @@ size_t iniGetSectionCount(str_list_t list, const char* prefix)
 	char*  p;
 	char   str[INI_MAX_LINE_LEN];
 	size_t i, items = 0;
+	size_t prefixLen = 0;
 
 	if (list == NULL)
 		return 0;
+
+	if (prefix != NULL)
+		prefixLen = strlen(prefix);
 
 	for (i = 0; list[i] != NULL; i++) {
 		SAFECOPY(str, list[i]);
@@ -1381,9 +1442,10 @@ size_t iniGetSectionCount(str_list_t list, const char* prefix)
 			break;
 		if ((p = section_name(str)) == NULL)
 			continue;
-		if (prefix != NULL)
-			if (strnicmp(p, prefix, strlen(prefix)) != 0)
+		if (prefixLen != 0) {
+			if (strnicmp(p, prefix, prefixLen) != 0)
 				continue;
+		}
 		items++;
 	}
 
@@ -1395,11 +1457,15 @@ size_t iniReadSectionCount(FILE* fp, const char* prefix)
 	char* p;
 	char  str[INI_MAX_LINE_LEN];
 	ulong items = 0;
+	size_t prefixLen = 0;
 
 	if (fp == NULL)
 		return 0;
 
 	rewind(fp);
+
+	if (prefix != NULL)
+		prefixLen = strlen(prefix);
 
 	while (!feof(fp)) {
 		if (fgets(str, sizeof(str), fp) == NULL)
@@ -1408,9 +1474,10 @@ size_t iniReadSectionCount(FILE* fp, const char* prefix)
 			break;
 		if ((p = section_name(str)) == NULL)
 			continue;
-		if (prefix != NULL)
-			if (strnicmp(p, prefix, strlen(prefix)) != 0)
+		if (prefixLen != 0) {
+			if (strnicmp(p, prefix, prefixLen) != 0)
 				continue;
+		}
 		items++;
 	}
 
@@ -1577,6 +1644,41 @@ iniGetNamedStringList(str_list_t list, const char* section)
 	return lp;
 }
 
+static bool
+addParsedSection(named_str_list_t*** lp, size_t *sections, char *name)
+{
+	named_str_list_t** np = (named_str_list_t**)realloc(*lp, sizeof(named_str_list_t*) * (*sections + 2));
+	if (np == NULL)
+		return false;
+	*lp = np;
+	if (((*lp)[*sections] = (named_str_list_t*)malloc(sizeof(named_str_list_t))) == NULL)
+		return false;
+	if (name == iniParsedRootValue) {
+		(*lp)[*sections]->name = name;
+	}
+	else {
+		if (((*lp)[*sections]->name = strdup(name)) == NULL)
+			return false;
+	}
+	if (((*lp)[*sections]->list = strListInit()) == NULL)
+		return false;
+	*sections += 1;
+	return true;
+}
+
+static bool
+addParsedLine(named_str_list_t** lp, size_t sections, char *data, size_t *keys)
+{
+	if (is_eof(data))
+		return false;
+	if (sections > 0) {
+		SKIP_WHITESPACE(data);
+		if (*data != '\0' && *data != INI_COMMENT_CHAR)
+			strListAnnex(&lp[sections - 1]->list, data, (*keys)++);
+	}
+	return true;
+}
+
 // the 'list' must remain allocated/valid through-out the life of the returned named_str_list
 // as this function does not copy the key=value lines in the original list, it just references them
 named_str_list_t** iniParseSections(const str_list_t list)
@@ -1587,55 +1689,64 @@ named_str_list_t** iniParseSections(const str_list_t list)
 	size_t             sections = 0;
 	size_t             keys = 0;
 	named_str_list_t** lp;
-	named_str_list_t** np;
 
-	if (list == NULL)
-		return NULL;
-
-	// Find first section
-	for (i = 0; list[i] != NULL; ++i) {
-		p = list[i];
-		SKIP_WHITESPACE(p);
-		if (*p == INI_OPEN_SECTION_CHAR)
-			break;
-	}
-	if (list[i] == NULL)
+	if (list == NULL || list[0] == NULL)
 		return NULL;
 
 	if ((lp = (named_str_list_t**)malloc(sizeof(named_str_list_t*))) == NULL)
 		return NULL;
 
-	for (; list[i] != NULL; ++i) {
-		SAFECOPY(str, list[i]);
-		p = section_name(str);
-		if (p != NULL) {
-			if ((np = (named_str_list_t**)realloc(lp, sizeof(named_str_list_t*) * (sections + 2))) == NULL)
-				break;
-			lp = np;
-			if ((lp[sections] = (named_str_list_t*)malloc(sizeof(named_str_list_t))) == NULL)
-				break;
-			if ((lp[sections]->name = strdup(p)) == NULL)
-				break;
-			if ((lp[sections]->list = strListInit()) == NULL)
-				break;
-			++sections;
+	// Find root section if present
+	for (i = 0; list[i] != NULL; ++i) {
+		p = list[i];
+		SKIP_WHITESPACE(p);
+		if (*p)
+			break;
+	}
+
+	if (list[i] != NULL) {
+		// TODO: A comment will create a zero-length root section, which kinda sucks...
+		if (*p != INI_OPEN_SECTION_CHAR) {
+			if (!addParsedSection(&lp, &sections, iniParsedRootValue))
+				goto error_return;
 			keys = 0;
-		} else {
-			p = list[i];
-			if (is_eof(p))
-				break;
-			if (sections > 0) {
+			for (; list[i] != NULL; ++i) {
+				p = list[i];
 				SKIP_WHITESPACE(p);
-				if (*p == '\0' || *p == INI_COMMENT_CHAR)
-					continue;
-				strListAnnex(&lp[sections - 1]->list, p, keys++);
+				if (*p == INI_OPEN_SECTION_CHAR)
+					break;
+				// False return here means it was EOF
+				if (!addParsedLine(lp, sections, list[i], &keys))
+					break;
 			}
 		}
 	}
 
+	for (; list[i] != NULL; ++i) {
+		SAFECOPY(str, list[i]);
+		p = section_name(str);
+		if (p != NULL) {
+			if (!addParsedSection(&lp, &sections, p))
+				goto error_return;
+			keys = 0;
+		} else {
+			// False return here means it was EOF
+			if (!addParsedLine(lp, sections, list[i], &keys))
+				break;
+		}
+	}
+
+	if (sections == 0)
+		goto error_return;
+
 	lp[sections] = NULL;    /* terminate list */
 
 	return lp;
+
+error_return:
+	lp[sections] = NULL;    /* terminate list */
+	iniFreeParsedSections(lp);
+	return NULL;
 }
 
 str_list_t iniGetParsedSectionList(named_str_list_t** list, const char* prefix)
@@ -1644,13 +1755,17 @@ str_list_t iniGetParsedSectionList(named_str_list_t** list, const char* prefix)
 	size_t            count = 0;
 	str_list_t        result = strListInit();
 	named_str_list_t* section;
+	size_t            prefixLen = 0;
+
+	if (prefix != NULL)
+		prefixLen = strlen(prefix);
 
 	for (i = 0; list != NULL && list[i] != NULL; ++i) {
 		section = list[i];
-		if (section->name == NULL)
+		if (section->name == NULL || section->name == iniParsedRootValue)
 			continue;
-		if (prefix != NULL) {
-			if (strnicmp(section->name, prefix, strlen(prefix)) != 0)
+		if (prefixLen != 0) {
+			if (strnicmp(section->name, prefix, prefixLen) != 0)
 				continue;
 		}
 		strListAppend(&result, section->name, count++);
@@ -1663,19 +1778,29 @@ str_list_t iniGetParsedSection(named_str_list_t** list, const char* name, bool c
 	size_t            i;
 	named_str_list_t* section;
 
-	if (name == NULL) // Root section not supported
-		return NULL;
-
 	if (list == NULL)
 		return NULL;
 
 	for (i = 0; list[i] != NULL; ++i) {
+		/*
+		 * We can't declare these below, so can't make them const
+		 * until MSVC supports C99. Just adding braces around the
+		 * const declarations seems to make MSVC crash in random
+		 * places.
+		 * 
+		 * https://gitlab.synchro.net/main/sbbs/-/pipelines/9324
+		 */
+		bool isRootSection;
+		bool isRootMatch;
 		section = list[i];
 		if (section->name == NULL)
 			continue;
-		if (stricmp(section->name, name) == 0) {
+		isRootSection = (section->name == iniParsedRootValue);
+		isRootMatch = isRootSection && (name == NULL);
+		if (isRootMatch || ((name != NULL) && (!isRootSection) && (stricmp(section->name, name) == 0))) {
 			if (cut) {
-				free(section->name);
+				if (!isRootSection)
+					free(section->name);
 				section->name = NULL;
 			}
 			return section->list;
@@ -1692,7 +1817,8 @@ void* iniFreeParsedSections(named_str_list_t** list)
 		return NULL;
 
 	for (i = 0; list[i] != NULL; ++i) {
-		free(list[i]->name);
+		if (list[i]->name != iniParsedRootValue)
+			free(list[i]->name);
 		free(list[i]->list);
 		free(list[i]);
 	}
@@ -2846,6 +2972,11 @@ bool iniCloseFile(FILE* fp)
 
 str_list_t iniReadFile(FILE* fp)
 {
+	return iniReadFiles(fp, /* includes: */ false);
+}
+
+str_list_t iniReadFiles(FILE* fp, bool includes)
+{
 	char       str[INI_MAX_LINE_LEN];
 	char       err[512];
 	char*      p;
@@ -2862,37 +2993,39 @@ str_list_t iniReadFile(FILE* fp)
 	if (list == NULL)
 		return NULL;
 
-	/* Look for !include directives */
-	inc_len = strlen(INI_INCLUDE_DIRECTIVE);
-	for (i = 0; list[i] != NULL; i++) {
-		if (strnicmp(list[i], INI_INCLUDE_DIRECTIVE, inc_len) == 0) {
-			glob_t gl = {0};
-			size_t j;
-			p = list[i] + inc_len;
-			SKIP_WHITESPACE(p);
-			truncsp(p);
-			(void)glob(p, GLOB_MARK, NULL, &gl);
-			safe_snprintf(str, sizeof(str), "; %s - %lu matches found", list[i], (ulong)gl.gl_pathc);
-			strListReplace(list, i, str);
-			for (j = 0; j < gl.gl_pathc; j++) {
-				char* fname = gl.gl_pathv[j];
-				if (*lastchar(fname) == '/')
-					continue;
-				if (inc_counter >= INI_INCLUDE_MAX)
-					SAFEPRINTF2(str, "; %s - MAXIMUM INCLUDES REACHED: %u", fname, INI_INCLUDE_MAX);
-				else if ((insert_fp = fopen(fname, "r")) == NULL)
-					SAFEPRINTF2(str, "; %s - FAILURE: %s", fname, safe_strerror(errno, err, sizeof(err)));
-				else
-					SAFEPRINTF(str, "; %s", fname);
-				strListInsert(&list, str, i + 1);
-				if (insert_fp != NULL) {
-					strListInsertFile(insert_fp, &list, i + 2, INI_MAX_LINE_LEN);
-					fclose(insert_fp);
-					insert_fp = NULL;
-					inc_counter++;
+	if (includes) {
+		/* Look for !include directives */
+		inc_len = strlen(INI_INCLUDE_DIRECTIVE);
+		for (i = 0; list[i] != NULL; i++) {
+			if (strnicmp(list[i], INI_INCLUDE_DIRECTIVE, inc_len) == 0) {
+				glob_t gl = {0};
+				size_t j;
+				p = list[i] + inc_len;
+				SKIP_WHITESPACE(p);
+				truncsp(p);
+				(void)glob(p, GLOB_MARK, NULL, &gl);
+				safe_snprintf(str, sizeof(str), "; %s - %lu matches found", list[i], (ulong)gl.gl_pathc);
+				strListReplace(list, i, str);
+				for (j = 0; j < gl.gl_pathc; j++) {
+					char* fname = gl.gl_pathv[j];
+					if (*lastchar(fname) == '/')
+						continue;
+					if (inc_counter >= INI_INCLUDE_MAX)
+						SAFEPRINTF2(str, "; %s - MAXIMUM INCLUDES REACHED: %u", fname, INI_INCLUDE_MAX);
+					else if ((insert_fp = fopen(fname, "r")) == NULL)
+						SAFEPRINTF2(str, "; %s - FAILURE: %s", fname, safe_strerror(errno, err, sizeof(err)));
+					else
+						SAFEPRINTF(str, "; %s", fname);
+					strListInsert(&list, str, i + 1);
+					if (insert_fp != NULL) {
+						strListInsertFile(insert_fp, &list, i + 2, INI_MAX_LINE_LEN);
+						fclose(insert_fp);
+						insert_fp = NULL;
+						inc_counter++;
+					}
 				}
+				globfree(&gl);
 			}
-			globfree(&gl);
 		}
 	}
 
@@ -2935,6 +3068,883 @@ bool iniWriteFile(FILE* fp, const str_list_t list)
 
 	return count == strListCount(list);
 }
+
+// Fast parsed INI interface
+struct fp_section {
+	ini_lv_string_t name;	// Unterminated name (borrowed)
+	str_list_t list;	// Allocated at most once (allocated)
+	size_t listLen;		// Number of lines in list
+	size_t originalOrder;	// Original section number
+	bool cut;		// Has been removed (does not free list)
+};
+
+struct fp_list_s {
+	ini_lv_string_t *sectionList;	// Allocated at most once (allocated)
+	size_t firstUncut;	// Where to start/end searching for a section
+	size_t lastUncut;	// Where to start/end searching for a section
+	size_t totalSections;	// The number of sections initially allocated, includes cut sections
+	struct fp_section sections[];
+};
+
+void
+iniFreeFastParse(ini_fp_list_t *s)
+{
+	size_t i;
+
+	if (s == NULL)
+		return;
+	free(s->sectionList);
+	for (i = 0; i < s->totalSections; i++) {
+		// This abuses strListFreeBlock() and assumes it's just a free() wrapper
+		strListFreeBlock((char *)s->sections[i].list);
+	}
+	free(s);
+}
+
+static size_t
+getArraySize(size_t allocSz)
+{
+	return (allocSz - sizeof(ini_fp_list_t)) / sizeof(struct fp_section);
+}
+
+static int QSORT_CALLBACK_TYPE
+iniFastParseCmp(const void *a, const void *b)
+{
+	const struct fp_section *seca = a;
+	const struct fp_section *secb = b;
+	size_t cmpLen;
+	int cmp;
+	bool aLonger = false;
+	bool abSame;
+
+	if (a == NULL) {
+		if (b == NULL)
+			return seca->originalOrder - secb->originalOrder;
+		return -1;
+	}
+	if (b == NULL)
+		return 1;
+	abSame = (seca->name.len == secb->name.len);
+	if (!abSame) {
+		if (seca->name.len > secb->name.len)
+			aLonger = true;
+	}
+	cmpLen = aLonger ? secb->name.len : seca->name.len;
+	if (cmpLen) {
+		cmp = strnicmp(seca->name.str, secb->name.str, cmpLen);
+		if (cmp)
+			return cmp;
+	}
+	if (abSame)
+		return seca->originalOrder - secb->originalOrder;
+	if (aLonger)
+		return 1;
+	return -1;
+}
+
+/*
+ * References the original list with whitespace removed, but also has
+ * additional allocation. Allocates 4k (one page) to start, then doubles
+ * on overflow.
+ * 
+ * Returns NULL on error only, allocates 4k even for an empty list.
+ * It is an error to pass a NULL list.
+ * 
+ * If orderedList is true, will create a list of section names in file
+ * order which can be retreived using iniGetFastParsedSectionOrderedList()
+ * That list is not deduped or modified by cut operations.
+ */
+ini_fp_list_t *
+iniFastParseSections(const str_list_t list, bool orderedList)
+{
+	size_t allocSz = 4096;
+	ini_fp_list_t *ret = malloc(allocSz);
+	size_t arraySz = getArraySize(allocSz);
+	size_t i;
+
+	if (!ret)
+		return NULL;
+
+	if (!list) {
+		free(ret);
+		return NULL;
+	}
+
+	ret->firstUncut = 0;
+	ret->totalSections = 0;
+	ret->sectionList = NULL;
+
+	// Root section
+	memset(&ret->sections[0], 0, sizeof(ret->sections[0]));
+	ret->sections[0].list = strListInit();
+
+	if (ret->sections[0].list == NULL)
+		goto error_return;
+
+	for (i = 0; list[i] != NULL; i++) {
+		char *str = list[i];
+		SKIP_WHITESPACE(str);
+		if (*str == INI_OPEN_SECTION_CHAR) {
+			struct fp_section *sect;
+			size_t slen;
+			str++;
+			slen = strlen(str);
+			while (slen && (IS_WHITESPACE(str[slen - 1])))
+				slen--;
+			if (slen && str[slen - 1] == INI_CLOSE_SECTION_CHAR)
+				slen--;
+			else // Discard line
+				continue;
+			ret->totalSections++;
+			if ((ret->totalSections) >= arraySz) {
+				ini_fp_list_t *np;
+				allocSz *= 2;
+				np = realloc(ret, allocSz);
+				if (np == NULL)
+					goto error_return;
+				ret = np;
+				arraySz = getArraySize(allocSz);
+			}
+			sect = &ret->sections[ret->totalSections];
+			sect->list = strListInit();
+			if (sect->list == NULL)
+				goto error_return;
+			sect->listLen = 0;
+			sect->name.str = str;
+			sect->originalOrder = ret->totalSections;
+			sect->cut = false;
+			sect->name.len = slen;
+		}
+		else {
+			if (*str != '\0' && *str != INI_COMMENT_CHAR) {
+				if (!strListAnnex(&ret->sections[ret->totalSections].list, str, ret->sections[ret->totalSections].listLen))
+					goto error_return;
+				ret->sections[ret->totalSections].listLen++;
+			}
+		}
+	}
+	ret->totalSections++;
+
+	if (orderedList) {
+		ret->sectionList = malloc(ret->totalSections * sizeof(*ret->sectionList));
+		if (ret->sectionList == NULL)
+			goto error_return;
+		for (i = 0; i < ret->totalSections; i++) {
+			ret->sectionList[i] = ret->sections[i].name;
+		}
+	}
+	// Sort
+	qsort(ret->sections, ret->totalSections, sizeof(ret->sections[0]), iniFastParseCmp);
+	// Remove duplicates (ugh)
+	for (i = 1; i < ret->totalSections; i++) {
+		int cmp;
+		struct fp_section *seca = &ret->sections[i - 1];
+		struct fp_section *secb = &ret->sections[i];
+		if (seca->name.len != secb->name.len)
+			continue;
+		cmp = seca->name.len ? strnicmp(seca->name.str, secb->name.str, seca->name.len) : 0;
+		if (cmp)
+			continue;
+		if (secb->originalOrder > seca->originalOrder) {
+			ret->totalSections--;
+			if (i < ret->totalSections) {
+				struct fp_section *secc = &ret->sections[i + 1];
+				// This abuses strListFreeBlock() and assumes it's just a free() wrapper
+				strListFreeBlock((char *)secb->list);
+				memmove(secb, secc, sizeof(*secb) * (ret->totalSections - i));
+			}
+		}
+		else {
+			// This abuses strListFreeBlock() and assumes it's just a free() wrapper
+			strListFreeBlock((char *)seca->list);
+			memmove(seca, secb, sizeof(*seca) * (ret->totalSections - i));
+			ret->totalSections--;
+		}
+	}
+	ret->lastUncut = ret->totalSections;
+	if (ret->lastUncut)
+		ret->lastUncut--;
+	return ret;
+
+error_return:
+	free(ret->sections[ret->totalSections].list);
+	ret->sections[ret->totalSections].list = NULL;
+	iniFreeFastParse(ret);
+	return NULL;
+}
+
+struct iniGetFastPrefixStartCmpKey {
+	ini_lv_string_t prefix;
+	struct fp_section *base;
+};
+
+static int QSORT_CALLBACK_TYPE
+iniGetFastPrefixStartCmp(const void *keyPtr, const void *entryPtr)
+{
+	const struct iniGetFastPrefixStartCmpKey *key = keyPtr;
+	const struct fp_section *fp = entryPtr;
+	bool fpIsShorter = fp->name.len < key->prefix.len;
+	size_t cmpLen = fpIsShorter ? fp->name.len : key->prefix.len;
+	int cmp = cmpLen ? strnicmp(key->prefix.str, fp->name.str, cmpLen) : 0;
+
+	if (cmp)
+		return cmp;
+	if (fpIsShorter)
+		return 1;
+	/*
+	 * We now know the prefix is present... now we need to check if
+	 * the previous entry also has the prefix...
+	 */
+	if (fp == key->base) {
+		// First entry, this is where we start...
+		return 0;
+	}
+	// Move to the previous entry
+	fp--;
+
+	// If the previous entry is shorter, we have the start
+	if (fp->name.len < key->prefix.len)
+		return 0;
+	// Doesn't start with prefix, we're good
+	if (fp->name.str == NULL || strnicmp(fp->name.str, key->prefix.str, key->prefix.len))
+		return 0;
+	// Does start with prefix, previous is a better start
+	return 1;
+}
+
+static void
+adjustUncuts(ini_fp_list_t *fp)
+{
+	while (fp->sections[fp->firstUncut].cut && fp->firstUncut <= fp->lastUncut)
+		fp->firstUncut++;
+	if (fp->firstUncut > fp->lastUncut)
+		return;
+	while (fp->lastUncut > fp->firstUncut && fp->sections[fp->lastUncut].cut)
+		fp->lastUncut--;
+}
+
+static size_t
+iniGetFastPrefixStart(ini_fp_list_t *fp, const char *prefix)
+{
+	struct iniGetFastPrefixStartCmpKey key = {0};
+	struct fp_section *found;
+	adjustUncuts(fp);
+	if (fp->firstUncut >= fp->totalSections)
+		return SIZE_MAX;
+	if (prefix == NULL || *prefix == 0)
+		return fp->firstUncut;
+	key.prefix.str = prefix;
+	key.prefix.len = strlen(prefix);
+	key.base = &fp->sections[fp->firstUncut];
+
+	found = bsearch(&key, key.base, fp->lastUncut - fp->firstUncut + 1, sizeof(fp->sections[0]), iniGetFastPrefixStartCmp);
+	if (found == NULL)
+		return SIZE_MAX;
+	return found - fp->sections;
+}
+
+ini_lv_string_t **
+iniGetFastParsedSectionList(ini_fp_list_t *fp, const char* prefix, size_t *sz)
+{
+	size_t i;
+	size_t cnt = 0;
+	size_t prefixLen = 0;
+	ini_lv_string_t **ret;
+	if (fp == NULL) {
+		if (sz)
+			*sz = 0;
+		return NULL;
+	}
+	ret = malloc(sizeof(ini_lv_string_t *) * (fp->lastUncut - fp->firstUncut + 1));
+	if (ret == NULL) {
+		if (sz)
+			*sz = 0;
+		return ret;
+	}
+	if (prefix)
+		prefixLen = strlen(prefix);
+	i = iniGetFastPrefixStart(fp, prefix);
+	if (i != SIZE_MAX) {
+		for (; i <= fp->lastUncut; i++) {
+			if (fp->sections[i].name.str == NULL)
+				continue;
+			if (fp->sections[i].cut)
+				continue;
+			if (fp->sections[i].name.len < prefixLen)
+				break;
+			if (prefixLen) {
+				if (strnicmp(fp->sections[i].name.str, prefix, prefixLen))
+					break;
+			}
+			ret[cnt] = &(fp->sections[i].name);
+			cnt++;
+		}
+	}
+	if (sz)
+		*sz = cnt;
+	return ret;
+}
+
+static int QSORT_CALLBACK_TYPE
+iniGetFastParsedSectionCmp(const void *keyPtr, const void *entPtr)
+{
+	const struct fp_section *fp = entPtr;
+	const ini_lv_string_t *name = keyPtr;
+	size_t cmplen;
+	bool entShorter;
+	int cmp;
+
+	if (fp->name.str == NULL) {
+		if (name == NULL || name->str == NULL)
+			return 0;
+	}
+	if (name == NULL || name->str == NULL)
+		return -1;
+	entShorter = fp->name.len < name->len;
+	cmplen = entShorter ? fp->name.len : name->len;
+	if (cmplen) {
+		// The assumption here is that if fp->name.str == NULL, cmplen will be zero
+		// coverity[FORWARD_NULL:SUPPRESS]
+		cmp = strnicmp(name->str, fp->name.str, cmplen);
+	}
+	else
+		cmp = 0;
+	if (cmp == 0) {
+		if (fp->name.len == name->len)
+			return 0;
+		if (entShorter)
+			return 1;
+		return -1;
+	}
+	return cmp;
+}
+
+static str_list_t
+iniHandleFoundSection(struct fp_section *found, ini_fp_list_t *fp, bool cut)
+{
+	if (found == NULL)
+		return NULL;
+	if (found->cut)
+		return NULL;
+	if (cut) {
+		found->cut = true;
+		if (found == &fp->sections[fp->firstUncut])
+			fp->firstUncut++;
+		if (found == &fp->sections[fp->lastUncut] && fp->lastUncut)
+			fp->lastUncut--;
+	}
+	return found->list;
+}
+
+str_list_t
+iniGetFastParsedSection(ini_fp_list_t *fp, const char* name, bool cut)
+{
+	ini_lv_string_t nameLV;
+	struct fp_section *found;
+
+	nameLV.str = name;
+	nameLV.len = name ? strlen(name) : 0;
+	if (fp == NULL)
+		return NULL;
+	adjustUncuts(fp);
+	if (fp->firstUncut > fp->lastUncut)
+		return NULL;
+
+	found = bsearch(&nameLV, &fp->sections[fp->firstUncut], fp->lastUncut - fp->firstUncut + 1, sizeof(fp->sections[0]), iniGetFastParsedSectionCmp);
+	return iniHandleFoundSection(found, fp, cut);
+}
+
+str_list_t
+iniGetFastParsedSectionLV(ini_fp_list_t *fp, ini_lv_string_t* name, bool cut)
+{
+	struct fp_section *found;
+	if (fp == NULL)
+		return NULL;
+	adjustUncuts(fp);
+	if (fp->firstUncut > fp->lastUncut)
+		return NULL;
+
+	found = bsearch(name, &fp->sections[fp->firstUncut], fp->lastUncut - fp->firstUncut + 1, sizeof(fp->sections[0]), iniGetFastParsedSectionCmp);
+	return iniHandleFoundSection(found, fp, cut);
+}
+
+ini_lv_string_t *
+iniGetFastParsedSectionOrderedList(ini_fp_list_t *fp)
+{
+	return fp->sectionList;
+}
+
+void
+iniFastParsedSectionListFree(ini_lv_string_t **list)
+{
+	free(list);
+}
+
+const char *encryptedHeaderPrefix = "; Encrypted INI File, Algorithm: ";
+
+#if (defined(WITH_CRYPTLIB) && !defined(WITHOUT_CRYPTLIB))
+const char *
+iniCryptGetAlgoName(enum iniCryptAlgo a)
+{
+	switch(a) {
+		case INI_CRYPT_ALGO_3DES:
+			return "3DES";
+		case INI_CRYPT_ALGO_AES:
+			return "AES";
+		case INI_CRYPT_ALGO_CAST:
+			return "CAST";
+		case INI_CRYPT_ALGO_CHACHA20:
+			return "ChaCha20";
+		case INI_CRYPT_ALGO_IDEA:
+			return "IDEA";
+		case INI_CRYPT_ALGO_NONE:
+			return "NONE";
+		case INI_CRYPT_ALGO_RC2:
+			return "RC2";
+		case INI_CRYPT_ALGO_RC4:
+			return "RC4";
+	}
+	return NULL;
+}
+
+enum iniCryptAlgo
+iniCryptGetAlgoFromName(const char *n)
+{
+	if (!strcmp(n, "3DES"))
+		return INI_CRYPT_ALGO_3DES;
+	if (!strcmp(n, "AES"))
+		return INI_CRYPT_ALGO_AES;
+	if (!strcmp(n, "CAST"))
+		return INI_CRYPT_ALGO_CAST;
+	if (!strcmp(n, "ChaCha20"))
+		return INI_CRYPT_ALGO_CHACHA20;
+	if (!strcmp(n, "IDEA"))
+		return INI_CRYPT_ALGO_IDEA;
+	if (!strcmp(n, "RC2"))
+		return INI_CRYPT_ALGO_RC2;
+	if (!strcmp(n, "RC4"))
+		return INI_CRYPT_ALGO_RC4;
+	return INI_CRYPT_ALGO_NONE;
+}
+
+/*
+ * Reads an optionally encrypted INI file into a string list.
+ * 
+ * algo, ks, salt, and saltsz may all be NULL.
+ * If they are not NULL, they will be fill with the envelope data
+ * 
+ * If salt is not NULL, The initial value of saltsz must be the number
+ * of bytes that can be written to salt. salt will be NUL terminated if
+ * there's room, but will not be terminated if there's not.
+ * 
+ * If the file is encrypted, get_key() will be called to request the key
+ * material.
+ */
+str_list_t
+iniReadEncryptedFile(FILE* fp, bool(*get_key)(void *cb_data, char *keybuf, size_t *sz), int KDFiterations, enum iniCryptAlgo *algoPtr, int *ks, char *saltBuf, size_t *saltsz, void *cbdata)
+{
+	char keyData[1024];
+	size_t keyDataSize;
+	char salt[CRYPT_MAX_HASHSIZE];
+	size_t saltLength = 0;
+	char str[INI_MAX_LINE_LEN + 1];
+	size_t strpos = 0;
+	char *buffer = NULL;
+	size_t bufferSize = 0;
+	size_t keySize = 0;
+	char *start;
+	char *space;
+	char *dash;
+	char *end;
+	enum iniCryptAlgo algo = INI_CRYPT_ALGO_NONE;
+	str_list_t ret = NULL;
+	CRYPT_CONTEXT ctx = -1;
+	int status;
+	int i;
+	bool streamCipher = false;
+
+	if (fp == NULL || get_key == NULL)
+		goto done;
+
+	if (fp != NULL)
+		rewind(fp);
+
+	if (fgets(str, sizeof(str), fp) == NULL) {
+		ret = strListInit();
+		goto done;
+	}
+
+	if (strncmp(str, encryptedHeaderPrefix, sizeof(encryptedHeaderPrefix) - 1)) {
+		ret = iniReadFile(fp);
+		goto done;
+	}
+	truncnl(str);
+
+	// Parse algo, sends with a space or a dash
+	start = str;
+	start += strlen(encryptedHeaderPrefix);
+	space = strchr(start, ' ');
+	dash = strchr(start, '-');
+	if (space == NULL)
+		goto done;
+	if (dash > space)
+		dash = NULL;
+	if (dash)
+		end = dash;
+	else
+		end = space;
+	*end = 0;
+	algo = iniCryptGetAlgoFromName(start);
+	if (algo == INI_CRYPT_ALGO_NONE)
+		goto done;
+	// Now check for key size
+	if (dash) {
+		// Read key size
+		start = end;
+		start++;
+		*space = 0;
+		long ll = strtol(start, NULL, 10);
+		if (ll <= 0 || ll == LONG_MAX)
+			goto done;
+		keySize = ll;
+	}
+
+	// The rest of the line is the salt
+	start = space;
+	start++;
+	truncsp(start);
+	saltLength = strlen(start);
+	if (saltLength > sizeof(salt)) {
+		saltLength = 0;
+		goto done;
+	}
+	memcpy(salt, start, saltLength);
+
+	// Create the context...
+	status = cryptCreateContext(&ctx, CRYPT_UNUSED, (CRYPT_ALGO_TYPE)algo);
+	if (cryptStatusError(status))
+		goto done;
+	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYSIZE, keySize / 8);
+	if (cryptStatusError(status))
+		goto done;
+	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ALGO, CRYPT_ALGO_HMAC_SHA2);
+	if (cryptStatusError(status))
+		goto done;
+	if (KDFiterations < 1)
+		KDFiterations = 50000;
+	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ITERATIONS, KDFiterations);
+	if (cryptStatusError(status))
+		goto done;
+	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_SALT, salt, saltLength);
+	if (cryptStatusError(status))
+		return false;
+	keyDataSize = sizeof(keyData);
+	if (!get_key(cbdata, keyData, &keyDataSize))
+		return false;
+	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_VALUE, keyData, keyDataSize);
+	if (cryptStatusError(status))
+		return false;
+	status = cryptGetAttribute(ctx, CRYPT_CTXINFO_BLOCKSIZE, &i);
+	if (status == CRYPT_ERROR_NOTAVAIL) {
+		bufferSize = INI_MAX_LINE_LEN - 1;
+		streamCipher = true;
+	}
+	else {
+		if (i == 0 || i == 1) {
+			bufferSize = INI_MAX_LINE_LEN - 1;
+			streamCipher = true;
+		}
+		else {
+			if (cryptStatusError(status))
+				goto done;
+			bufferSize = i;
+		}
+	}
+	status = cryptGetAttribute(ctx, CRYPT_CTXINFO_IVSIZE, &i);
+	if (!cryptStatusError(status)) {
+		char iv[CRYPT_MAX_IVSIZE];
+		uint16_t ivs;
+		if (fread(&ivs, 1, sizeof(ivs), fp) != sizeof(ivs))
+			goto done;
+		i = ntohs(ivs);
+		if (fread(iv, 1, i, fp) != i)
+			goto done;
+		status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_IV, iv, i);
+		if (cryptStatusError(status))
+			goto done;
+	}
+	buffer = malloc(bufferSize);
+	if (buffer == NULL)
+		goto done;
+	size_t lines = 0;
+	while(!feof(fp)) {
+		size_t rret = fread(buffer, 1, bufferSize, fp);
+		// Getting overly paranoid here...
+		if (rret > INT_MAX) {
+			strListFree(&ret);
+			ret = NULL;
+			goto done;
+		}
+		if ((streamCipher && rret > 0) || rret == bufferSize) {
+			size_t bufpos = 0;
+			status = cryptDecrypt(ctx, buffer, rret);
+			if (cryptStatusError(status))
+				goto done;
+			while (bufpos < rret) {
+				if (buffer[bufpos] == '\n' || strpos == sizeof(str) - 2) {
+					bufpos++;
+					while (strpos && (str[strpos - 1] == '\r' || str[strpos - 1] == '\n'))
+						strpos--;
+					str[strpos] = 0;
+					char *p = str;
+					SKIP_WHITESPACE(p);
+					// TODO: Handline includes
+					if (*p == INI_COMMENT_CHAR) {
+						strListFree(&ret);
+						ret = NULL;
+						goto done;
+					}
+					if (!strListAppend(&ret, str, lines++)) {
+						strListFree(&ret);
+						ret = NULL;
+						goto done;
+					}
+					strpos = 0;
+				}
+				else
+					str[strpos++] = buffer[bufpos++];
+			}
+		}
+		else {
+			if (!feof(fp)) {
+				strListFree(&ret);
+				ret = NULL;
+				goto done;
+			}
+		}
+	}
+	// Only possible with stream ciphers
+	if (strpos) {
+		if (!strListAppend(&ret, str, lines++)) {
+			strListFree(&ret);
+			ret = NULL;
+			goto done;
+		}
+	}
+	// Empty list on success
+	if (ret == NULL)
+		ret = strListInit();
+
+done:
+	free(buffer);
+	if (ctx != -1)
+		cryptDestroyContext(ctx);
+	if (algoPtr)
+		*algoPtr = algo;
+	if (ks)
+		*ks = keySize;
+	if (saltLength && saltBuf && saltsz && *saltsz) {
+		size_t cp = *saltsz;
+		if (cp > saltLength)
+			cp = saltLength;
+		if (cp)
+			memcpy(saltBuf, salt, cp);
+		if (cp < *saltsz)
+			saltBuf[cp] = 0;
+	}
+	if (saltsz)
+		*saltsz = saltLength;
+
+	return ret;
+}
+
+static bool
+addEncrpytedChar(CRYPT_CONTEXT ctx, bool *gotIV, const char ch, char *buffer, size_t blockSize, size_t *bufferPos, FILE *fp)
+{
+	char iv[CRYPT_MAX_IVSIZE];
+	int ivSize;
+
+	buffer[(*bufferPos)++] = ch;
+	if (*bufferPos == blockSize) {
+		int status = cryptEncrypt(ctx, buffer, blockSize);
+		if (cryptStatusError(status))
+			return false;
+		if (!(*gotIV)) {
+			int status = cryptGetAttributeString(ctx, CRYPT_CTXINFO_IV, iv, &ivSize);
+			if (cryptStatusOK(status)) {
+				uint16_t ivs = htons(ivSize);
+				if (fwrite(&ivs, 1, sizeof(ivs), fp) != sizeof(ivs))
+					return false;
+				if (fwrite(iv, 1, ivSize, fp) != ivSize)
+					return false;
+			}
+			else if (status != CRYPT_ERROR_NOTAVAIL)
+				return false;
+			*gotIV = true;
+		}
+		if (fwrite(buffer, 1, blockSize, fp) != blockSize)
+			return false;
+		*bufferPos = 0;
+	}
+	return true;
+}
+
+/*
+ * Writes the INI file in list to fp encrypted with key.
+ * 
+ * If salt is specified, it must be between 8 and 64 NUL-terminated
+ * non-whitespace characters that can appear in a single line of a
+ * text file. (note 0xff is considered whitespace).
+ * 
+ * If salt is not specified (preferred), a random salt is generated.
+ * 
+ * If KDFiterations is less than 1, it is set to the default (50,000)
+ */
+bool iniWriteEncryptedFile(FILE* fp, const str_list_t list, enum iniCryptAlgo algo, int keySize, int KDFiterations, const char *key, char *salt)
+{
+	char randomSalt[CRYPT_MAX_HASHSIZE + 1];
+	int status;
+	int ctx;
+	char *buffer = NULL;
+	size_t bufferSize;
+	size_t bufferPos = 0;
+	bool streamCipher = false;
+	size_t line = 0;
+	int i;
+	bool gotIV = false;
+
+	if (KDFiterations < 1)
+		KDFiterations = 50000;
+	if (fp == NULL)
+		return false;
+	if (algo == INI_CRYPT_ALGO_NONE)
+		return iniWriteFile(fp, list);
+	if (key == NULL)
+		return false;
+	if (salt == NULL) {
+		salt = randomSalt;
+		for (size_t i = 0; i < sizeof(randomSalt) - 1; i++) {
+			randomSalt[i] = '!' + xp_random(94);
+		}
+		randomSalt[sizeof(randomSalt) - 1] = 0;
+	}
+	size_t slen = strlen(salt);
+	if (slen < 8)
+		return false;
+	if (slen > CRYPT_MAX_HASHSIZE)
+		return false;
+
+	status = cryptCreateContext(&ctx, CRYPT_UNUSED, (CRYPT_ALGO_TYPE)algo);
+	if (cryptStatusError(status))
+		return false;
+	if (keySize) {
+		status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYSIZE, keySize / 8);
+		if (cryptStatusError(status))
+			return false;
+	}
+	else {
+		status = cryptGetAttribute(ctx, CRYPT_CTXINFO_KEYSIZE, &i);
+		if (cryptStatusError(status))
+			return false;
+		keySize = i * 8;
+	}
+	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ALGO, CRYPT_ALGO_HMAC_SHA2);
+	if (cryptStatusError(status))
+		goto done;
+	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ITERATIONS, KDFiterations);
+	if (cryptStatusError(status))
+		goto done;
+	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_SALT, salt, strlen(salt));
+	if (cryptStatusError(status))
+		return false;
+	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_VALUE, key, strlen(key));
+	if (cryptStatusError(status))
+		return false;
+	status = cryptGetAttribute(ctx, CRYPT_CTXINFO_BLOCKSIZE, &i);
+	if (status == CRYPT_ERROR_NOTAVAIL) {
+		bufferSize = INI_MAX_LINE_LEN - 1;
+		streamCipher = true;
+	}
+	else {
+		if (cryptStatusError(status))
+			goto done;
+		if (i == 1 || i == 0) {
+			bufferSize = INI_MAX_LINE_LEN - 1;
+			streamCipher = true;
+		}
+		else {
+			bufferSize = i;
+		}
+	}
+	buffer = malloc(bufferSize);
+	if (buffer == NULL)
+		return false;
+
+	rewind(fp);
+	fprintf(fp, "%s%s-%d %s\n", encryptedHeaderPrefix, iniCryptGetAlgoName(algo), keySize, salt);
+	if (list) {
+		for (; list[line]; line++) {
+			size_t strPos;
+			for (strPos = 0; list[line][strPos]; strPos++) {
+				if (!addEncrpytedChar(ctx, &gotIV, list[line][strPos], buffer, bufferSize, &bufferPos, fp))
+					goto done;
+			}
+			if (!addEncrpytedChar(ctx, &gotIV, '\n', buffer, bufferSize, &bufferPos, fp))
+				goto done;
+		}
+	}
+	if (bufferPos) {
+		if (streamCipher) {
+			int status = cryptEncrypt(ctx, buffer, bufferPos);
+			if (cryptStatusError(status))
+				goto done;
+			if (fwrite(buffer, 1, bufferPos, fp) != bufferPos)
+				goto done;
+		}
+		else {
+			while (bufferPos) {
+				if (!addEncrpytedChar(ctx, &gotIV, 0, buffer, bufferSize, &bufferPos, fp)) {
+					line--;
+					goto done;
+				}
+			}
+		}
+	}
+
+done:
+	free(buffer);
+	return line == strListCount(list);
+}
+#else // WITH_CRYPTLIB && !WITHOUT_CRYPTLIB
+const char *
+iniCryptGetAlgoName(enum iniCryptAlgo a)
+{
+	switch(a) {
+		case INI_CRYPT_ALGO_NONE:
+			return "NONE";
+	}
+	return NULL;
+}
+
+enum iniCryptAlgo
+iniCryptGetAlgoFromName(const char *n)
+{
+	return INI_CRYPT_ALGO_NONE;
+}
+
+str_list_t
+iniReadEncryptedFile(FILE* fp, bool(*get_key)(void *cb_data, char *keybuf, size_t *sz), int KDFiterations, enum iniCryptAlgo *algoPtr, int *ks, char *saltBuf, size_t *saltsz, void *cbdata)
+{
+	if (algoPtr)
+		*algoPtr = INI_CRYPT_ALGO_NONE;
+	return iniReadFile(fp);
+}
+
+bool iniWriteEncryptedFile(FILE* fp, const str_list_t list, enum iniCryptAlgo algo, int keySize, int KDFiterations, const char *key, char *salt)
+{
+	return iniWriteFile(fp, list);
+}
+#endif // WITH_CRYPTLIB && !WITHOUT_CRYPTLIB
 
 #ifdef INI_FILE_TEST
 void main(int argc, char** argv)

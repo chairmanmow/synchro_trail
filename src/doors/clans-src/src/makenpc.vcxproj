@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{B4A178D4-EB7D-420D-986A-8019C96116D9}</ProjectGuid>
+  </PropertyGroup>
+  <Import Project="clans.props" />
+  <Import Project="clanslib.props" />
+  <ItemGroup>
+    <ClCompile Include="makenpc.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="defines.h" />
+    <ClInclude Include="deserialize.h" />
+    <ClInclude Include="interbbs.h" />
+    <ClInclude Include="k_npcs.h" />
+    <ClInclude Include="language.h" />
+    <ClInclude Include="myopen.h" />
+    <ClInclude Include="parsing.h" />
+    <ClInclude Include="quests.h" />
+    <ClInclude Include="serialize.h" />
+    <ClInclude Include="structs.h" />
+    <ClInclude Include="unix_wrappers.h" />
+    <ClInclude Include="win_wrappers.h" />
+  </ItemGroup>
+</Project>

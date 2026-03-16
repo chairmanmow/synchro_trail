@@ -35,14 +35,14 @@
 /*************/
 
 #define VERSION     "3.21"  // Version: Major.minor as 4-char string
-#define REVISION    'a'     // Revision: lowercase letter
+#define REVISION    'd'     // Revision: lowercase letter
 #define VERSION_INT ((DEC_CHAR_TO_INT(VERSION[0]) * 100) + (DEC_CHAR_TO_INT(VERSION[2]) * 10) + DEC_CHAR_TO_INT(VERSION[3]))  // Version as increasing 3-decimal-digit integer value
 #define VERSION_NUM (((VERSION_INT) * 100) + (tolower(REVISION) - 'a')) // Version and revision as a 5-decimal-digit integer value
 #define VERSION_HEX (((VERSION_INT / 100) * 0x10000)  + (((VERSION_INT % 100) / 10) * 0x1000) + ((VERSION_INT % 10) * 0x100) + (tolower(REVISION) - 'a'))
 
 #define VERSION_NOTICE      "Synchronet BBS for " PLATFORM_DESC \
 		"  Version " VERSION
-#define COPYRIGHT_NOTICE    "Copyright 2025 Rob Swindell"
+#define COPYRIGHT_NOTICE    "Copyright 2026 Rob Swindell"
 
 #define SBBSCTRL_DEFAULT    "/sbbs/ctrl"
 
@@ -82,12 +82,8 @@
 /************/
 
 #define MAX_NODES       250
-#define MAX_SUBS        65534
-#define MAX_DIRS        65534
-#define MAX_XTRNS       65534
 
 #define MAX_TEXTDAT_ITEM_LEN    2000
-
 
 #define LEN_DIR     100     // Maximum length of directory paths
 #define LEN_CMD     100     // Maximum length of command lines
@@ -102,9 +98,9 @@
 
 // Lengths of various strings
 #define LEN_GSNAME  15      // Group/Lib short name
-#define LEN_GLNAME  40      // Group/Lib long name
+#define LEN_GLNAME  60      // Group/Lib long name
 #define LEN_SSNAME  25      // Sub/Dir short name
-#define LEN_SLNAME  40      // Sub/Dir long name
+#define LEN_SLNAME  60      // Sub/Dir long name
 
 #define LEN_FLAGSTR 32      // Flag sets are 32-bits each
 
@@ -115,14 +111,14 @@
 #define UQ_PHONE        (1 << 3)  // Ask for phone number
 #define UQ_HANDLE       (1 << 4)  // Ask for chat handle / HAM callsign
 #define UQ_DUPHAND      (1 << 5)  // Search for duplicate handles
-#define UQ_SEX          (1 << 6)  // Ask for sex :)
+#define UQ_SEX          (1 << 6)  // Ask for gender
 #define UQ_BIRTH        (1 << 7)  // Ask for birth date
 #define UQ_UNUSED1      (1 << 8)  // was UQ_COMP
 #define UQ_UNUSED2      (1 << 9)  // was UQ_MC_COMP
 #define UQ_REALNAME     (1 << 10) // Ask for real name
 #define UQ_DUPREAL      (1 << 11) // Search for duplicate real names
 #define UQ_COMPANY      (1 << 12) // Ask for company name
-#define UQ_NOEXASC      (1 << 13) // Don't allow ex-ASCII in user text
+#define UQ_NOEXASC      (1 << 13) // Don't allow ex-ASCII in user text (same as K_NOEXASC)
 #define UQ_CMDSHELL     (1 << 14) // Ask for command shell
 #define UQ_XEDIT        (1 << 15) // Ask for external editor
 #define UQ_NODEF        (1 << 16) // Don't ask for default settings
@@ -131,6 +127,7 @@
 #define UQ_NOUPRLWR     (1 << 19) // Don't force upper/lower case strings
 #define UQ_COLORTERM    (1 << 20) // Ask if new user has color terminal
 #define UQ_DUPNETMAIL   (1 << 21) // Don't allow duplicate e-mail address
+#define UQ_NOSPACEREQ   (1 << 22) // Don't require space in real names
 
 #define DEFAULT_NEWUSER_QS (UQ_ALIASES | UQ_LOCATION | UQ_HANDLE | UQ_DUPHAND | UQ_SEX | UQ_BIRTH \
 							| UQ_REALNAME)
@@ -353,6 +350,8 @@ enum {
 	, clr_votes_empty
 	, clr_progress_full
 	, clr_progress_empty
+	, clr_userlow
+	, clr_userhigh
 	, NUM_COLORS
 };
 
@@ -425,25 +424,26 @@ typedef enum {                       // Values for xtrn_t.event
 #define XTRN_CONIO      (1U << 31)    // Intercept Windows Console I/O (Drwy)
 
 // Bits in user.qwk
-#define QWK_FILES   (1 << 0)          // Include new files list
-#define QWK_EMAIL   (1 << 1)          // Include unread e-mail
-#define QWK_ALLMAIL (1 << 2)          // Include ALL e-mail
-#define QWK_DELMAIL (1 << 3)          // Delete e-mail after download
-#define QWK_BYSELF  (1 << 4)          // Include messages from self
-#define QWK_UNUSED  (1 << 5)          // Currently unused
-#define QWK_EXPCTLA (1 << 6)          // Expand ctrl-a codes to ascii
-#define QWK_RETCTLA (1 << 7)          // Retain ctrl-a codes
-#define QWK_ATTACH  (1 << 8)          // Include file attachments
-#define QWK_NOINDEX (1 << 9)          // Do not create index files in QWK
-#define QWK_TZ      (1 << 10)         // Include "@TZ" time zone in msgs
-#define QWK_VIA     (1 << 11)         // Include "@VIA" seen-bys in msgs
-#define QWK_NOCTRL  (1 << 12)         // No extraneous control files
-#define QWK_EXT     (1 << 13)         // QWK Extended (QWKE) format
-#define QWK_MSGID   (1 << 14)         // Include "@MSGID" in msgs
-#define QWK_HEADERS (1 << 16)         // Include HEADERS.DAT file
-#define QWK_VOTING  (1 << 17)         // Include VOTING.DAT
-#define QWK_UTF8    (1 << 18)         // Include UTF-8 characters
-#define QWK_WORDWRAP (1 << 19)        // Word-wrap message text
+#define QWK_FILES       (1 << 0)      // Include new files list
+#define QWK_EMAIL       (1 << 1)      // Include unread e-mail
+#define QWK_ALLMAIL     (1 << 2)      // Include ALL e-mail
+#define QWK_DELMAIL     (1 << 3)      // Delete e-mail after download
+#define QWK_BYSELF      (1 << 4)      // Include messages from self
+#define QWK_UNUSED      (1 << 5)      // Currently unused
+#define QWK_EXPCTLA     (1 << 6)      // Expand ctrl-a codes to ascii
+#define QWK_RETCTLA     (1 << 7)      // Retain ctrl-a codes
+#define QWK_ATTACH      (1 << 8)      // Include file attachments
+#define QWK_NOINDEX     (1 << 9)      // Do not create index files in QWK
+#define QWK_TZ          (1 << 10)     // Include "@TZ" time zone in msgs
+#define QWK_VIA         (1 << 11)     // Include "@VIA" seen-bys in msgs
+#define QWK_NOCTRL      (1 << 12)     // No extraneous control files
+#define QWK_EXT         (1 << 13)     // QWK Extended (QWKE) format
+#define QWK_MSGID       (1 << 14)     // Include "@MSGID" in msgs
+#define QWK_HEADERS     (1 << 16)     // Include HEADERS.DAT file
+#define QWK_VOTING      (1 << 17)     // Include VOTING.DAT
+#define QWK_UTF8        (1 << 18)     // Include UTF-8 characters
+#define QWK_WORDWRAP    (1 << 19)     // Word-wrap message text
+#define QWK_MIME        (1 << 20)     // Include MIME-encoded message text
 
 #define QWK_DEFAULT (QWK_FILES | QWK_ATTACH | QWK_EMAIL | QWK_DELMAIL)
 
@@ -456,7 +456,9 @@ typedef enum {                       // Values for xtrn_t.event
 #define QHUB_NOHEADERS  (1 << 16)     // Don't include HEADERS.DAT
 #define QHUB_NOVOTING   (1 << 17)     // Don't include VOTING.DAT
 #define QHUB_UTF8       (1 << 18)     // Include UTF-8 characters
-#define QHUB_NATIVE     (1 << 19)     // Native call-out script
+#define QHUB_WORDWRAP   (1 << 19)     // Word-wrap message text
+#define QHUB_MIME       (1 << 20)     // Include MIME-encoded message text
+#define QHUB_NATIVE     (1 << 31)     // Native call-out script
 
 // Bits in user.chat
 #define CHAT_ECHO   (1 << 0)  // Multinode chat echo
@@ -479,17 +481,12 @@ typedef enum {                       // Values for xtrn_t.event
 
 #define EDIT_TABSIZE 4      // Tab size for internal message/line editor
 
-// Console I/O Bits	(console)
-#define CON_R_ECHO      0         // Echo remotely - Unused
-#define CON_R_ECHOX     (1 << 1)  // Echo X's to remote user
-#define CON_L_ECHOX     0       // Unused
-#define CON_R_INPUT     (1 << 2)  // Accept input remotely
-#define CON_L_ECHO      0         // Echo locally
-#define CON_PAUSEOFF    (1 << 4)  // Temporary pause over-ride (same as UPAUSE)
-#define CON_L_INPUT     (1 << 5)  // Accept input locally
+// Terminal Console I/O Bits (console)
+#define CON_PASSWORD    (1 << 1)  // Password input mode, echo *'s to remote user
+#define CON_PAUSE       (1 << 4)  // Temporary pause over-ride (same as UPAUSE)
 #define CON_RAW_IN      (1 << 8)  // Raw input mode - no editing capabilities
 #define CON_RIGHTARROW  (1 << 9)  // Right arrow hit, exiting from getstr()
-#define CON_ECHO_OFF    (1 << 10) // Remote & Local echo disabled for ML/MF
+#define CON_ECHO_OFF    (1 << 10) // Output disabled
 #define CON_UPARROW     (1 << 11) // Up arrow hit - move up one line
 #define CON_DOWNARROW   (1 << 12) // Down arrow hit, exiting from getstr()
 #define CON_NO_INACT    (1 << 13) // Console inactivity detection disabled
@@ -675,6 +672,7 @@ typedef enum {                       // Values for xtrn_t.event
 #define K_UTF8      (1 << 26)     // Don't translate UTF-8 input into CP437
 #define K_RIGHTEXIT (1 << 27)     // Allow exit by arrowing right
 #define K_LINEWRAP  (1 << 29)     // Allow string input to wrap the terminal
+#define K_EXTKEYS   (1 << 30)     // Like K_CTRLKEYS, but inkey() still performs extended (e.g. arrow) key translations
 
 // Bits in 'mode' for putmsg and printfile
 #define P_NONE      0             // No mode flags
@@ -684,7 +682,7 @@ typedef enum {                       // Values for xtrn_t.event
 #define P_NOATCODES (1 << 2)      // Don't allow @ codes
 #define P_OPENCLOSE (1 << 3)      // Open and close the file
 #define P_NOPAUSE   (1 << 4)      // Disable screen pause
-#define P_HTML      (1 << 5)      // Unused - Message is HTML
+#define P_SEEK      (1 << 5)      // Support jumping around via Home/End/PgUp/Dn, etc.
 #define P_NOCRLF    (1 << 6)      // Don't prepend a CRLF	in printfile()
 #define P_WORDWRAP  (1 << 7)      // Word-wrap long lines for user's terminal
 #define P_CPM_EOF   (1 << 8)      // Ignore Ctrl-Z chars (CPM End-of-File)
@@ -702,6 +700,7 @@ typedef enum {                       // Values for xtrn_t.event
 #define P_ATCODES   (1 << 20)     // Trusted @-codes in formatted string
 #define P_MODS      (1 << 21)     // Display from mods/text dir, if file is there
 #define P_CENTER    (1 << 22)     // Center the output based on widest line
+#define P_80COLS    (1 << 23)     // Format output for 80-column display
 
 #define P_XATTR_SHIFT 20
 #define P_WILDCAT   (SM_WILDCAT  << P_XATTR_SHIFT)
@@ -925,7 +924,7 @@ enum COLORS {
 /********************/
 
 typedef struct {                        // Users information
-	ushort number;                      // Number
+	int    number;                      // Number
 	uint   uls,                         // Number of uploads
 	       dls,                         // Number of downloads
 	       posts,                       // Number of posts
@@ -948,7 +947,7 @@ typedef struct {                        // Users information
 	     name[LEN_NAME + 1],            // Name - Real
 	     handle[LEN_HANDLE + 1],        // Chat handle
 	     lang[LEN_LANG + 1],            // Language code (blank for default)
-	     comp[LEN_HOST + 1],            // Hostname
+	     host[LEN_HOST + 1],            // Hostname
 	     note[LEN_NOTE + 1],            // Public notice about this user
 	     address[LEN_ADDRESS + 1],      // Street Address
 	     location[LEN_LOCATION + 1],    // Location of user
@@ -966,7 +965,7 @@ typedef struct {                        // Users information
 	     ipaddr[LEN_IPADDR + 1];        // Last known IP address
 
 	uchar level,                        // Security level
-	      sex,                          // Sex - M or F
+	      gender,                       // Gender, e.g. 'M', 'F', ' ' (unknown)
 	      prot,                         // Default transfer protocol
 	      leech;                        // Leech attempt counter
 
@@ -1029,7 +1028,8 @@ typedef struct {                        // System/Node Statistics
 } totals_t;
 
 typedef struct {                        // System/Node Statistics
-	time_t date;                        // When stats were last rolled-over
+	time32_t date;                      // When stats were last rolled-over
+	time32_t last;                      // When stats were last read from disk
 	union {
 		totals_t total;
 		struct { // legacy names

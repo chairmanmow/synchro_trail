@@ -27,6 +27,11 @@
 #endif
 #include "genwrap.h"
 #include "str_list.h"	/* strList_t */
+#ifdef WITH_CRYPTLIB
+#ifndef WITHOUT_CRYPTLIB
+	#include "cryptlib.h"
+#endif
+#endif
 
 #define INI_MAX_VALUE_LEN	1024		/* Maximum value length, includes '\0' */
 #define ROOT_SECTION		NULL
@@ -45,9 +50,31 @@ typedef struct {
 	char*	literal_separator;
 } ini_style_t;
 
+typedef struct {
+	const char *str;
+	size_t len;
+} ini_lv_string_t;
+
+typedef struct fp_list_s ini_fp_list_t;
+
 #if defined(__cplusplus)
 extern "C" {
 #endif
+
+enum iniCryptAlgo {
+#if (defined(WITHOUT_CRYPTLIB) || !defined(WITH_CRYPTLIB))
+	INI_CRYPT_ALGO_NONE,
+#else	
+	INI_CRYPT_ALGO_NONE = CRYPT_ALGO_NONE,
+	INI_CRYPT_ALGO_3DES = CRYPT_ALGO_3DES,
+	INI_CRYPT_ALGO_IDEA = CRYPT_ALGO_IDEA,
+	INI_CRYPT_ALGO_CAST = CRYPT_ALGO_CAST,
+	INI_CRYPT_ALGO_RC2 = CRYPT_ALGO_RC2,
+	INI_CRYPT_ALGO_RC4 = CRYPT_ALGO_RC4,
+	INI_CRYPT_ALGO_AES = CRYPT_ALGO_AES,
+	INI_CRYPT_ALGO_CHACHA20 = CRYPT_ALGO_CHACHA20,
+#endif
+};
 
 /* Read all section names and return as an allocated string list */
 /* Optionally (if prefix!=NULL), returns a subset of section names */
@@ -123,16 +150,17 @@ DLLEXPORT uint 			iniReadBitField(FILE*, const char* section, const char* key
 #define		iniReadLogLevel(f,s,k,d) iniReadEnum(f,s,k,iniLogLevelStringList(),d)
 
 /* Free string list returned from iniRead*List functions */
-DLLEXPORT void* 		iniFreeStringList(str_list_t list);
+DLLEXPORT str_list_t 	iniFreeStringList(str_list_t list);
 
 /* Free named string list returned from iniReadNamedStringList */
-DLLEXPORT void* 		iniFreeNamedStringList(named_string_t** list);
+DLLEXPORT named_string_t** iniFreeNamedStringList(named_string_t** list);
 
 
 /* File I/O Functions */
 DLLEXPORT char* 		iniFileName(char* dest, size_t maxlen, const char* dir, const char* fname);
 DLLEXPORT FILE* 		iniOpenFile(const char* fname, bool for_modify);
 DLLEXPORT str_list_t 	iniReadFile(FILE*);
+DLLEXPORT str_list_t 	iniReadFiles(FILE*, bool includes);
 DLLEXPORT bool 			iniWriteFile(FILE*, const str_list_t);
 DLLEXPORT bool 			iniCloseFile(FILE*);
 
@@ -163,6 +191,8 @@ DLLEXPORT char* 		iniGetExistingString(str_list_t, const char* section, const ch
 							,const char* deflt, char* value /* may be NULL */);
 DLLEXPORT str_list_t 	iniGetStringList(str_list_t, const char* section, const char* key
 							,const char* sep, const char* deflt);
+DLLEXPORT str_list_t 	iniGetSparseStringList(str_list_t, const char* section, const char* key
+							,const char* sep, const char* deflt, size_t min_len);
 DLLEXPORT int 			iniGetInteger(str_list_t, const char* section, const char* key
 							,int deflt);
 DLLEXPORT int 			iniGetIntInRange(str_list_t, const char* section, const char* key
@@ -316,6 +346,21 @@ DLLEXPORT named_str_list_t** iniParseSections(const str_list_t);
 DLLEXPORT str_list_t	iniGetParsedSection(named_str_list_t**, const char* section, bool cut);
 DLLEXPORT str_list_t 	iniGetParsedSectionList(named_str_list_t**, const char* prefix);
 DLLEXPORT void*			iniFreeParsedSections(named_str_list_t** list);
+
+/* Fast functions */
+DLLEXPORT ini_fp_list_t * iniFastParseSections(const str_list_t list, bool orderedList);
+DLLEXPORT ini_lv_string_t **iniGetFastParsedSectionList(ini_fp_list_t *fp, const char* prefix, size_t *sz);
+DLLEXPORT str_list_t iniGetFastParsedSection(ini_fp_list_t *fp, const char* name, bool cut);
+DLLEXPORT str_list_t iniGetFastParsedSectionLV(ini_fp_list_t *fp, ini_lv_string_t* name, bool cut);
+DLLEXPORT void iniFastParsedSectionListFree(ini_lv_string_t **list);
+DLLEXPORT void iniFreeFastParse(ini_fp_list_t *s);
+DLLEXPORT ini_lv_string_t *iniGetFastParsedSectionOrderedList(ini_fp_list_t *fp);
+
+/* Encryption Functions (can't do includes yet) */
+DLLEXPORT str_list_t iniReadEncryptedFile(FILE* fp, bool(*get_key)(void *cb_data, char *keybuf, size_t *sz), int KDFiterations, enum iniCryptAlgo *algoPtr, int *ks, char *saltBuf, size_t *saltsz, void *cbdata);
+DLLEXPORT bool iniWriteEncryptedFile(FILE* fp, const str_list_t list, enum iniCryptAlgo algo, int keySize, int KDFiterations, const char *key, char *salt);
+DLLEXPORT const char *iniCryptGetAlgoName(enum iniCryptAlgo a);
+DLLEXPORT enum iniCryptAlgo iniCryptGetAlgoFromName(const char *n);
 
 /*
  * Too handy to leave internal

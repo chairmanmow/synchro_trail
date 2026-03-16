@@ -75,6 +75,29 @@
 #endif
 
 /****************************************************************************/
+/* Handles mixed forward and backslashes									*/
+/* Handles missing trailing slash											*/
+/****************************************************************************/
+bool paths_are_same(const char* path1, const char* path2)
+{
+	size_t i;
+
+	for (i = 0; path1[i] != '\0' && path2[i] != '\0'; ++i) {
+		if (path1[i] == path2[i])
+			continue;
+		if (!IS_PATH_DELIM(path1[i]) || !IS_PATH_DELIM(path2[i]))
+			break;
+	}
+	if (path1[i] == '\0' && path2[i] == '\0')
+		return true;
+	if (path1[i] == '\0' && IS_PATH_DELIM(path2[i]) && path2[i + 1] == '\0')
+		return true;
+	if (path2[i] == '\0' && IS_PATH_DELIM(path1[i]) && path1[i + 1] == '\0')
+		return true;
+	return false;
+}
+
+/****************************************************************************/
 /* Return the filename portion of a full pathname							*/
 /****************************************************************************/
 char* getfname(const char* path)
@@ -400,7 +423,7 @@ struct dirent* readdir(DIR* dir)
 		return NULL;
 	if (dir->handle == -1)
 		return NULL;
-	strlcpy(dir->dirent.d_name, dir->finddata.name, sizeof(dir->dirent.d_name) - 1);
+	strlcpy(dir->dirent.d_name, dir->finddata.name, sizeof(dir->dirent.d_name));
 	if (_findnext(dir->handle, &dir->finddata) != 0)
 		dir->end = true;
 	return &dir->dirent;
@@ -592,23 +615,33 @@ static bool getfilecase(char *path, bool dir)
 #if defined(_WIN32)
 
 	char*              fname;
+	char*              last = lastchar(path);
+	char               lastch = *last;
 	intptr_t           handle;
 	struct _finddata_t f;
 
+	if (IS_PATH_DELIM(lastch))
+		*last = '\0';
 #if 0
 	if (access(path, F_OK) == -1 && !filename_has_wildcard(path))
 		return false;
 #endif
-	if ((handle = _findfirst((char*)path, &f)) == -1)
+	if ((handle = _findfirst(path, &f)) == -1) {
+		*last = lastch;
 		return false;
+	}
 
 	_findclose(handle);
 
-	if (INT_TO_BOOL(f.attrib & _A_SUBDIR) != dir)
+	if (INT_TO_BOOL(f.attrib & _A_SUBDIR) != dir) {
+		*last = lastch;
 		return false;
+	}
 
 	fname = getfname(path);   /* Find filename in path */
 	strcpy(fname, f.name);   /* Correct filename */
+	if (dir)
+		backslash(fname);
 
 	return true;
 
@@ -628,7 +661,10 @@ static bool getfilecase(char *path, bool dir)
 		return true;
 
 	SAFECOPY(globme, path);
-	p = getfname(globme);
+	if (dir && *lastchar(globme) == '/')
+		p = getdirname(globme);
+	else
+		p = getfname(globme);
 	SAFECOPY(fname, p);
 	*p = 0;
 	for (i = 0; fname[i]; i++)  {
@@ -640,24 +676,25 @@ static bool getfilecase(char *path, bool dir)
 	}
 #if 0
 	if (strcspn(path, "?*") != strlen(path))  {
-		sprintf(path, "%.*s", MAX_PATH, globme);
+		strlcpy(path, globme, MAX_PATH + 1);
 		return fexist(path);
 	}
 #endif
 
-#if !defined GLOB_ONLYDIR
-	#define GLOB_ONLYDIR 0
+	int flags = GLOB_MARK;
+#if defined GLOB_ONLYDIR
+	if (dir) flags |= GLOB_ONLYDIR;
 #endif
-	if (glob(globme, dir ? GLOB_ONLYDIR : GLOB_MARK, NULL, &glb) != 0)
+	if (glob(globme, flags, NULL, &glb) != 0)
 		return false;
 
 	if (glb.gl_pathc > 0)  {
 		for (i = 0; i < glb.gl_pathc; i++)  {
-			if (*lastchar(glb.gl_pathv[i]) != '/')
+			if ((*lastchar(glb.gl_pathv[i]) == '/') == dir)
 				break;
 		}
 		if (i < glb.gl_pathc)  {
-			sprintf(path, "%.*s", MAX_PATH, glb.gl_pathv[i]);
+			strlcpy(path, glb.gl_pathv[i], MAX_PATH + 1);
 			globfree(&glb);
 			return true;
 		}
@@ -676,6 +713,8 @@ bool fexistcase(char *path)
 
 bool getdircase(char* path)
 {
+	if (IS_ROOT_DIR(path) && isdir(path))
+		return true;
 	return getfilecase(path, true);
 }
 

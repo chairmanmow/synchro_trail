@@ -96,8 +96,7 @@ int sbbs_t::exec_function(csi_t *csi)
 			return 0;
 		case CS_LOGOFF:
 			if (text[LogOffQ][0] == 0 || !noyes(text[LogOffQ])) {
-				if (cfg.logoff_mod[0])
-					exec_bin(cfg.logoff_mod, csi);
+				exec_mod("logoff", cfg.logoff_mod);
 				user_event(EVENT_LOGOFF);
 				menu("logoff");
 				sync();
@@ -161,7 +160,7 @@ int sbbs_t::exec_function(csi_t *csi)
 			readmail(useron.number, MAIL_SENT);
 			return 0;
 		case CS_MAIL_READ_ALL:
-			readmail(useron.number, MAIL_ALL);
+			readmail(useron.number, MAIL_ALL, /* list msgs: */false);
 			return 0;
 		case CS_MAIL_SEND:       /* Send E-mail */
 			if (strchr(csi->str, '@')) {

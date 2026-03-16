@@ -343,6 +343,7 @@ void ODKrnlShutdown(void)
  *
  *     Return: void
  */
+extern tODMilliSec ODMaxMSToWait;
 ODAPIDEF void ODCALL od_kernel(void)
 {
 #ifndef OD_MULTITHREADED
@@ -402,6 +403,7 @@ ODAPIDEF void ODCALL od_kernel(void)
       while(ODComGetByte(hSerialPort, &ch, FALSE) == kODRCSuccess)
       {
          ODKrnlHandleReceivedChar(ch, TRUE);
+         ODMaxMSToWait = 0;
       }
    }
 
@@ -1026,11 +1028,12 @@ DWORD OD_THREAD_FUNC ODKrnlRemoteInputThread(void *pParam)
    {
       /* Get next character from the modem, blocking if no character */
       /* is waiting.                                                 */
-      ODComGetByte(hSerialPort, &chReceived, TRUE);
+      if (ODComGetByte(hSerialPort, &chReceived, TRUE) == kODRCSuccess) {
 
-      /* Handle this received character, adding it to the local/remote */
-      /* common input queue, if appropriate.                           */
-      ODKrnlHandleReceivedChar(chReceived, TRUE);
+         /* Handle this received character, adding it to the local/remote */
+         /* common input queue, if appropriate.                           */
+         ODKrnlHandleReceivedChar(chReceived, TRUE);
+      }
    }
 
    return(0);

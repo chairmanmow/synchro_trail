@@ -32,18 +32,20 @@ extern "C" {
 DLLEXPORT char*     backslashcolon(char *str);
 DLLEXPORT ulong     ahtoul(const char *str);    /* Converts ASCII hex to ulong */
 DLLEXPORT uint32_t  ahtou32(const char* str);   /* Converts ASCII hex to uint32_t */
-DLLEXPORT char *    hexplus(uint num, char *str);   /* Hex plus for 3 digits up to 9000 */
-DLLEXPORT uint      hptoi(const char *str);
 DLLEXPORT int       pstrcmp(const char **str1, const char **str2);  /* Compares pointers to pointers */
 DLLEXPORT int       strsame(const char *str1, const char *str2);    /* Compares number of same chars */
 DLLEXPORT char *    remove_ctrl_a(const char* instr, char* outstr);
+DLLEXPORT void      remove_end_substr(char* str, const char* substr);
 DLLEXPORT char      ctrl_a_to_ascii_char(char code);
 DLLEXPORT char *    truncstr(char* str, const char* set);
 DLLEXPORT char *    truncated_str(char* str, const char* set);
 DLLEXPORT char *    ascii_str(uchar* str);
-DLLEXPORT char *    replace_named_values(const char* src, char* buf, size_t buflen,
-                                         const char* escape_seq, named_string_t* string_list,
-                                         named_int_t* int_list, bool case_sensitive);
+DLLEXPORT char *    replace_named_values(const char* src, char* buf, size_t buflen
+                                         , const char* escape_seq
+                                         , named_string_t** strlist_list
+                                         , named_string_t* string_list
+                                         , named_long_t* int_list
+                                         , bool case_sensitive);
 DLLEXPORT char *    replace_chars(char *str, char c1, char c2);
 DLLEXPORT char *    condense_whitespace(char* str);
 DLLEXPORT char      exascii_to_ascii_char(uchar ch);

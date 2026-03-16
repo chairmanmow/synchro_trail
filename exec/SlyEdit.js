@@ -6,160 +6,20 @@
  * BBS: Digital Distortion
  * BBS address: digdist.bbsindex.com
  *
- * Date       Author            Description
- * 2022-06-23 Eric Oulashin     Version 1.80 Beta
- *                              Started working (again) on text color support
- * 2022-07-04 Eric Oulashin     Version 1.80
- *                              Added the ability to choose/change the color of text being typed,
- *                              using Ctrl-K if color changing is enabled.
- * 2022-11-19 Eric Oulashin     Version 1.81 Beta
- *                              Refactored ReadSlyEditConfigFile().  Also, the color configuration
- *                              files now can just specify attribute characters, without the
- *                              control character.
- * 2022-11-26 Eric Oulashin     Version 1.81
- *                              Releasing this verison.
- * 2022-12-01 Eric Oulashin     Version 1.82
- *                              Added some safety checks when reading the configuration file
- *                              (that section of code was refactored recently).
- * 2022-12-13 Eric Oulashin     Version 1.83
- *                              Quote lines that are wider than the user's terminal width are
- *                              now wrapped to the user's terminal width to ensure all the
- *                              quote lines are entirely available to be quoted.
- * 2023-02-10 Eric Oulashin     Version 1.84
- *                              Sysops: When importing a file from the BBS machine, SlyEdit now
- *                              prompts to send it immediately or not (if not, edit it before
- *                              sending).  Sending immediately can be useful for posting
- *                              ANSI files unmodified.
- * 2023-05-15 Eric Oulashin     Version 1.85
- *                              Internal: Refactored readColorConfig() in _DCTStuff.js and _IceStuff.js.
- *                              Removed the readValueSettingConfigFile() function.
- * 2023-06-09 Eric Oulashin     Version 1.86 Beta
- *                              Started refactoring the re-wrapping of quote lines to
- *                              work better for the various quote prefixes used in
- *                              various messages.
- * 2023-07-26 Eric Oulashin     Version 1.86
- *                              Releasing this version
- * 2023-08-15 Eric Oulashin     Version 1.87
- *                              Improvement to paragraph/line breaks in quote line wrapping
- * 2023-12-17 Eric Oulashin     Version 1.87a
- *                              Using the msg_area.sub object to check sub-board settings instead
- *                              of opening the sub-board (for determining whether to post with
- *                              real name)
- * 2024-02-07 Eric Oulashin     Version 1.88
- *                              Support for entering UTF-8/Unicode characters; using K_CP437 to
- *                              convert to CP437
- * 2024-02-11 Eric Oulashin     1.88b
- *                              Previous change reverted; "Real" UTF-8 support implemented for
- *                              text input.
- *                              New feature: Entering a graphic char with Ctrl-G (Ctrl-G
- *                              was previously the key for general help, which wasn't much)
- * 2024-02-12 Eric Oulashin     1.88c
- *                              UTF-8 support in the displayed header and when quoting text
- *                              and when quoting message text
- * 2024-02-16 Eric Oulashin     1.88d
- *                              Header display update for UTF-8. And printing from/to/subj after
- *                              writing the header with empty data so that the header 'graphic'
- *                              characters & everything lines up properly.
- * 2024-04-30 Eric Oulashin     Version 1.89
- *                              Quote wrapping length: When re-wrapping quote lines, read the
- *                              editor configuration settings for "word-wrap quoted text" as
- *                              specified in xtrn.ini (settable in scfg) - Wrap quote lines
- *                              to the width specified there, or if not specified, default to
- *                              79 columns. This is to help ensure quoted text is a reasonable
- *                              width for many terminals. The wrapping logic is also called for
- *                              prepending quoted text with the quote prefix, so (for now)
- *                              there needs to be a default quote wrap width.
- * 2024-05-04 Eric Oulashin     Version 1.89a
- *                              Don't line-wrap poll messages for quoting, as that could mess
- *                              up the formatting of the poll options.  Also, a minor fix for
- *                              the 'to' name length in DCT mode when using a wide terminal.
- * 2024-05-11 Eric Oulashin     Version 1.89b
- *                              In SlyEdit_Misc.js, check to see that xtrn_area.editor[user.editor]
- *                              is an object before using it.
- * 2024-10-19 Eric Oulashin     Version 1.89c
- *                              Open the quote file in binary mode to avoid EOF issues on Windows
- *                              if a unicode "right arrow" code exists in the message, which
- *                              would get truncated to ASCII Ctrl-Z (ASCII 26), which is
- *                              interpreted as EOF on Windows.
- * 2024-10-19 Eric Oulashin     Version 1.89d
- *                              User inactivity timeout improvement (via use of console.getkey()
- *                              instead of the custom function that was being used)
- * 2025-02-09 Eric Oulashin     Version 1.89e
- *                              User inactivity timeout: Display a warning message (without
- *                              messing with the screen). New [STRINGS] configuration section
- *                              with stringsFilename to specify the name of a strings file,
- *                              which for now just contains an areYouThere setting
- * 2025-04-23 Eric Oulashin     Version 1.90 Beta
- *                              Started work on updating the way files are saved when not
- *                              editing a message (i.e., if the user is editing an SSH key):
- *                              Not adding a space after each (wrapped) line, etc..
- *                              Also, color/attribute codes are no longer removed from
- *                              quote lines. Although quote lines still appear in SlyEdit
- *                              with one (configurable) color, the quoted text will retain
- *                              color/attribute codes when the message is posted.
- * 2025-05-03 Eric Oulashin     New feature: A 'meme' can be added to the message by typing
- *                              /m on an empty line by itself and pressing enter.
- * 2025-05-04 Eric Oulashin     Bug fix: When closing the User Settings dialog, quote lines
- *                              are refreshed with the configured quote line color (instead
- *                              of with any color codes included in those lines)
- *
- *                              Bug fix: When closing the User Settings dialog, existing message
- *                              lines are refreshed better; sometimes, there were small parts of
- *                              the beginnings of some lines that were blanked out.
- *
- * 2025-05-06 Eric Oulashin     Bug fix (sort of): DCT mode File menu wasn't drawing when the user
- *                              presses the ESC key to bring up the menu. I don't know why that's
- *                              happening. I found a kludge that seems to fix it.
- *
- *                              On startup, SlyEdit now sets the 'normal' attribute on the
- *                              console to clear away any background color or other attribute(s)
- *                              that may have been set.
- * 2025-05-07 Eric Oulashin     Version 1.90
- *                              Releasing this version
- * 2025-05-20 Eric Oulashin     Version 1.91
- *                              Bug fix: Message text is now properly re-written when the Program
- *                              Info box (available from DCT mode) is erased
- * 2025-06-09 Eric Oulashin     Version 1.92
- *                              Added a user-togglable setting in the user settings for whether
- *                              to (re-)wrap quote lines to terminal width. Also, a user toggle
- *                              for whether to join wrapped quote lines.
- * 2025-06-24 Eric Oulashin     Version 1.92a
- *                              Bug fix: For cross-posting, when selecting a sub-board,
- *                              the additional menu quit keys were set as item-select keys
- *                              instead..  Switched the function call so it sets them as
- *                              additional quit keys.
- * 2025-08-02 Eric Oulashin     Version 1.92b
- *                              Cross-post selection fix to not select when just enter
- *                              is pressed (just confirm). Also, updated cross-post help
- *                              text and bottom border help text for othe cross-post menu
- *                              to explain that better.
  */
 
-"use strict";
+// TODO: When the user changes their quote hotkey setting & closes the
+// user settings dialog, for optimal screen refreshing, update only the
+// portion of the line showing the quote hotkey rather than re-drawing
+// the entire line. As a starting point, see the code for
+// "case USER_SETTINGS_KEY:" in the doInputLoop() function.
 
 /* Command-line arguments:
  1 (argv[0]): Filename to read/edit
- 2 (argv[1]): Editor mode ("DCT", "ICE", or "RANDOM")
-*/
+ 2 (argv[1]): LEGACY - No longer needed: Editor mode ("DCT", "ICE", or "RANDOM")
+ */
 
-// EDITOR_STYLE: Can be changed to mimic the look of DCT Edit or IceEdit.
-// The following are supported:
-//  "DCT": DCT Edit style
-//  "ICE": IceEdit style
-//  "RANDOM": Randomly choose a style
-var EDITOR_STYLE = "DCT";
-// The second command-line argument (argv[1]) can change this.
-if (typeof(argv[1]) != "undefined")
-{
-	var styleUpper = argv[1].toUpperCase();
-	// Make sure styleUpper is valid before setting EDITOR_STYLE.
-	if (styleUpper == "DCT")
-		EDITOR_STYLE = "DCT";
-	else if (styleUpper == "ICE")
-		EDITOR_STYLE = "ICE";
-	else if (styleUpper == "RANDOM")
-		EDITOR_STYLE = (Math.floor(Math.random()*2) == 0) ? "DCT" : "ICE";
-}
+"use strict";
 
 // Load required JavaScript libraries
 var requireFnExists = (typeof(require) === "function");
@@ -170,7 +30,8 @@ if (requireFnExists)
 	require("text.js", "AreYouThere");
 	require("frame.js", "Frame");
 	require("scrollbar.js", "ScrollBar");
-	require(js.exec_dir + "SlyEdit_Misc.js", "gUserSettingsFilename");
+	require("slyedit_misc.js", "gUserSettingsFilename");
+	require("choice_scroll_box.js", "ChoiceScrollbox");
 }
 else
 {
@@ -179,7 +40,8 @@ else
 	load("text.js");
 	load("frame.js");
 	load("scrollbar.js");
-	load(js.exec_dir + "SlyEdit_Misc.js");
+	load("slyedit_misc.js");
+	load("choice_scroll_box.js");
 }
 
 // Load program settings from SlyEdit.cfg, and load the user configuratio nsettings
@@ -191,6 +53,19 @@ for (var i = 0; i < gConfigSettings.thirdPartyLoadOnStart.length; ++i)
 // Execute any provided startup JavaScript commands
 for (var i = 0; i < gConfigSettings.runJSOnStart.length; ++i)
 	eval(gConfigSettings.runJSOnStart[i]);
+
+// Load the Ice/DCT mode files (this must be done after settings have been read)
+if (requireFnExists)
+{
+	require("slyedit_dct_stuff.js", "DrawQuoteWindowTopBorder_DCTStyle");
+	require("slyedit_ice_stuff.js", "DrawQuoteWindowTopBorder_IceStyle");
+}
+else
+{
+	load("slyedit_dct_stuff.js");
+	load("slyedit_ice_stuff.js");
+}
+
 
 const EDITOR_PROGRAM_NAME = "SlyEdit";
 const ERRORMSG_PAUSE_MS = 1500;
@@ -227,8 +102,8 @@ if (console.screen_columns < 80)
 }
 
 // Version information
-var EDITOR_VERSION = "1.92b";
-var EDITOR_VER_DATE = "2025-08-02";
+var EDITOR_VERSION = "2.00";
+var EDITOR_VER_DATE = "2026-03-05";
 
 
 // Program variables
@@ -279,8 +154,11 @@ var gQuoteLineColor = "\x01n\x01c";          // The text color for quote lines
 
 // When using color attributes and inserting text into a line, there are situations where we might want to
 // start at index+1 when shifting attribute codes to the right, and other times we want to start at index.
-// This defaults to true.
-var gTextInsertColorShiftIndexPlusOne = true;
+// This is computed from cursor position: use index+1 when cursor is not at the very beginning of the line.
+function shouldShiftAttrsAtIndexPlusOne()
+{
+	return gTextLineIndex > 0;
+}
 
 // gQuotePrefix contains the text to prepend to quote lines.
 // gQuotePrefix will later be updated to include the message sender's
@@ -387,6 +265,50 @@ gCrossPostMsgSubs.numSubBoards = function () {
 
 
 
+
+// EDITOR_STYLE: Can be changed to mimic the look of DCT Edit or IceEdit.
+// The following are supported:
+//  "DCT": DCT Edit style
+//  "ICE": IceEdit style
+//  "RANDOM": Randomly choose a style
+// The editor style is a user setting now, and the user is able to change it
+// even at runtime, but the command-line parameter can still be used. If the
+// command-line parameter is used, then the user will not be prompted on 1st
+// startup to choose the editor style.
+// If the user doesn't have their preference for this set, the command-line
+// parameter will override.
+// If the user _does_ have this preference set, their preference will override
+// the command-line parameter.
+var EDITOR_STYLE = "DCT";
+// If the user hasn't chosen a UI mode (Ice/DCT/Random) (i.e., if the
+// user hasn't used SlyEdit yet or has used SlyEdit before the user
+// setting existed), prompt the user which UI mode they want
+if (gUserSettings.slyEditMode.length == 0)
+{
+	if (argv.length > 1)
+	{
+		var styleUpper = argv[1].toUpperCase();
+		// Make sure styleUpper is valid before setting the option.
+		if (styleUpper == "DCT" || styleUpper == "ICE" || styleUpper == "RANDOM")
+			gUserSettings.slyEditMode = styleUpper;
+	}
+	else
+	{
+		var chosenUIMode = letUserSelectUIMode(true);
+		if (chosenUIMode == "")
+		{
+			console.gotoxy(1, 15);
+			console.print("\x01y\x01h* \x01wMode not chosen!\x01n\r\n");
+			exit(1);
+		}
+	}
+}
+if (gUserSettings.slyEditMode == "RANDOM")
+	EDITOR_STYLE = (Math.floor(Math.random()*2) == 0) ? "DCT" : "ICE";
+else
+	EDITOR_STYLE = gUserSettings.slyEditMode;
+
+
 // Set up some standard function names for various screen/UI functionality
 // that are common to the Ice & DCT styles.
 var fpDrawQuoteWindowTopBorder = null;
@@ -408,63 +330,8 @@ var gSubjPos = {
 	y: 0
 };
 var gSubjScreenLen = 0;
-if (EDITOR_STYLE == "DCT")
-{
-	if (requireFnExists)
-		require(js.exec_dir + "SlyEdit_DCTStuff.js", "DrawQuoteWindowTopBorder_DCTStyle");
-	else
-		load(js.exec_dir + "SlyEdit_DCTStuff.js");
-	gEditTop = 6;
-	gQuoteWinTextColor = gConfigSettings.DCTColors.QuoteWinText;
-	gQuoteLineHighlightColor = gConfigSettings.DCTColors.QuoteLineHighlightColor;
-	gTextAttrs = "\x01n";
-	gQuoteLineColor = gConfigSettings.DCTColors.QuoteLineColor;
-
-	// Function pointers for the DCTEdit-style screen update functions
-	fpDrawQuoteWindowTopBorder = DrawQuoteWindowTopBorder_DCTStyle;
-	fpDisplayTextAreaBottomBorder = DisplayTextAreaBottomBorder_DCTStyle;
-	fpDrawQuoteWindowBottomBorder = DrawQuoteWindowBottomBorder_DCTStyle;
-	fpRedrawScreen = redrawScreen_DCTStyle;
-	fpUpdateInsertModeOnScreen = updateInsertModeOnScreen_DCTStyle;
-	fpDisplayBottomHelpLine = DisplayBottomHelpLine_DCTStyle;
-	fpDisplayTime = displayTime_DCTStyle;
-	fpDisplayTimeRemaining = displayTimeRemaining_DCTStyle;
-	fpCallESCMenu = callDCTESCMenu;
-	fpGlobalScreenVarsSetup = globalScreenVarsSetup_DCTStyle;
-
-	// Note: gSubjScreenLen is set in redrawScreen_DCTStyle()
-	fpRefreshSubjectOnScreen = refreshSubjectOnScreen_DCTStyle;
-}
-else if (EDITOR_STYLE == "ICE")
-{
-	if (requireFnExists)
-		require(js.exec_dir + "SlyEdit_IceStuff.js", "DrawQuoteWindowTopBorder_IceStyle");
-	else
-		load(js.exec_dir + "SlyEdit_IceStuff.js");
-	gEditTop = 5;
-	gQuoteWinTextColor = gConfigSettings.iceColors.QuoteWinText;
-	gQuoteLineHighlightColor = gConfigSettings.iceColors.QuoteLineHighlightColor;
-	gTextAttrs = "\x01n";
-	gQuoteLineColor = gConfigSettings.iceColors.QuoteLineColor;
-
-	// Function pointers for the IceEdit-style screen update functions
-	fpDrawQuoteWindowTopBorder = DrawQuoteWindowTopBorder_IceStyle;
-	fpDisplayTextAreaBottomBorder = DisplayTextAreaBottomBorder_IceStyle;
-	fpDrawQuoteWindowBottomBorder = DrawQuoteWindowBottomBorder_IceStyle;
-	fpRedrawScreen = redrawScreen_IceStyle;
-	fpUpdateInsertModeOnScreen = updateInsertModeOnScreen_IceStyle;
-	fpDisplayBottomHelpLine = DisplayBottomHelpLine_IceStyle;
-	fpDisplayTime = displayTime_IceStyle;
-	fpDisplayTimeRemaining = displayTimeRemaining_IceStyle;
-	fpCallESCMenu = callIceESCMenu;
-	fpGlobalScreenVarsSetup = globalScreenVarsSetup_IceStyle;
-
-	// Note: gSubjScreenLen is set in redrawScreen_IceStyle()
-	fpRefreshSubjectOnScreen = refreshSubjectOnScreen_IceStyle;
-}
-
-// Set up any required global screen variables
-fpGlobalScreenVarsSetup();
+// Set up the global variables related to the chosen UI mode
+setUIModeVars();
 
 // Message display & edit variables
 var gInsertMode = "INS";       // Insert (INS) or overwrite (OVR) mode
@@ -638,7 +505,7 @@ if (dropFileName != undefined)
 			// specifies the character set (CP437 or UTF-8)
 			if (info.length >= 8)
 				gConfiguredCharset = info[7].toUpperCase();
-			
+
 			gFromName = info[0];
 			gToName = info[1];
 			gMsgSubj = info[2];
@@ -1104,7 +971,7 @@ if ((exitCode == 0) && (gEditLines.length > 0))
 						{
 							savedTheMessage = true;
 							crossPosted = true;
-							console.print("\x01n\x01h\x01b[\x01n\x01g" + CHECK_CHAR + "\x01n\x01h\x01b]\x01n");
+							console.print("\x01n\x01h\x01b[\x01n\x01g" + CP437_CHECK_MARK + "\x01n\x01h\x01b]\x01n");
 						}
 						else
 						{
@@ -1430,7 +1297,7 @@ function doEditLoop()
 	const CMDLIST_HELP_KEY          = CTRL_L;
 	const CMDLIST_HELP_KEY_2        = KEY_F1;
 	const IMPORT_FILE_KEY           = CTRL_O;
-	const QUOTE_KEY                 = CTRL_Q;
+	var QUOTE_KEY                   = gUserSettings.ctrlQQuote ? CTRL_Q : CTRL_Y;
 	const SPELL_CHECK_KEY           = CTRL_R;
 	const CHANGE_SUBJECT_KEY        = CTRL_S;
 	const LIST_TXT_REPLACEMENTS_KEY = CTRL_T;
@@ -1446,7 +1313,8 @@ function doEditLoop()
 	// want to place the cursor at the first character on the top line,
 	// too.  This is for the case where we're editing an existing message -
 	// we want to start editigng it at the top.
-	fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes, 0, displayEditLines);
+	fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes,
+	               gUserSettings.ctrlQQuote, 0, displayEditLines);
 
 	var curpos = {
 		x: gEditLeft,
@@ -1463,7 +1331,6 @@ function doEditLoop()
 	var userInput = "";
 	var currentWordLength = getWordLength(gEditLinesIndex, gTextLineIndex);
 	var numKeysPressed = 0; // Used only to determine when to call updateTime()
-	gTextInsertColorShiftIndexPlusOne = true; // Normally, shift attributes right starting at index+1 when inserting text
 	var continueOn = true;
 	while (continueOn)
 	{
@@ -1540,26 +1407,26 @@ function doEditLoop()
 				break;
 			case CMDLIST_HELP_KEY:
 			case CMDLIST_HELP_KEY_2:
-				displayCommandList(true, true, true, gCanCrossPost,
-				                   gConfigSettings.enableTextReplacements, gConfigSettings.allowUserSettings,
-				                   gConfigSettings.allowSpellCheck, gConfigSettings.allowColorSelection, gCanChangeSubject);
+				displayCommandList(true, true, gCanCrossPost, gConfigSettings.enableTextReplacements,
+				                   gConfigSettings.allowUserSettings, gConfigSettings.allowSpellCheck,
+				                   gConfigSettings.allowColorSelection, gCanChangeSubject);
 				clearEditAreaBuffer();
-				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs,
-				               gInsertMode, gUseQuotes, gEditLinesIndex-(curpos.y-gEditTop),
+				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode,
+				               gUseQuotes, gUserSettings.ctrlQQuote, gEditLinesIndex-(curpos.y-gEditTop),
 				               displayEditLines);
 				break;
 			/*
 			case GENERAL_HELP_KEY:
 				displayGeneralHelp(true, true, true);
 				clearEditAreaBuffer();
-				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs,
-				               gInsertMode, gUseQuotes, gEditLinesIndex-(curpos.y-gEditTop),
+				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode,
+				               gUseQuotes, gUserSettings.ctrlQQuote, gEditLinesIndex-(curpos.y-gEditTop),
 				               displayEditLines);
 				break;
 			*/
 			case GRAPHICS_CHAR_KEY:
 				var graphicChar = promptForGraphicsChar(curpos);
-				fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+				fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 				console.gotoxy(curpos);
 				if (graphicChar != null && typeof(graphicChar) === "string" && graphicChar.length > 0)
 				{
@@ -1573,7 +1440,7 @@ function doEditLoop()
 				// Let the user choose & insert quote lines into the message.
 				if (gUseQuotes)
 				{
-					var quoteRetObj = doQuoteSelection(curpos, currentWordLength);
+					var quoteRetObj = doQuoteSelection(curpos, currentWordLength, QUOTE_KEY);
 					curpos.x = quoteRetObj.x;
 					curpos.y = quoteRetObj.y;
 					currentWordLength = quoteRetObj.currentWordLength;
@@ -1606,7 +1473,6 @@ function doEditLoop()
 							curpos.y = chgColorRetobj.y;
 							currentWordLength = chgColorRetobj.currentWordLength;
 							// For attribute code right-shifting, start at index+1 if in the middle of the line
-							gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 							// Refresh the text lines on the screen so that the colors on the screen are up to date, in appropriate conditions
 							if (gEditLinesIndex < gEditLines.length-1 || gTextLineIndex < gEditLines[gEditLinesIndex].screenLength()-1)
 							{
@@ -1628,177 +1494,17 @@ function doEditLoop()
 					{
 						writeWithPause(1, console.screen_rows, "\x01n\x01y\x01hCan't change quote line colors\x01n", ERRORMSG_PAUSE_MS);
 						// Refresh the help line on the bottom of the screen
-						fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+						fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 						console.gotoxy(curpos.x, curpos.y);
 						console.print(gTextAttrs);
 					}
 				}
 				break;
 			case KEY_UP:
-				// Move the cursor up one line.
-				if (gEditLinesIndex > 0)
-				{
-					--gEditLinesIndex;
-
-					// gTextLineIndex should containg the index in the text
-					// line where the cursor would add text.  If the previous
-					// line is shorter than the one we just left, then
-					// gTextLineIndex and curpos.x need to be adjusted.
-					if (gTextLineIndex > gEditLines[gEditLinesIndex].screenLength())
-					{
-						gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
-						curpos.x = gEditLeft + gEditLines[gEditLinesIndex].screenLength();
-					}
-					// Figure out the vertical coordinate of where the
-					// cursor should be.
-					// If the cursor is at the top of the edit area,
-					// then scroll up through the message by 1 line.
-					if (curpos.y == gEditTop)
-						displayEditLines(gEditTop, gEditLinesIndex, gEditBottom, true, /*true*/false);
-					else
-						--curpos.y;
-
-					// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-					gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
-
-					console.gotoxy(curpos);
-					currentWordLength = getWordLength(gEditLinesIndex, gTextLineIndex);
-					console.print(chooseEditColor()); // Make sure the edit color is correct
-				}
-				break;
 			case KEY_DOWN:
-				// Move the cursor down one line.
-				if (gEditLinesIndex < gEditLines.length-1)
-				{
-					++gEditLinesIndex;
-					// gTextLineIndex should containg the index in the text
-					// line where the cursor would add text.  If the next
-					// line is shorter than the one we just left, then
-					// gTextLineIndex and curpos.x need to be adjusted.
-					if (gTextLineIndex > gEditLines[gEditLinesIndex].screenLength())
-					{
-						gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
-						curpos.x = gEditLeft + gEditLines[gEditLinesIndex].screenLength();
-					}
-					// Figure out the vertical coordinate of where the
-					// cursor should be.
-					// If the cursor is at the bottom of the edit area,
-					// then scroll down through the message by 1 line.
-					if (curpos.y == gEditBottom)
-					{
-						displayEditLines(gEditTop, gEditLinesIndex-(gEditBottom-gEditTop),
-						gEditBottom, true, /*true*/false);
-					}
-					else
-						++curpos.y;
-
-					// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-					gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
-
-					console.gotoxy(curpos);
-					currentWordLength = getWordLength(gEditLinesIndex, gTextLineIndex);
-					console.print(chooseEditColor()); // Make sure the edit color is correct
-				}
-				break;
 			case KEY_LEFT:
-				// If the horizontal cursor position is right of the
-				// leftmost edit position, then let it move left.
-				if (curpos.x > gEditLeft)
-				{
-					--curpos.x;
-					console.gotoxy(curpos);
-					if (gTextLineIndex > 0)
-						--gTextLineIndex;
-				}
-				else
-				{
-					// The cursor is at the leftmost position in the
-					// edit area.  If there are text lines above the
-					// current line, then move the cursor to the end
-					// of the previous line.
-					if (gEditLinesIndex > 0)
-					{
-						--gEditLinesIndex;
-						curpos.x = gEditLeft + gEditLines[gEditLinesIndex].screenLength();
-						// Move the cursor up or scroll up by one line
-						if (curpos.y > 1)
-							--curpos.y;
-						else
-							displayEditLines(gEditTop, gEditLinesIndex, gEditBottom, true, /*true*/false);
-						gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
-						console.gotoxy(curpos);
-					}
-				}
-
-				// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-				gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
-
-				// Update the current word length.
-				currentWordLength = getWordLength(gEditLinesIndex, gTextLineIndex);
-				// Make sure the edit color is correct
-				console.print(chooseEditColor());
-				break;
 			case KEY_RIGHT:
-				// If the horizontal cursor position is left of the
-				// rightmost edit position, then the cursor can move
-				// to the right.
-				if (curpos.x < gEditRight)
-				{
-					// The current line index must be within bounds
-					// before we can move the cursor to the right.
-					if (gTextLineIndex < gEditLines[gEditLinesIndex].screenLength())
-					{
-						++curpos.x;
-						console.gotoxy(curpos);
-						++gTextLineIndex;
-					}
-					else
-					{
-						// The cursor is at the rightmost position on the
-						// line.  If there are text lines below the current
-						// line, then move the cursor to the start of the
-						// next line.
-						if (gEditLinesIndex < gEditLines.length-1)
-						{
-							++gEditLinesIndex;
-							curpos.x = gEditLeft;
-							// Move the cursor down or scroll down by one line
-							if (curpos.y < gEditBottom)
-								++curpos.y;
-							else
-								displayEditLines(gEditTop, gEditLinesIndex-(gEditBottom-gEditTop),
-							gEditBottom, true, /*true*/false);
-							gTextLineIndex = 0;
-							console.gotoxy(curpos);
-						}
-					}
-				}
-				else
-				{
-					// The cursor is at the rightmost position in the
-					// edit area.  If there are text lines below the
-					// current line, then move the cursor to the start
-					// of the next line.
-					if (gEditLinesIndex < gEditLines.length-1)
-					{
-						++gEditLinesIndex;
-						curpos.x = gEditLeft;
-						// Move the cursor down or scroll down by one line
-						if (curpos.y < gEditBottom)
-							++curpos.y;
-						else
-							displayEditLines(gEditTop, gEditLinesIndex-(gEditBottom-gEditTop), gEditBottom, true, false);
-						gTextLineIndex = 0;
-						console.gotoxy(curpos);
-					}
-				}
-
-				// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-				gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
-
-				// Update the current word length.
-				currentWordLength = getWordLength(gEditLinesIndex, gTextLineIndex);
-				// Make sure the edit color is correct
+				currentWordLength = doMoveCursor(userInput, curpos);
 				console.print(chooseEditColor());
 				break;
 			case KEY_HOME:
@@ -1807,7 +1513,6 @@ function doEditLoop()
 					// Go to the beginning of the line
 					gTextLineIndex = 0;
 					// For attribute code right-shifting, start at index (not index+1)
-					gTextInsertColorShiftIndexPlusOne = false;
 					curpos.x = gEditLeft;
 					console.gotoxy(curpos);
 					// Update the displayed text color.
@@ -1823,7 +1528,6 @@ function doEditLoop()
 				{
 					gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
 					// For attribute code right-shifting, start at index+1
-					gTextInsertColorShiftIndexPlusOne = true;
 					curpos.x = gEditLeft + gTextLineIndex;
 					// If the cursor position would be to the right of the edit
 					// area, then place it at gEditRight.
@@ -1848,7 +1552,6 @@ function doEditLoop()
 				{
 					var backspRetObj = doBackspace(curpos, currentWordLength);
 					// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-					gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 					curpos.x = backspRetObj.x;
 					curpos.y = backspRetObj.y;
 					currentWordLength = backspRetObj.currentWordLength;
@@ -1862,7 +1565,6 @@ function doEditLoop()
 				{
 					var delRetObj = doDeleteKey(curpos, currentWordLength);
 					// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-					gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 					curpos.x = delRetObj.x;
 					curpos.y = delRetObj.y;
 					currentWordLength = delRetObj.currentWordLength;
@@ -1889,7 +1591,7 @@ function doEditLoop()
 							case ENTER_ACTION_DO_QUOTE_SELECTION:
 								if (gUseQuotes)
 								{
-									enterRetObj = doQuoteSelection(curpos, currentWordLength);
+									enterRetObj = doQuoteSelection(curpos, currentWordLength, QUOTE_KEY);
 									curpos.x = enterRetObj.x;
 									curpos.y = enterRetObj.y;
 									currentWordLength = enterRetObj.currentWordLength;
@@ -1926,20 +1628,19 @@ function doEditLoop()
 									// Refresh the screen
 									clearEditAreaBuffer();
 									fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs,
-									               gInsertMode, gUseQuotes, gEditLinesIndex-(curpos.y-gEditTop),
-									               displayEditLines);
+									               gInsertMode, gUseQuotes, gUserSettings.ctrlQQuote,
+									               gEditLinesIndex-(curpos.y-gEditTop), displayEditLines);
 								}
 								console.gotoxy(curpos);
 								break;
 							case ENTER_ACTION_SHOW_HELP:
-								displayProgramInfo(true, false);
-								displayCommandList(false, false, true, gCanCrossPost,
-								                   gConfigSettings.enableTextReplacements, gConfigSettings.allowUserSettings,
-								                   gConfigSettings.allowSpellCheck, gConfigSettings.allowColorSelection, gCanChangeSubject);
+								displayProgramInfoAndCommandList(false, gCanCrossPost, gConfigSettings.enableTextReplacements,
+								                                 gConfigSettings.allowUserSettings, gConfigSettings.allowSpellCheck,
+								                                 gConfigSettings.allowColorSelection, gCanChangeSubject);
 								clearEditAreaBuffer();
 								fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs,
-								               gInsertMode, gUseQuotes, gEditLinesIndex-(curpos.y-gEditTop),
-								               displayEditLines);
+								               gInsertMode, gUseQuotes, gUserSettings.ctrlQQuote,
+								               gEditLinesIndex-(curpos.y-gEditTop), displayEditLines);
 								console.gotoxy(curpos);
 								break;
 							default:
@@ -1947,7 +1648,6 @@ function doEditLoop()
 						}
 					}
 					// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-					gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 					// Make sure the edit color is correct
 					console.print(chooseEditColor());
 				}
@@ -2017,7 +1717,6 @@ function doEditLoop()
 			case DELETE_LINE_KEY:
 				var delRetObj = doDeleteLine(curpos);
 				// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-				gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 				curpos.x = delRetObj.x;
 				curpos.y = delRetObj.y;
 				currentWordLength = delRetObj.currentWordLength;
@@ -2070,7 +1769,6 @@ function doEditLoop()
 					}
 				}
 				// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-				gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 				// Make sure the edit color is correct
 				gTextAttrs = chooseEditColor();
 				console.print(gTextAttrs);
@@ -2135,7 +1833,6 @@ function doEditLoop()
 					}
 				}
 				// For attribute code right-shifting, start at index+1 if in the middle of the line or index at the beginning
-				gTextInsertColorShiftIndexPlusOne = (gTextLineIndex > 0);
 				// Make sure the edit color is correct
 				gTextAttrs = chooseEditColor();
 				console.print(gTextAttrs);
@@ -2149,7 +1846,38 @@ function doEditLoop()
 					listTextReplacements();
 				break;
 			case USER_SETTINGS_KEY:
-				doUserSettings(curpos, true);
+				var userSettingsRetObj = doUserSettings(curpos, true);
+				if (userSettingsRetObj.editTopRowChange != 0)
+					curpos.y += userSettingsRetObj.editTopRowChange;
+				// If the user changed their option for using Ctrl-Q as the quote hotkey,
+				// then change it
+				if (userSettingsRetObj.ctrlQQuoteOptChanged)
+				{
+					QUOTE_KEY = gUserSettings.ctrlQQuote ? CTRL_Q : CTRL_Y;
+					if (gUseQuotes)
+					{
+						// If the UI style is DCT, then refresh the key help line at
+						// the bottom of the screen; otherwise (Ice mode), refresh
+						// the edit area bottom border. These lines include the quote
+						// hotkey.
+						if (EDITOR_STYLE == "DCT")
+						{
+							// TODO: For optimal screen refreshing, update only the
+							// portion of the line showing the quote hotkey rather than
+							// re-drawing the entire line
+							fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
+						}
+						else
+						{
+							// The last 'true' parameter makes the function update only
+							// the quote character on the scren (don't re-draw the entire line).
+							fpDisplayTextAreaBottomBorder(gEditBottom+1, gUseQuotes, gEditLeft, gEditRight,
+							                              gInsertMode, gConfigSettings.allowColorSelection,
+							                              gUserSettings.ctrlQQuote, true);
+						}
+						console.gotoxy(curpos);
+					}
+				}
 				break;
 			case CHANGE_SUBJECT_KEY:
 				if (gCanChangeSubject)
@@ -2272,6 +2000,115 @@ function doEditLoop()
 
 	return returnCode;
 }
+// Helper function for doEditLoop(): Moves the cursor in the given direction.
+// Updates gEditLinesIndex, gTextLineIndex, and pCurpos. Handles scrolling when
+// at edit area boundaries.
+//
+// Parameters:
+//  pUserInputKey: The last keypress that the user inputted - Should be
+//                 either KEY_UP, KEY_DOWN, KEY_LEFT, or KEY_RIGHT. If
+//                 this isn't one of those, then this function will do
+//                 nothing.
+//  pCurpos: An object with x and y (screen coordinates) to update
+//
+// Return value: The new current word length
+function doMoveCursor(pUserInputKey, pCurpos)
+{
+	var curpos = pCurpos;
+	if (pUserInputKey == KEY_UP)
+	{
+		if (gEditLinesIndex <= 0)
+			return getWordLength(gEditLinesIndex, gTextLineIndex);
+		--gEditLinesIndex;
+		if (gTextLineIndex > gEditLines[gEditLinesIndex].screenLength())
+		{
+			gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
+			curpos.x = gEditLeft + gEditLines[gEditLinesIndex].screenLength();
+		}
+		if (curpos.y == gEditTop)
+			displayEditLines(gEditTop, gEditLinesIndex, gEditBottom, true, false);
+		else
+			--curpos.y;
+		console.gotoxy(curpos);
+		return getWordLength(gEditLinesIndex, gTextLineIndex);
+	}
+	else if (pUserInputKey == KEY_DOWN)
+	{
+		if (gEditLinesIndex >= gEditLines.length - 1)
+			return getWordLength(gEditLinesIndex, gTextLineIndex);
+		++gEditLinesIndex;
+		if (gTextLineIndex > gEditLines[gEditLinesIndex].screenLength())
+		{
+			gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
+			curpos.x = gEditLeft + gEditLines[gEditLinesIndex].screenLength();
+		}
+		if (curpos.y == gEditBottom)
+			displayEditLines(gEditTop, gEditLinesIndex - (gEditBottom - gEditTop), gEditBottom, true, false);
+		else
+			++curpos.y;
+		console.gotoxy(curpos);
+		return getWordLength(gEditLinesIndex, gTextLineIndex);
+	}
+	else if (pUserInputKey == KEY_LEFT)
+	{
+		if (curpos.x > gEditLeft)
+		{
+			--curpos.x;
+			console.gotoxy(curpos);
+			if (gTextLineIndex > 0)
+				--gTextLineIndex;
+		}
+		else if (gEditLinesIndex > 0)
+		{
+			--gEditLinesIndex;
+			curpos.x = gEditLeft + gEditLines[gEditLinesIndex].screenLength();
+			if (curpos.y > 1)
+				--curpos.y;
+			else
+				displayEditLines(gEditTop, gEditLinesIndex, gEditBottom, true, false);
+			gTextLineIndex = gEditLines[gEditLinesIndex].screenLength();
+			console.gotoxy(curpos);
+		}
+		return getWordLength(gEditLinesIndex, gTextLineIndex);
+	}
+	else if (pUserInputKey == KEY_RIGHT)
+	{
+		if (curpos.x < gEditRight)
+		{
+			if (gTextLineIndex < gEditLines[gEditLinesIndex].screenLength())
+			{
+				++curpos.x;
+				console.gotoxy(curpos);
+				++gTextLineIndex;
+			}
+			else if (gEditLinesIndex < gEditLines.length - 1)
+			{
+				++gEditLinesIndex;
+				curpos.x = gEditLeft;
+				if (curpos.y < gEditBottom)
+					++curpos.y;
+				else
+					displayEditLines(gEditTop, gEditLinesIndex - (gEditBottom - gEditTop), gEditBottom, true, false);
+				gTextLineIndex = 0;
+				console.gotoxy(curpos);
+			}
+		}
+		else if (gEditLinesIndex < gEditLines.length - 1)
+		{
+			++gEditLinesIndex;
+			curpos.x = gEditLeft;
+			if (curpos.y < gEditBottom)
+				++curpos.y;
+			else
+				displayEditLines(gEditTop, gEditLinesIndex - (gEditBottom - gEditTop), gEditBottom, true, false);
+			gTextLineIndex = 0;
+			console.gotoxy(curpos);
+		}
+		return getWordLength(gEditLinesIndex, gTextLineIndex);
+	}
+	return getWordLength(gEditLinesIndex, gTextLineIndex);
+}
+
 // Helper function for doEditLoop(): Handles the backspace behavior.
 //
 // Parameters:
@@ -2373,17 +2210,18 @@ function doBackspace(pCurpos, pCurrentWordLength)
 					// the space to the end of the previous line.
 					if (index > 0)
 					{
+						// Get attribute codes from current line before modifying (for the text we're moving, 0..index-1)
+						var frontAttrs = gEditLines[gEditLinesIndex].popAttrsFromFront(index - 1);
 						var linePart = gEditLines[gEditLinesIndex].text.substr(0, index);
 						gEditLines[gEditLinesIndex].text = gEditLines[gEditLinesIndex].text.substr(index);
 						var prevLineOriginalLen = gEditLines[prevLineIndex].text.length;
 						gEditLines[prevLineIndex].text += linePart;
 						gEditLines[prevLineIndex].hardNewlineEnd = gEditLines[gEditLinesIndex].hardNewlineEnd;
-						// Also move any attribute codes to the previous line
-						var frontAttrs = gEditLines[prevLineIndex].popAttrsFromFront(index);
+						// Move attribute codes to the previous line at correct positions
 						for (var attrTextIdx in frontAttrs)
 						{
 							var prevLineAttrIdx = prevLineOriginalLen + (+attrTextIdx);
-							gEditLines[prevLineIndex].attrs[prevLineAttrIdx] = gEditLines[gEditLinesIndex].attrs[textIdx];
+							gEditLines[prevLineIndex].attrs[prevLineAttrIdx] = frontAttrs[attrTextIdx];
 						}
 
 						// If the current line is now blank, then remove it from gEditLines.
@@ -2559,8 +2397,7 @@ function doDeleteKey(pCurpos, pCurrentWordLength)
 		{
 			// Calculate the bottommost edit area row to update, and then
 			// refresh the edit area.
-			var bottommostRow = calcBottomUpdateRow(retObj.y, gEditLinesIndex);
-			displayEditLines(retObj.y, gEditLinesIndex, bottommostRow, true, true);
+			refreshEditAreaFromCursor(retObj.y, gEditLinesIndex);
 		}
 	}
 	else
@@ -2612,8 +2449,7 @@ function doDeleteKey(pCurpos, pCurrentWordLength)
 		{
 			// Calculate the bottommost edit area row to update, and then
 			// refresh the edit area.
-			var bottommostRow = calcBottomUpdateRow(startRow, startEditLinesIndex);
-			displayEditLines(startRow, startEditLinesIndex, bottommostRow, true, true);
+			refreshEditAreaFromCursor(startRow, startEditLinesIndex);
 		}
 	}
 
@@ -2665,7 +2501,7 @@ function doPrintableChar(pUserInput, pCurpos, pCurrentWordLength)
 	{
 		// gTextLineIndex is at the beginning or in the middle of the line.
 		if (inInsertMode())
-			gEditLines[gEditLinesIndex].insertIntoText(gTextLineIndex, pUserInput, gTextInsertColorShiftIndexPlusOne);
+			gEditLines[gEditLinesIndex].insertIntoText(gTextLineIndex, pUserInput, shouldShiftAttrsAtIndexPlusOne());
 		else
 		{
 			// Replace the character at gTextlineIndex
@@ -2757,8 +2593,7 @@ function doPrintableChar(pUserInput, pCurpos, pCurrentWordLength)
 				// line down.
 				var originalY = retObj.y++;
 				// Update the lines on the screen.
-				var bottommostRow = calcBottomUpdateRow(originalY, originalEditLinesIndex);
-				displayEditLines(originalY, originalEditLinesIndex, bottommostRow, true, true);
+				refreshEditAreaFromCursor(originalY, originalEditLinesIndex);
 			}
 			else
 			{
@@ -2773,8 +2608,7 @@ function doPrintableChar(pUserInput, pCurpos, pCurrentWordLength)
 			// gTextLineIndex is < the line's length.  Update the lines on the
 			// screen from the current line down.  Increment retObj.x,
 			// retObj.currentWordLength, and gTextLineIndex.
-			var bottommostRow = calcBottomUpdateRow(retObj.y, gEditLinesIndex);
-			displayEditLines(retObj.y, gEditLinesIndex, bottommostRow, true, true);
+			refreshEditAreaFromCursor(retObj.y, gEditLinesIndex);
 			if (pUserInput == " ")
 				retObj.currentWordLength = 0;
 			else
@@ -2830,6 +2664,130 @@ function doPrintableChar(pUserInput, pCurpos, pCurrentWordLength)
 	return retObj;
 }
 
+// Helper function for doEnterKey(): Handles slash commands (/S, /A, /Q, /?, /M, /C, /T, /U, /UL, /UPLOAD).
+// Returns the enter-key result object if a slash command was handled, or null if not.
+//
+// Parameters:
+//  pCurpos: An object containing x and y values representing the cursor position.
+//  pCurrentWordLength: The length of the current word that has been typed.
+//
+// Return value: An object with { x, y, currentWordLength, returnCode, continueOn, nextAction }
+//               if a slash command was handled; null otherwise.
+function handleSlashCommands(pCurpos, pCurrentWordLength)
+{
+	var retObj = {
+		x: pCurpos.x,
+		y: pCurpos.y,
+		currentWordLength: pCurrentWordLength,
+		returnCode: 0,
+		continueOn: true,
+		nextAction: ENTER_ACTION_NONE
+	};
+
+	var lineLen = gEditLines[gEditLinesIndex].length();
+	var lineUpper = gEditLines[gEditLinesIndex].text.toUpperCase();
+
+	// Two-character slash commands: /S, /A, /Q, /?, /M, /C, /T, /U
+	if (lineLen == 2)
+	{
+		if (lineUpper == "/S")
+		{
+			if (gEditLinesIndex == gEditLines.length - 1)
+				gEditLines.splice(gEditLinesIndex, 1);
+			else
+				gEditLines[gEditLinesIndex].text = "";
+			retObj.continueOn = false;
+			return retObj;
+		}
+		if (lineUpper == "/A")
+		{
+			var editObjName = (gMsgAreaInfo.subBoardCode.length > 0 ? "message" : "edit");
+			if (promptYesNo("Abort " + editObjName, false, "Abort", false, false))
+			{
+				retObj.returnCode = 1;
+				retObj.continueOn = false;
+				return retObj;
+			}
+			blankLineAndResetCursor(retObj, pCurpos.y, 2);
+			return retObj;
+		}
+		if ((lineUpper == "/Q") || (lineUpper == "/?"))
+		{
+			retObj.nextAction = (lineUpper == "/Q" ? ENTER_ACTION_DO_QUOTE_SELECTION : ENTER_ACTION_SHOW_HELP);
+			retObj.currentWordLength = 0;
+			gTextLineIndex = 0;
+			gEditLines[gEditLinesIndex].text = "";
+			blankLineAndResetCursor(retObj, pCurpos.y, 2);
+			return retObj;
+		}
+		if (lineUpper == "/M")
+		{
+			retObj.nextAction = ENTER_ACTION_DO_MEME_INPUT;
+			retObj.currentWordLength = 0;
+			gTextLineIndex = 0;
+			gEditLines[gEditLinesIndex].text = "";
+			blankLineAndResetCursor(retObj, pCurpos.y, 2);
+			return retObj;
+		}
+		if (lineUpper == "/C")
+		{
+			retObj.nextAction = ENTER_ACTION_DO_CROSS_POST_SELECTION;
+			blankLineAndResetCursor(retObj, pCurpos.y, 2);
+			return retObj;
+		}
+		if (lineUpper == "/T")
+		{
+			if (gConfigSettings.enableTextReplacements)
+				listTextReplacements();
+			blankLineAndResetCursor(retObj, pCurpos.y, 2);
+			return retObj;
+		}
+		if (lineUpper == "/U")
+		{
+			var userSettingsRetObj = doUserSettings({ x: retObj.x, y: retObj.y }, false);
+			if (userSettingsRetObj.editTopRowChange != 0)
+				retObj.y += userSettingsRetObj.editTopRowChange;
+			blankLineAndResetCursor(retObj, retObj.y, 2);
+			return retObj;
+		}
+	}
+
+	// /UL or /UPLOAD
+	if ((lineLen == 3 && lineUpper == "/UL") || (lineLen == 7 && lineUpper == "/UPLOAD"))
+	{
+		if (letUserUploadMessageFile())
+		{
+			retObj.continueOn = false;
+			return retObj;
+		}
+		console.print(chooseEditColor());
+		retObj.x = gEditLeft;
+		console.gotoxy(retObj.x, retObj.y);
+		printf("%" + lineLen + "s", "");
+		gEditLines[gEditLinesIndex].text = "";
+		retObj.currentWordLength = 0;
+		gTextLineIndex = 0;
+		console.gotoxy(retObj.x, retObj.y);
+		return retObj;
+	}
+
+	return null;
+}
+
+// Helper for handleSlashCommands: clears the line on screen and in gEditLines, resets cursor state.
+function blankLineAndResetCursor(pRetObj, pY, pNumChars)
+{
+	gEditLines[gEditLinesIndex].text = "";
+	pRetObj.currentWordLength = 0;
+	gTextLineIndex = 0;
+	pRetObj.x = gEditLeft;
+	pRetObj.y = pY;
+	console.print(chooseEditColor());
+	console.gotoxy(pRetObj.x, pRetObj.y);
+	printf("%" + pNumChars + "s", "");
+	console.gotoxy(pRetObj.x, pRetObj.y);
+}
+
 // Helper function for doEditLoop(): Performs the action for when the user
 // presses the enter key.
 //
@@ -2851,7 +2809,6 @@ function doPrintableChar(pUserInput, pCurpos, pCurrentWordLength)
 //                           special action.
 function doEnterKey(pCurpos, pCurrentWordLength)
 {
-	// Create the return object
 	var retObj = {
 		x: pCurpos.x,
 		y: pCurpos.y,
@@ -2861,187 +2818,14 @@ function doEnterKey(pCurpos, pCurrentWordLength)
 		nextAction: ENTER_ACTION_NONE
 	};
 
+	// Check slash commands first; return immediately if one was handled
+	var slashResult = handleSlashCommands(pCurpos, pCurrentWordLength);
+	if (slashResult !== null)
+		return slashResult;
+
 	// Store the current screen row position and gEditLines index.
 	var initialScreenLine = pCurpos.y;
 	var initialEditLinesIndex = gEditLinesIndex;
-
-	// Check for slash commands (/S, /A, /?).  If the user has
-	// typed one of them by itself at the beginning of the line,
-	// then save, abort, or show help, respectively.
-	if (gEditLines[gEditLinesIndex].length() == 2)
-	{
-		var lineUpper = gEditLines[gEditLinesIndex].text.toUpperCase();
-		// /S: Save
-		if (lineUpper == "/S")
-		{
-			// If the current text line is the last one, remove it; otherwise,
-			// blank it out.
-			if (gEditLinesIndex == gEditLines.length-1)
-				gEditLines.splice(gEditLinesIndex, 1);
-			else
-				gEditLines[gEditLinesIndex].text = "";
-
-			retObj.continueOn = false;
-			return(retObj);
-		}
-		// /A: Abort
-		else if (lineUpper == "/A")
-		{
-			// Confirm with the user
-			var editObjName = (gMsgAreaInfo.subBoardCode.length > 0 ? "message" : "edit");
-			if (promptYesNo("Abort " + editObjName, false, "Abort", false, false))
-			{
-				retObj.returnCode = 1; // 1: Abort
-				retObj.continueOn = false;
-				return(retObj);
-			}
-			else
-			{
-				// Make sure the current text color attribute is set back.
-				console.print(chooseEditColor());
-
-				// Blank out the data in the text line, set the data in
-				// retObj, and return it.
-				gEditLines[gEditLinesIndex].text = "";
-				retObj.currentWordLength = 0;
-				gTextLineIndex = 0;
-				retObj.x = gEditLeft;
-				retObj.y = pCurpos.y;
-				// Blank out the /A on the screen
-				console.print(chooseEditColor());
-				console.gotoxy(retObj.x, retObj.y);
-				console.print("  ");
-				// Put the cursor where it should be
-				console.gotoxy(retObj.x, retObj.y);
-				return(retObj);
-			}
-		}
-		// /Q: Do quote selection or /?: Show help
-		else if ((lineUpper == "/Q") || (lineUpper == "/?"))
-		{
-			if (lineUpper == "/Q")
-				retObj.nextAction = ENTER_ACTION_DO_QUOTE_SELECTION;
-			else if (lineUpper == "/?")
-				retObj.nextAction = ENTER_ACTION_SHOW_HELP;
-			retObj.currentWordLength = 0;
-			gTextLineIndex = 0;
-			gEditLines[gEditLinesIndex].text = "";
-			// Blank out the /? on the screen
-			console.print(chooseEditColor());
-			retObj.x = gEditLeft;
-			console.gotoxy(retObj.x, retObj.y);
-			console.print("  ");
-			// Put the cursor where it should be
-			console.gotoxy(retObj.x, retObj.y);
-			return(retObj);
-		}
-		// /M: Input & insert a meme
-		else if (lineUpper == "/M")
-		{
-			retObj.nextAction = ENTER_ACTION_DO_MEME_INPUT;
-			retObj.currentWordLength = 0;
-			gTextLineIndex = 0;
-			gEditLines[gEditLinesIndex].text = "";
-			// Blank out the /M on the screen
-			console.print(chooseEditColor());
-			retObj.x = gEditLeft;
-			console.gotoxy(retObj.x, retObj.y);
-			console.print("  ");
-			// Put the cursor where it should be
-			console.gotoxy(retObj.x, retObj.y);
-			return(retObj);
-		}
-		// /C: Cross-post
-		else if (lineUpper == "/C")
-		{
-			retObj.nextAction = ENTER_ACTION_DO_CROSS_POST_SELECTION;
-
-			// Blank out the data in the text line, set the data in
-			// retObj, and return it.
-			gEditLines[gEditLinesIndex].text = "";
-			retObj.currentWordLength = 0;
-			gTextLineIndex = 0;
-			retObj.x = gEditLeft;
-			retObj.y = pCurpos.y;
-			// Blank out the /C on the screen
-			console.print(chooseEditColor());
-			retObj.x = gEditLeft;
-			console.gotoxy(retObj.x, retObj.y);
-			console.print("  ");
-			// Put the cursor where it should be
-			console.gotoxy(retObj.x, retObj.y);
-			return(retObj);
-		}
-		// /T: List text replacements (do that here)
-		else if (lineUpper == "/T")
-		{
-			if (gConfigSettings.enableTextReplacements)
-				listTextReplacements();
-			// Blank out the data in the text line, set the data in
-			// retObj, and return it.
-			gEditLines[gEditLinesIndex].text = "";
-			retObj.currentWordLength = 0;
-			gTextLineIndex = 0;
-			retObj.x = gEditLeft;
-			retObj.y = pCurpos.y;
-			// Blank out the /T on the screen
-			console.print(chooseEditColor());
-			retObj.x = gEditLeft;
-			console.gotoxy(retObj.x, retObj.y);
-			console.print("  ");
-			// Put the cursor where it should be
-			console.gotoxy(retObj.x, retObj.y);
-			return(retObj);
-		}
-		// /U: User settings (do that here)
-		else if (lineUpper == "/U")
-		{
-			var currentCursorPos = {
-				x: retObj.x,
-				y: retObj.y
-			};
-			doUserSettings(currentCursorPos, false);
-			// Blank out the data in the text line, set the data in
-			// retObj, and return it.
-			gEditLines[gEditLinesIndex].text = "";
-			retObj.currentWordLength = 0;
-			gTextLineIndex = 0;
-			retObj.x = gEditLeft;
-			retObj.y = pCurpos.y;
-			// Blank out the /U on the screen
-			console.print(chooseEditColor());
-			retObj.x = gEditLeft;
-			console.gotoxy(retObj.x, retObj.y);
-			console.print("  ");
-			// Put the cursor where it should be
-			console.gotoxy(retObj.x, retObj.y);
-			return(retObj);
-		}
-	}
-	// /UL or /UPLOAD: Upload a file containing a message to post
-	// instead of any text entered in the editor
-	else if (((gEditLines[gEditLinesIndex].length() == 3) && (gEditLines[gEditLinesIndex].text.toUpperCase() == "/UL")) || ((gEditLines[gEditLinesIndex].length() == 7) && (gEditLines[gEditLinesIndex].text.toUpperCase() == "/UPLOAD")))
-	{
-		if (letUserUploadMessageFile())
-		{
-			retObj.continueOn = false;
-			return(retObj);
-		}
-		else
-		{
-			// Blank out the /ul or /upload on the screen
-			console.print(chooseEditColor());
-			retObj.x = gEditLeft;
-			console.gotoxy(retObj.x, retObj.y);
-			printf("%" + gEditLines[gEditLinesIndex].length() + "s", "");
-			gEditLines[gEditLinesIndex].text = "";
-			retObj.currentWordLength = 0;
-			gTextLineIndex = 0;
-			// Put the cursor where it should be
-			console.gotoxy(retObj.x, retObj.y);
-			return(retObj);
-		}
-	}
 
 	// Handle text replacement (AKA macros).
 	var reAdjustedTxtLines = false; // For screen refresh purposes
@@ -3329,12 +3113,14 @@ function textLineIsEditable(pLineIdx)
 //  pCurpos: An object containing x and y values representing the
 //           cursor position.
 //  pCurrentWordLength: The length of the current word that has been typed
+//  pQuoteKey: The hotkey to use to open/close the quote window (could be Ctrl-Q
+//             or Ctrl-Y, depending on the SlyEdit configuration)
 //
 // Return value: An object containing the following properties:
 //               x and y: The horizontal and vertical cursor position
 //               timedOut: Whether or not the user input timed out (boolean)
 //               currentWordLength: The length of the current word
-function doQuoteSelection(pCurpos, pCurrentWordLength)
+function doQuoteSelection(pCurpos, pCurrentWordLength, pQuoteKey)
 {
 	// Create the return object
 	var retObj = {
@@ -3365,7 +3151,7 @@ function doQuoteSelection(pCurpos, pCurrentWordLength)
 		doQuoteSelection.wrapQuoteLines = gUserSettings.wrapQuoteLines;
 	if (typeof(doQuoteSelection.joinQuoteLinesWhenWrapping) == "undefined")
 		doQuoteSelection.joinQuoteLinesWhenWrapping = gUserSettings.joinQuoteLinesWhenWrapping;
-	
+
 	// If the setting to re-wrap quote lines is enabled, then do it.
 	// We're re-wrapping the quote lines here in case the user changes their
 	// setting for prefixing quote lines with author initials.
@@ -3475,7 +3261,7 @@ function doQuoteSelection(pCurpos, pCurrentWordLength)
 	console.gotoxy(gEditLeft, gEditBottom+1);
 	fpDrawQuoteWindowBottomBorder(gEditLeft, gEditRight);
 
-	var quoteLineMenu = createQuoteLineMenu(quoteTopScreenRow);
+	var quoteLineMenu = createQuoteLineMenu(quoteTopScreenRow, pQuoteKey);
 	var insertedQuoteLines = false;
 	// Customize the menu's OnItemSelect function to add the selected quote
 	// line to the message.  Note that the menu's exitOnItemSelect is set
@@ -3560,7 +3346,7 @@ function doQuoteSelection(pCurpos, pCurrentWordLength)
 	// Draw the bottom edit border to erase the bottom border of the
 	// quote window.
 	fpDisplayTextAreaBottomBorder(gEditBottom+1, gUseQuotes, gEditLeft, gEditRight,
-	                              gInsertMode, gConfigSettings.allowColorSelection);
+	                              gInsertMode, gConfigSettings.allowColorSelection, gUserSettings.ctrlQQuote);
 
 	// Make sure the color is correct for editing.
 	console.print(chooseEditColor());
@@ -3590,7 +3376,9 @@ function doQuoteSelection(pCurpos, pCurrentWordLength)
 //
 // Parameters:
 //  pQuoteTopScreenRow: The first line on the screen where quote lines are written
-function createQuoteLineMenu(pQuoteTopScreenRow)
+//  pQuoteKey: The hotkey to use to open/close the quote window (could be Ctrl-Q
+//             or Ctrl-Y, depending on the SlyEdit configuration)
+function createQuoteLineMenu(pQuoteTopScreenRow, pQuoteKey)
 {
 	// Quote window parameters
 	const quoteBottomScreenRow = console.screen_rows - 2;
@@ -3611,7 +3399,7 @@ function createQuoteLineMenu(pQuoteTopScreenRow)
 	quoteLineMenu.colors.selectedItemColor = gQuoteLineHighlightColor;
 
 	// Add additional keypresses for quitting the menu's input loop
-	quoteLineMenu.AddAdditionalQuitKeys(CTRL_Q);
+	quoteLineMenu.AddAdditionalQuitKeys(pQuoteKey);
 
 	// Change the menu's NumItems() and GetItem() function to reference
 	// the message list in this object rather than add the menu items
@@ -3788,7 +3576,7 @@ function displayEditLines(pStartScreenRow, pArrayIndex, pEndScreenRow, pClearRem
 {
 	// Make sure the array has lines in it, the given array index is valid, and
 	// that the given line # is valid.  If not, then just return.
-	if ((gEditLines.length == 0) || (pArrayIndex < 0) || (pStartScreenRow < 1) || (pStartScreenRow > gEditBottom))
+	if (gEditLines.length == 0 || pArrayIndex < 0 || pStartScreenRow < 1 || pStartScreenRow > gEditBottom)
 		return;
 
 	// Choose which ending screen row to use for displaying text,
@@ -4006,7 +3794,7 @@ function callIceESCMenu(pCurpos)
 	// If the user didn't choose help, then we need to refresh the bottom row
 	// on the screen.
 	if (chosenAction != ESC_MENU_HELP_COMMAND_LIST)
-		fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+		fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 	return chosenAction;
 }
 function callDCTESCMenu(pCurpos)
@@ -4091,11 +3879,12 @@ function doESCMenu(pCurpos, pCurrentWordLength)
 			                   gConfigSettings.allowSpellCheck, gConfigSettings.allowColorSelection, gCanChangeSubject);
 			clearEditAreaBuffer();
 			fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode,
-			               gUseQuotes, gEditLinesIndex-(pCurpos.y-gEditTop), displayEditLines);
+			               gUseQuotes, gUserSettings.ctrlQQuote, gEditLinesIndex-(pCurpos.y-gEditTop),
+			               displayEditLines);
 			break;
 		case ESC_MENU_HELP_GRAPHIC_CHAR:
 			var graphicChar = promptForGraphicsChar(pCurpos);
-			fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+			fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 			console.gotoxy(pCurpos);
 			if (graphicChar != null && typeof(graphicChar) === "string" && graphicChar.length > 0)
 			{
@@ -4118,7 +3907,11 @@ function doESCMenu(pCurpos, pCurrentWordLength)
 			break;
 		case ESC_MENU_USER_SETTINGS:
 			if (gConfigSettings.allowUserSettings)
-				doUserSettings(pCurpos, true);
+			{
+				var settingsRet = doUserSettings(pCurpos, true);
+				if (settingsRet.editTopRowChange != 0)
+					returnObj.y += settingsRet.editTopRowChange;
+			}
 			break;
 		case ESC_MENU_SPELL_CHECK:
 			var spellCheckRetObj = doSpellCheck(pCurpos, false);
@@ -4144,8 +3937,8 @@ function doESCMenu(pCurpos, pCurrentWordLength)
 				// Refresh the screen
 				clearEditAreaBuffer();
 				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs,
-				               gInsertMode, gUseQuotes, gEditLinesIndex-(returnObj.y-gEditTop),
-				               displayEditLines);
+				               gInsertMode, gUseQuotes, gUserSettings.ctrlQQuote,
+				               gEditLinesIndex-(returnObj.y-gEditTop), displayEditLines);
 			}
 			break;
 	}
@@ -4171,24 +3964,24 @@ function displayProgramInfoBox(pCurpos)
 	// Draw the box border
 	console.gotoxy(boxTopLeftX, boxTopLeftY);
 	console.print("\x01n" + borderBGColor);
-	console.print(UPPER_LEFT_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE);
 	var innerWidth = boxWidth - 2;
 	for (var i = 0; i < innerWidth; ++i)
-		console.print(HORIZONTAL_SINGLE);
-	console.print(UPPER_RIGHT_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE);
 	var innerHeight = boxHeight - 2;
 	for (var i = 0; i < innerHeight; ++i)
 	{
 		console.gotoxy(boxTopLeftX, boxTopLeftY+i+1);
-		console.print(VERTICAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 		console.gotoxy(boxTopLeftX+boxWidth-1, boxTopLeftY+i+1);
-		console.print(VERTICAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 	}
 	console.gotoxy(boxTopLeftX, boxTopLeftY+boxHeight-1);
-	console.print(LOWER_LEFT_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE);
 	for (var i = 0; i < innerWidth; ++i)
-		console.print(HORIZONTAL_SINGLE);
-	console.print(LOWER_RIGHT_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE);
 	console.gotoxy(boxTopLeftX+1, boxTopLeftY+1);
 	var boxWidthFillFormatStr = "%" + innerWidth + "s";
 	printf(boxWidthFillFormatStr, "");
@@ -4459,7 +4252,7 @@ function importFile(pCurpos)
 	}
 
 	// Refresh the help line on the bottom of the screen
-	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 
 	// If not sending immediately and we loaded a file, then refresh the message text.
 	if (!retObj.sendImmediately && loadedAFile)
@@ -4547,7 +4340,7 @@ function exportToFile()
       writeWithPause(1, console.screen_rows, "\x01m\x01hMessage not exported.", ERRORMSG_PAUSE_MS);
 
    // Refresh the help line on the bottom of the screen
-   fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+   fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 }
 
 // Performs a text search.
@@ -4678,7 +4471,7 @@ function findText(pCurpos)
 	}
 
 	// Refresh the help line on the bottom of the screen
-	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 
 	// Make sure the cursor is positioned where it should be.
 	console.gotoxy(retObj.x, retObj.y);
@@ -4730,7 +4523,7 @@ function doSpellCheck(pCurpos, pConfirmSpellcheck)
 	{
 		writeWithPause(1, console.screen_rows, "\x01y\x01hThere are no dictionaries configured!\x01n", ERRORMSG_PAUSE_MS);
 		// Refresh the help line on the bottom of the screen
-		fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+		fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 		console.gotoxy(pCurpos.x, pCurpos.y);
 		return retObj;
 	}
@@ -4755,7 +4548,7 @@ function doSpellCheck(pCurpos, pConfirmSpellcheck)
 	{
 		writeWithPause(1, console.screen_rows, "\x01y\x01hUnable to load the dictionary file(s)!\x01n", ERRORMSG_PAUSE_MS);
 		// Refresh the help line on the bottom of the screen
-		fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+		fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 		console.gotoxy(pCurpos.x, pCurpos.y);
 		return retObj;
 	}
@@ -4851,7 +4644,7 @@ function doSpellCheck(pCurpos, pConfirmSpellcheck)
 	retObj.currentWordLength = getWordLength(gEditLinesIndex, gTextLineIndex);
 
 	// Refresh the help line on the bottom of the screen
-	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 
 	// Make sure the cursor is positioned where it should be.
 	console.gotoxy(retObj.x, retObj.y);
@@ -5087,30 +4880,30 @@ function inputWordCorrection(pMisspelledWord, pCurpos, pEditLineIdx)
 	var maxInputLen = txtBoxWidth - 2;
 
 	// Draw the top border of the input box
-	var borderLine = "\x01n\x01g" + UPPER_LEFT_SINGLE + RIGHT_T_SINGLE;
+	var borderLine = "\x01n\x01g" + CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE + CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT;
 	borderLine += "\x01b\x01h" + pMisspelledWord.substr(0, txtBoxWidth-4);
-	borderLine += "\x01n\x01g" + LEFT_T_SINGLE;
+	borderLine += "\x01n\x01g" + CP437_BOX_DRAWINGS_LIGHT_LEFT_T;
 	var remainingWidth = txtBoxWidth - console.strlen(borderLine) - 1;
 	for (var i = 0; i < remainingWidth; ++i)
-		borderLine += HORIZONTAL_SINGLE;
-	borderLine += UPPER_RIGHT_SINGLE + "\x01n";
+		borderLine += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
+	borderLine += CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE + "\x01n";
 	console.gotoxy(txtBoxX, txtBoxY);
 	console.print(borderLine);
 	// Draw the bottom border of the input box
-	borderLine = "\x01g" + LOWER_LEFT_SINGLE + RIGHT_T_SINGLE;
-	borderLine += "\x01c\x01hEnter\x01y=\x01bNo change\x01n\x01g" + LEFT_T_SINGLE + RIGHT_T_SINGLE + "\x01H\x01cCtrl-C\x01n\x01c/\x01hESC\x01y=\x01bEnd\x01n\x01g" + LEFT_T_SINGLE;
+	borderLine = "\x01g" + CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE + CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT;
+	borderLine += "\x01c\x01hEnter\x01y=\x01bNo change\x01n\x01g" + CP437_BOX_DRAWINGS_LIGHT_LEFT_T + CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT + "\x01H\x01cCtrl-C\x01n\x01c/\x01hESC\x01y=\x01bEnd\x01n\x01g" + CP437_BOX_DRAWINGS_LIGHT_LEFT_T;
 	var remainingWidth = txtBoxWidth - console.strlen(borderLine) - 1;
 	for (var i = 0; i < remainingWidth; ++i)
-		borderLine += HORIZONTAL_SINGLE;
-	borderLine += LOWER_RIGHT_SINGLE + "\x01n";
+		borderLine += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
+	borderLine += CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE + "\x01n";
 	console.gotoxy(txtBoxX, txtBoxY+2);
 	console.print(borderLine);
 	// Draw the side borders
 	console.print("\x01n\x01g");
 	console.gotoxy(txtBoxX, txtBoxY+1);
-	console.print(VERTICAL_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 	console.gotoxy(txtBoxX+txtBoxWidth-1, txtBoxY+1);
-	console.print(VERTICAL_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 	console.attributes = "N";
 
 	// Go to the middle row for user input
@@ -5199,14 +4992,22 @@ function chooseEditColor()
 //               message text.
 function calcBottomUpdateRow(pY, pTopIndex)
 {
-   var bottomScreenRow = gEditBottom;
-   // Note: This is designed to return the screen row #
-   // below the last message line.  To return the exact
-   // bottommost screen row, subtract 1 from gEditLines.length-pTopIndex.
-   var bottommost = (pY + (gEditLines.length-pTopIndex));
-   if (bottomScreenRow > bottommost)
-      bottomScreenRow = bottommost;
-   return bottomScreenRow;
+	var bottomScreenRow = gEditBottom;
+	// Note: This is designed to return the screen row #
+	// below the last message line.  To return the exact
+	// bottommost screen row, subtract 1 from gEditLines.length-pTopIndex.
+	var bottommost = (pY + (gEditLines.length - pTopIndex));
+	if (bottomScreenRow > bottommost)
+		bottomScreenRow = bottommost;
+	return bottomScreenRow;
+}
+
+// Refreshes the edit area on screen from a given position down. Uses calcBottomUpdateRow
+// to determine the bottom row. Convenience wrapper for the common displayEditLines pattern.
+function refreshEditAreaFromCursor(pStartY, pStartLineIdx)
+{
+	var bottomRow = calcBottomUpdateRow(pStartY, pStartLineIdx);
+	displayEditLines(pStartY, pStartLineIdx, bottomRow, true, true);
 }
 
 // This function updates the time on the screen and puts
@@ -5282,10 +5083,10 @@ function doColorSelection(pTxtAttrs, pCurpos, pCurrentWordLength)
 	console.cleartoeol("\x01n");
 	console.crlf();
 	console.clearline("\x01n");
-	console.print("\x01cSpecial: \x01w\x01hH:\x01n\x01hHigh Intensity \x01wI:\x01n\x01iBlinking \x01n\x01w\x01hN:\x01nNormal \x01h\x01g" + CENTERED_SQUARE + " \x01n\x01cChoose colors/attributes\x01h\x01g: \x01c");
+	console.print("\x01cSpecial: \x01w\x01hH:\x01n\x01hHigh Intensity \x01wI:\x01n\x01iBlinking \x01n\x01w\x01hN:\x01nNormal \x01h\x01g" + CP437_BLACK_SQUARE + " \x01n\x01cChoose colors/attributes\x01h\x01g: \x01c");
 	// Get the attribute codes from the user.  Ideally, we'd use console.getkeys(),
 	// but that outputs a CR at the end, which is undesirable.  So instead, we call
-	// getUserInputWithSetOfInputStrs (defined in SlyEdit_Misc.js).
+	// getUserInputWithSetOfInputStrs (defined in slyedit_misc.js).
 	//var key = console.getkeys("KRGYBMCW01234567HIN").toString(); // Outputs a CR..  bad
 	var validKeys = ["KRGYBMCW", // Foreground color codes
 	                 "01234567", // Background color codes
@@ -5304,8 +5105,8 @@ function doColorSelection(pTxtAttrs, pCurpos, pCurrentWordLength)
 	var screenYDiff = colorSelTopLine - originalScreenY;
 	displayEditLines(colorSelTopLine, gEditLinesIndex + screenYDiff, gEditBottom, true, true);
 	fpDisplayTextAreaBottomBorder(gEditBottom+1, gUseQuotes, gEditLeft, gEditRight,
-	                              gInsertMode, gConfigSettings.allowColorSelection);
-	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+	                              gInsertMode, gConfigSettings.allowColorSelection, gUserSettings.ctrlQQuote);
+	fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 
 	// Move the cursor to where it should be before returning
 	curpos.x = pCurpos.x;
@@ -5330,12 +5131,12 @@ function doColorSelection(pTxtAttrs, pCurpos, pCurrentWordLength)
 function drawInitialCrossPostSelBoxTopBorder(pTopLeft, pWidth, pBorderColor, pTextColor)
 {
   console.gotoxy(pTopLeft);
-  console.print(pBorderColor + UPPER_LEFT_SINGLE + RIGHT_T_SINGLE +
+  console.print(pBorderColor + CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE + CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT +
                 pTextColor + "Cross-posting: Choose group" +
-                pBorderColor + LEFT_T_SINGLE);
+                pBorderColor + CP437_BOX_DRAWINGS_LIGHT_LEFT_T);
   var len = pWidth - 31;
   for (var i = 0; i < len; ++i)
-    console.print(HORIZONTAL_SINGLE);
+    console.print(CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE);
 }
 // For the cross-posting UI: Draws the initial bottom border of
 // the selection box
@@ -5352,7 +5153,7 @@ function drawInitialCrossPostSelBoxBottomBorder(pBottomLeft, pWidth, pBorderColo
 {
 	const maxWidth = pWidth - 2; // - 2 for the corner characters
 	console.gotoxy(pBottomLeft);
-	var border = RIGHT_T_SINGLE + "\x01n\x01h\x01cUp\x01b/\x01cDn\x01b/\x01cPgUp\x01b/\x01cPgDn\x01b/\x01cHome\x01b/\x01cEnd \x01c";
+	var border = CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT + "\x01n\x01h\x01cUp\x01b/\x01cDn\x01b/\x01cPgUp\x01b/\x01cPgDn\x01b/\x01cHome\x01b/\x01cEnd \x01c";
 	if (pMsgSubs)
 		border += "Space\x01y=\x01bToggle \x01cEnter\x01y=\x01bConfirm";
 	else
@@ -5360,14 +5161,14 @@ function drawInitialCrossPostSelBoxBottomBorder(pBottomLeft, pWidth, pBorderColo
 	border += " \x01cCtrl-C\x01n\x01c/\x01hQ\x01y=\x01bAbort \x01c?";
 	if (!pMsgSubs)
 		border += "\x01y=\x01bHelp";
-	border += "\x01n" + pBorderColor + LEFT_T_SINGLE;
+	border += "\x01n" + pBorderColor + CP437_BOX_DRAWINGS_LIGHT_LEFT_T;
 	var numCharsToAdd = Math.floor(maxWidth / 2) - Math.floor(console.strlen(border)/2);
 	for (var i = 0; i < numCharsToAdd; ++i)
-		border = HORIZONTAL_SINGLE + border;
+		border = CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE + border;
 	numCharsToAdd = maxWidth - console.strlen(border);
 	for (var i = 0; i < numCharsToAdd; ++i)
-		border += HORIZONTAL_SINGLE;
-	border = pBorderColor + LOWER_LEFT_SINGLE + border + LOWER_RIGHT_SINGLE;
+		border += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
+	border = pBorderColor + CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE + border + CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE;
 	console.print(border);
 }
 // Displays help text for cross-posting, for use in cross-post selection mode.
@@ -5392,7 +5193,7 @@ function displayCrossPostHelp(selBoxUpperLeft, selBoxLowerRight)
       displayCrossPostHelp.helpLines.push("    sub-boards with the Enter key.  Alternately, you may type the");
       displayCrossPostHelp.helpLines.push("    number of the message sub-board.");
       displayCrossPostHelp.helpLines.push("Message sub-boards that are toggled for cross-posting will include a");
-      displayCrossPostHelp.helpLines.push("check mark (" + gConfigSettings.genColors.crossPostChk + CHECK_CHAR + "\x01n\x01c) in the sub-board list.  Initially, your current message");
+      displayCrossPostHelp.helpLines.push("check mark (" + gConfigSettings.genColors.crossPostChk + CP437_CHECK_MARK + "\x01n\x01c) in the sub-board list.  Initially, your current message");
       displayCrossPostHelp.helpLines.push("sub-board is enabled by default.  Also, your current message group is");
       displayCrossPostHelp.helpLines.push("marked with an asterisk (" + gConfigSettings.genColors.crossPostMsgGrpMark + "*\x01n\x01c).");
       displayCrossPostHelp.helpLines.push("To navigate the list, you may use the up & down arrow keys, PageUp and");
@@ -5485,12 +5286,12 @@ function doCrossPosting(pOriginalCurpos)
 		// Re-write the border characters to overwrite the message group name
 		grpDesc = msg_area.grp_list[pGrpIndex].description.substr(0, pSelBoxInnerWidth-25);
 		// Write the updated border character(s)
-		console.print("\x01n" + gConfigSettings.genColors.listBoxBorder + LEFT_T_SINGLE);
+		console.print("\x01n" + gConfigSettings.genColors.listBoxBorder + CP437_BOX_DRAWINGS_LIGHT_LEFT_T);
 		if (grpDesc.length > 3)
 		{
 			var numChars = grpDesc.length - 3;
 			for (var i = 0; i < numChars; ++i)
-				console.print(HORIZONTAL_SINGLE);
+				console.print(CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE);
 		}
 	}
 
@@ -5553,13 +5354,13 @@ function doCrossPosting(pOriginalCurpos)
 	gConfigSettings.genColors.listBoxBorder,
 	gConfigSettings.genColors.listBoxBorderText);
 	// Side borders
-	console.print(UPPER_RIGHT_SINGLE);
+	console.print(CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE);
 	for (var row = selBoxUpperLeft.y+1; row < selBoxLowerRight.y; ++row)
 	{
 		console.gotoxy(selBoxUpperLeft.x, row);
-		console.print(VERTICAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 		console.gotoxy(selBoxLowerRight.x, row);
-		console.print(VERTICAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 	}
 	// Bottom border
 	drawInitialCrossPostSelBoxBottomBorder({ x: selBoxUpperLeft.x, y: selBoxLowerRight.y },
@@ -5603,7 +5404,7 @@ function promptUserForCrossPostSubBoardCodes(pSelBoxUpperLeft, pSelBoxLowerRight
 		descHighlight: "\x01c",
 		bkgHighlight: "\x01" + "4"
 	};
-	
+
 	// Calculate the selection box width & height, with borders
 	var selBoxWidth = pSelBoxLowerRight.x - pSelBoxUpperLeft.x + 1;
 	var selBoxHeight = pSelBoxLowerRight.y - pSelBoxUpperLeft.y + 1;
@@ -5655,7 +5456,7 @@ function promptUserForCrossPostSubBoardCodes(pSelBoxUpperLeft, pSelBoxLowerRight
 				if (gCrossPostMsgSubs.subCodeExists(msg_area.grp_list[grpIdx].sub_list[subIdx].code))
 					selectedItemIndexes[subIdx] = true;
 			}
-			
+
 
 			// Create the sub-board menu and let the user make a selection.
 			var subBoardMenu = createCrossPostSubBoardMenu(grpIdx, listStartCol, listStartRow, selBoxInnerWidth, selBoxInnerHeight, menuListColors);
@@ -6079,31 +5880,31 @@ function listTextReplacements()
 	if (typeof(listTextReplacements.topBorder) == "undefined")
 	{
 		listTextReplacements.topBorder = "\x01n" + gConfigSettings.genColors.listBoxBorder
-		                               + UPPER_LEFT_SINGLE + "\x01n" + gConfigSettings.genColors.listBoxBorderText + "Text"
+		                               + CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE + "\x01n" + gConfigSettings.genColors.listBoxBorderText + "Text"
 		                               + "\x01n" + gConfigSettings.genColors.listBoxBorder;
 		for (var i = 0; i < (txtWidth-3); ++i)
-			listTextReplacements.topBorder += HORIZONTAL_SINGLE;
+			listTextReplacements.topBorder += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
 		listTextReplacements.topBorder += "\x01n" + gConfigSettings.genColors.listBoxBorderText
 		                               + "Replacement" + "\x01n" + gConfigSettings.genColors.listBoxBorder;
 		for (var i = 0; i < (txtWidth-11); ++i)
-			listTextReplacements.topBorder += HORIZONTAL_SINGLE;
-		listTextReplacements.topBorder += UPPER_RIGHT_SINGLE;
+			listTextReplacements.topBorder += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
+		listTextReplacements.topBorder += CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE;
 	}
 	boxInfo.width = console.strlen(listTextReplacements.topBorder);
 	if (typeof(listTextReplacements.bottomBorder) == "undefined")
 	{
 		var numReplacementsStr = "Total: " + listTextReplacements.txtReplacementArr.length;
 		listTextReplacements.bottomBorder = "\x01n" + gConfigSettings.genColors.listBoxBorder
-		                                  + LOWER_LEFT_SINGLE + "\x01n" + gConfigSettings.genColors.listBoxBorderText
+		                                  + CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE + "\x01n" + gConfigSettings.genColors.listBoxBorderText
 		                                  + UP_ARROW + ", " + DOWN_ARROW + ", ESC/Ctrl-T/C=Close" + "\x01n"
 		                                  + gConfigSettings.genColors.listBoxBorder;
 		var maxNumChars = boxInfo.width - numReplacementsStr.length - 28;
 		for (var i = 0; i < maxNumChars; ++i)
-			listTextReplacements.bottomBorder += HORIZONTAL_SINGLE;
-		listTextReplacements.bottomBorder += RIGHT_T_SINGLE + "\x01n"
+			listTextReplacements.bottomBorder += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
+		listTextReplacements.bottomBorder += CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT + "\x01n"
 		                                  + gConfigSettings.genColors.listBoxBorderText + numReplacementsStr + "\x01n"
-		                                  + gConfigSettings.genColors.listBoxBorder + LEFT_T_SINGLE;
-		listTextReplacements.bottomBorder += LOWER_RIGHT_SINGLE;
+		                                  + gConfigSettings.genColors.listBoxBorder + CP437_BOX_DRAWINGS_LIGHT_LEFT_T;
+		listTextReplacements.bottomBorder += CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE;
 	}
 	// printf format strings for the list
 	if (typeof(listTextReplacements.listFormatStr) == "undefined")
@@ -6132,9 +5933,9 @@ function listTextReplacements()
 	for (var i = 0; i < boxInfo.height-2; ++i)
 	{
 		console.gotoxy(boxInfo.topLeftX, boxInfo.topLeftY+i+1);
-		console.print(VERTICAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 		console.gotoxy(boxInfo.topLeftX+boxInfo.width-1, boxInfo.topLeftY+i+1);
-		console.print(VERTICAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_LIGHT_VERTICAL);
 	}
 
 	// Set up some variables for the user input loop
@@ -6183,9 +5984,9 @@ function listTextReplacements()
 
 			// Update the page number in the top border of the box.
 			console.gotoxy(pageNumTxtStartX, boxInfo.topLeftY);
-			console.print("\x01n" + gConfigSettings.genColors.listBoxBorder + RIGHT_T_SINGLE);
+			console.print("\x01n" + gConfigSettings.genColors.listBoxBorder + CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT);
 			printf("\x01n" + gConfigSettings.genColors.listBoxBorderText + "Page %4d of %4d", pageNum+1, numPages);
-			console.print("\x01n" + gConfigSettings.genColors.listBoxBorder + LEFT_T_SINGLE);
+			console.print("\x01n" + gConfigSettings.genColors.listBoxBorder + CP437_BOX_DRAWINGS_LIGHT_LEFT_T);
 
 			// Just for sane appearance: Move the cursor to the first character of
 			// the first row and make it the color for the text replacements.
@@ -6244,13 +6045,20 @@ function listTextReplacements()
 //                              to its original position when done.
 function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 {
+	var retObj = {
+		ctrlQQuoteOptChanged: false,
+		editTopRowChange: 0 // Change in gEditTop, in case the user changes their preferred UI mode/style
+	};
+
 	if (!gConfigSettings.allowUserSettings)
-		return;
+		return retObj;
 
 	const originalCurpos = (typeof(pCurpos) == "object" ? pCurpos : console.getxy());
 	var returnCursorWhenDone = true;
 	if (typeof(pReturnCursorToOriginalPos) == "boolean")
 		returnCursorWhenDone = pReturnCursorToOriginalPos;
+	// In case the user changes their preferred UI style/mode:
+	const originalCursorYWasEditTopRow = (originalCurpos.y == gEditTop);
 
 	// Save the user's current settings so that we can check them later to see if any
 	// of them changed, in order to determine whether to save the user's settings file.
@@ -6265,15 +6073,26 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 	// an option for the user to choose a dictionary.
 	var dictionaryFilenames = getDictionaryFilenames(js.exec_dir);
 
+	// Copy the SlyEdit configuration color settings to ChoiceScrollbox
+	// color settings
+	var choiceBoxSettings = {
+		colors: {
+			listBoxBorder: gConfigSettings.genColors.listBoxBorder,
+			listBoxBorderText: gConfigSettings.genColors.listBoxBorderText,
+			listBoxItemText: gConfigSettings.genColors.listBoxItemText,
+			listBoxItemHighlight: gConfigSettings.genColors.listBoxItemHighlight
+		}
+	};
+
 	// Create the user settings box
 	var optBoxTitle = "Setting                                      Enabled";
 	var optBoxWidth = ChoiceScrollbox_MinWidth();
-	var optBoxHeight = (dictionaryFilenames.length > 1 ? 13 : 12);
+	var optBoxHeight = (dictionaryFilenames.length > 1 ? 15 : 14);
 	var optBoxStartX = gEditLeft + Math.floor((gEditWidth/2) - (optBoxWidth/2));
 	if (optBoxStartX < gEditLeft)
 		optBoxStartX = gEditLeft;
 	var optionBox = new ChoiceScrollbox(optBoxStartX, gEditTop+1, optBoxWidth, optBoxHeight, optBoxTitle,
-	                                    gConfigSettings, false, true);
+	                                    choiceBoxSettings, false, true);
 	optionBox.addInputLoopExitKey(CTRL_U);
 	optionBox.addInputLoopExitKey("?");
 	// Update the bottom help text to be more specific to the user settings box
@@ -6293,8 +6112,11 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 	optionBox.setBottomBorderText(bottomBorderText, true, false, true);
 
 	// Add the options to the option box
+	const UI_MODE_OPT_INDEX = optionBox.addTextItem("Choose UI mode"); // Will show another menu
+	// Toggle options
 	const optFormatStr = "%-46s [ ]";
 	const checkIdx = 48;
+	const CTRL_Q_QUOTE_OPT_INDEX = optionBox.addTextItem(format(optFormatStr, "Ctrl-Q to quote (if not, then Ctrl-Y)"));
 	const TAGLINE_OPT_INDEX = optionBox.addTextItem(format(optFormatStr, "Taglines"));
 	var SPELLCHECK_ON_SAVE_OPT_INDEX = -1;
 	if (gConfigSettings.allowSpellCheck)
@@ -6307,32 +6129,36 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 	const AUTO_SIGN_OPT_INDEX = optionBox.addTextItem(format(optFormatStr, "Auto-sign messages"));
 	const SIGN_REAL_ONLY_FIRST_NAME_OPT_INDEX = optionBox.addTextItem(format(optFormatStr, "  When using real name, use only first name"));
 	const SIGN_EMAILS_REAL_NAME_OPT_INDEX = optionBox.addTextItem(format(optFormatStr, "  Sign emails with real name"));
+	if (gUserSettings.ctrlQQuote)
+		optionBox.chgCharInTextItem(CTRL_Q_QUOTE_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
+	// Dictionary selection: Will show another menu
 	var DICTIONARY_OPT_INDEX = -1;
 	if (dictionaryFilenames.length > 1)
 		DICTIONARY_OPT_INDEX = optionBox.addTextItem("Spell-check dictionary/dictionaries");
 	if (gUserSettings.wrapQuoteLines)
-		optionBox.chgCharInTextItem(QUOTE_WRAP_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(QUOTE_WRAP_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.joinQuoteLinesWhenWrapping)
-		optionBox.chgCharInTextItem(JOIN_WRAPPED_QUOTE_LINES_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(JOIN_WRAPPED_QUOTE_LINES_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.enableTaglines)
-		optionBox.chgCharInTextItem(TAGLINE_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(TAGLINE_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gConfigSettings.allowSpellCheck && gUserSettings.promptSpellCheckOnSave)
-		optionBox.chgCharInTextItem(SPELLCHECK_ON_SAVE_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(SPELLCHECK_ON_SAVE_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.useQuoteLineInitials)
-		optionBox.chgCharInTextItem(QUOTE_INITIALS_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(QUOTE_INITIALS_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.indentQuoteLinesWithInitials)
-		optionBox.chgCharInTextItem(QUOTE_INITIALS_INDENT_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(QUOTE_INITIALS_INDENT_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.trimSpacesFromQuoteLines)
-		optionBox.chgCharInTextItem(TRIM_QUOTE_SPACES_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(TRIM_QUOTE_SPACES_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.autoSignMessages)
-		optionBox.chgCharInTextItem(AUTO_SIGN_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(AUTO_SIGN_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.autoSignRealNameOnlyFirst)
-		optionBox.chgCharInTextItem(SIGN_REAL_ONLY_FIRST_NAME_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(SIGN_REAL_ONLY_FIRST_NAME_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 	if (gUserSettings.autoSignEmailsRealName)
-		optionBox.chgCharInTextItem(SIGN_EMAILS_REAL_NAME_OPT_INDEX, checkIdx, CHECK_CHAR);
+		optionBox.chgCharInTextItem(SIGN_EMAILS_REAL_NAME_OPT_INDEX, checkIdx, CP437_CHECK_MARK);
 
 	// Create an object containing toggle values (true/false) for each option index
 	var optionToggles = {};
+	optionToggles[CTRL_Q_QUOTE_OPT_INDEX] = gUserSettings.ctrlQQuote;
 	optionToggles[QUOTE_WRAP_OPT_INDEX] = gUserSettings.wrapQuoteLines;
 	optionToggles[JOIN_WRAPPED_QUOTE_LINES_OPT_INDEX] = gUserSettings.joinQuoteLinesWhenWrapping;
 	optionToggles[TAGLINE_OPT_INDEX] = gUserSettings.enableTaglines;
@@ -6357,7 +6183,7 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 				// Toggle the option and refresh it on the screen
 				optionToggles[itemIndex] = !optionToggles[itemIndex];
 				if (optionToggles[itemIndex])
-					optionBox.chgCharInTextItem(itemIndex, checkIdx, CHECK_CHAR);
+					optionBox.chgCharInTextItem(itemIndex, checkIdx, CP437_CHECK_MARK);
 				else
 					optionBox.chgCharInTextItem(itemIndex, checkIdx, " ");
 				optionBox.refreshItemCharOnScreen(itemIndex, checkIdx);
@@ -6365,6 +6191,9 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 				// Toggle the setting for the user in global user setting object.
 				switch (itemIndex)
 				{
+					case CTRL_Q_QUOTE_OPT_INDEX:
+						gUserSettings.ctrlQQuote = !gUserSettings.ctrlQQuote;
+						break;
 					case QUOTE_WRAP_OPT_INDEX:
 						gUserSettings.wrapQuoteLines = !gUserSettings.wrapQuoteLines;
 						break;
@@ -6404,6 +6233,31 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 			{
 				switch (itemIndex)
 				{
+					case UI_MODE_OPT_INDEX:
+						// Calculate the index of the edit line at the top of the edit area now,
+						// since gEditTop would change if the user changes their preferred UI
+						// mode/style
+						var editLinesTopIndex = gEditLinesIndex - (originalCurpos.y - gEditTop);
+						var previousEditTop = gEditTop; // To calculate change in gEditTop
+						// Let the user choose their UI mode/style
+						var chosenUIMode = letUserSelectUIMode(false);
+						if (chosenUIMode != "")
+						{
+							if (gUserSettings.slyEditMode == "RANDOM")
+								EDITOR_STYLE = (Math.floor(Math.random()*2) == 0) ? "DCT" : "ICE";
+							else
+								EDITOR_STYLE = gUserSettings.slyEditMode;
+							// Set up the global variables related to the chosen UI mode
+							setUIModeVars();
+							retObj.editTopRowChange = gEditTop - previousEditTop;
+						}
+						// Re-draw the screen according to the selected UI mode
+						fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes,
+						               gUserSettings.ctrlQQuote, 0, displayEditLines);
+						console.gotoxy(gEditLeft, gEditTop);
+						//displayEditLines(gEditTop, editLinesTopIndex, gEditBottom, true, false);
+						optionBox.refreshOnScreen(optionBox.chosenTextItemIndex);
+						break;
 					case DICTIONARY_OPT_INDEX:
 						// Let the user choose a dictionary file
 						// Find all the dictionary filenames (matching the filename
@@ -6458,13 +6312,29 @@ function doUserSettings(pCurpos, pReturnCursorToOriginalPos)
 	}
 
 	// Now that we're done, erase the option box by re-drawing/writing the appropriate part of the message area.
-	var editLineIndexAtSelBoxTopRow = gEditLinesIndex - (originalCurpos.y-optionBox.dimensions.topLeftY);
+	//var editLineIndexAtSelBoxTopRow = gEditLinesIndex - (originalCurpos.y-optionBox.dimensions.topLeftY); // Old
+	var originalY = (originalCursorYWasEditTopRow ? gEditTop : originalCurpos.y);
+	var editLineIndexAtSelBoxTopRow = gEditLinesIndex - (originalY-optionBox.dimensions.topLeftY);
 	displayMessageRectangle(optionBox.dimensions.topLeftX, optionBox.dimensions.topLeftY,
 	                        optionBox.dimensions.width, optionBox.dimensions.height,
 	                        editLineIndexAtSelBoxTopRow, true);
 
 	if (returnCursorWhenDone)
-		console.gotoxy(originalCurpos);
+	{
+		// If the user changed their preferred UI style, gEditTop will be different.
+		// In case the original cursor position was at the top edit row, then ensure
+		// the cursor is placed back on that row.
+		if (originalCursorYWasEditTopRow)
+			console.gotoxy(originalCurpos.x, gEditTop);
+		else
+			console.gotoxy(originalCurpos);
+	}
+
+	// See if the user changed their option for using Ctrl-Q to quote
+	if (originalSettings.hasOwnProperty("ctrlQQuote") && typeof(originalSettings.ctrlQQuote) === "boolean")
+		retObj.ctrlQQuoteOptChanged = (gUserSettings.ctrlQQuote != originalSettings.ctrlQQuote);
+
+	return retObj;
 }
 // Helper for doUserSettings(): Does the dictionary language selection
 //
@@ -6502,14 +6372,14 @@ function doUserDictionaryLanguageSelection(pBoxTopLeftX, pBoxTopLeftY, pBoxWidth
 	dictMenu.multiSelect = true;
 	dictMenu.borderEnabled = true;
 	dictMenu.SetBorderChars({
-		upperLeft: UPPER_LEFT_SINGLE,
-		upperRight: UPPER_RIGHT_SINGLE,
-		lowerLeft: LOWER_LEFT_SINGLE,
-		lowerRight: LOWER_RIGHT_SINGLE,
-		top: HORIZONTAL_SINGLE,
-		bottom: HORIZONTAL_SINGLE,
-		left: VERTICAL_SINGLE,
-		right: VERTICAL_SINGLE
+		upperLeft: CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE,
+		upperRight: CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE,
+		lowerLeft: CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE,
+		lowerRight: CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE,
+		top: CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE,
+		bottom: CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE,
+		left: CP437_BOX_DRAWINGS_LIGHT_VERTICAL,
+		right: CP437_BOX_DRAWINGS_LIGHT_VERTICAL
 	});
 	dictMenu.scrollbarEnabled = true;
 	dictMenu.colors.borderColor = "\x01g";
@@ -6534,22 +6404,22 @@ function displayUserSettingsHelp(pTopLeftX, pTopLeftY, pWidth, pHeight)
 	// Draw a border around the frame object
 	console.gotoxy(pTopLeftX-1, pTopLeftY-1);
 	console.attributes = "HB";
-	console.print(UPPER_LEFT_DOUBLE);
+	console.print(CP437_BOX_DRAWINGS_UPPER_LEFT_DOUBLE);
 	for (var i = 0; i < pWidth; ++i)
-		console.print(HORIZONTAL_DOUBLE);
-	console.print(UPPER_RIGHT_DOUBLE);
+		console.print(CP437_BOX_DRAWINGS_HORIZONTAL_DOUBLE);
+	console.print(CP437_BOX_DRAWINGS_UPPER_RIGHT_DOUBLE);
 	for (var lineIdx = 0; lineIdx < pHeight; ++lineIdx)
 	{
 		console.gotoxy(pTopLeftX-1, pTopLeftY+lineIdx);
-		console.print(VERTICAL_DOUBLE);
+		console.print(CP437_BOX_DRAWINGS_DOUBLE_VERTICAL);
 		console.gotoxy(pTopLeftX+pWidth, pTopLeftY+lineIdx);
-		console.print(VERTICAL_DOUBLE);
+		console.print(CP437_BOX_DRAWINGS_DOUBLE_VERTICAL);
 	}
 	console.gotoxy(pTopLeftX-1, pTopLeftY+pHeight);
-	console.print(LOWER_LEFT_DOUBLE);
+	console.print(CP437_BOX_DRAWINGS_LOWER_LEFT_DOUBLE);
 	for (var i = 0; i < pWidth; ++i)
-		console.print(HORIZONTAL_DOUBLE);
-	console.print(LOWER_RIGHT_DOUBLE);
+		console.print(CP437_BOX_DRAWINGS_HORIZONTAL_DOUBLE);
+	console.print(CP437_BOX_DRAWINGS_LOWER_RIGHT_DOUBLE);
 
 	// Create the frame object
 	var frameObj = new Frame(pTopLeftX, pTopLeftY, pWidth, pHeight, BG_BLACK);
@@ -6635,16 +6505,16 @@ function doTaglineSelection()
 	taglineMenu.colors.selectedItemColor = "\x01n\x01w\x01h\x01" + "4";
 	taglineMenu.borderEnabled = true;
 	taglineMenu.SetBorderChars({
-		upperLeft: UPPER_LEFT_SINGLE,
-		upperRight: UPPER_RIGHT_SINGLE,
-		lowerLeft: LOWER_LEFT_SINGLE,
-		lowerRight: LOWER_RIGHT_SINGLE,
-		top: HORIZONTAL_SINGLE,
-		bottom: HORIZONTAL_SINGLE,
-		left: VERTICAL_SINGLE,
-		right: VERTICAL_SINGLE
+		upperLeft: CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE,
+		upperRight: CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE,
+		lowerLeft: CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE,
+		lowerRight: CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE,
+		top: CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE,
+		bottom: CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE,
+		left: CP437_BOX_DRAWINGS_LIGHT_VERTICAL,
+		right: CP437_BOX_DRAWINGS_LIGHT_VERTICAL
 	});
-	taglineMenu.topBorderText = "\x01n\x01g" + RIGHT_T_SINGLE + "\x01b\x01hTaglines\x01n\x01g" + LEFT_T_SINGLE;
+	taglineMenu.topBorderText = "\x01n\x01g" + CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT + "\x01b\x01hTaglines\x01n\x01g" + CP437_BOX_DRAWINGS_LIGHT_LEFT_T;
 	taglineMenu.bottomBorderText = "\x01n\x01h\x01c"+ UP_ARROW + "\x01b, \x01c"+ DOWN_ARROW + "\x01b, \x01cPgUp\x01b/\x01cPgDn\x01b, "
 	                     + "\x01cF\x01y)\x01birst, \x01cL\x01y)\x01bast, \x01cHOME\x01b, \x01cEND\x01b, \x01cEnter\x01y=\x01bSelect, "
 	                     + "\x01cR\x01y)\x01bandom, \x01cESC\x01n\x01c/\x01h\x01cQ\x01y=\x01bEnd";
@@ -6804,7 +6674,7 @@ function writeMsgOntBtmHelpLineWithPause(pMsg, pPauseMS)
    // Write the message with the pause, then refresh the help line on the
    // bottom of the screen.
    writeWithPause(1, console.screen_rows, pMsg, pPauseMS);
-   fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes);
+   fpDisplayBottomHelpLine(console.screen_rows, gUseQuotes, gUserSettings.ctrlQQuote);
 }
 
 // Gets the user's alias/name to use for auto-signing the message.
@@ -6897,20 +6767,22 @@ function letUserUploadMessageFile(pCurpos)
 					// it's sending an empty message.
 					gEditLines.push(new TextLine(fileLine, true, false));
 				}
-				
+
 				msgFile.close();
 				file_remove(msgFilename);
 			}
 			else
 			{
 				console.print("\x01y\x01hFailed to read the message file!\x01n\r\n\x01p");
-				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes, 0, displayEditLines);
+				fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes,
+				               gUserSettings.ctrlQQuote, 0, displayEditLines);
 			}
 		}
 		else
 		{
 			console.print("\x01y\x01hUpload failed!\x01n\r\n\x01p");
-			fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes, 0, displayEditLines);
+			fpRedrawScreen(gEditLeft, gEditRight, gEditTop, gEditBottom, gTextAttrs, gInsertMode, gUseQuotes,
+			               gUserSettings.ctrlQQuote, 0, displayEditLines);
 		}
 	}
 
@@ -7001,9 +6873,10 @@ function promptForGraphicsChar(pCurPos)
 	console.cleartoeol("\x01n");
 	console.gotoxy(1, console.screen_rows);
 	console.putmsg("Enter Graphics Code (\x01H?\x01N for a list, \x01HCTRL-C\x01N to cancel): ");
+	// Write a few spaces with a background color to indicate input text length
 	console.attributes = 31;
 	console.write(format("%3.3s",""));
-	var inp = ""; // The uer's inputted string
+	var inp = ""; // The user's inputted string
 	console.gotoxy(55 + inp.length, console.screen_rows);
 	var continueOn = true;
 	while (continueOn)
@@ -7064,10 +6937,17 @@ function promptForGraphicsChar(pCurPos)
 				console.print(ch);
 				inp += ch;
 				break;
-			case '\x08':	/* Backspace */
-				inp = inp.substr(0, inp.length-1);
+			case '\x08':	// Backspace
+				if (inp.length > 0)
+				{
+					inp = inp.substr(0, inp.length-1);
+					var curPos = console.getxy();
+					console.gotoxy(curPos.x-1, curPos.y);
+					console.print(" ");
+					console.gotoxy(curPos.x-1, curPos.y);
+				}
 				break;
-			case '\x0d':	/* CR */
+			case '\x0d':	// CR
 				if (inp.length >= 3)
 				{
 					// Return the chosen graphic char here
@@ -7089,7 +6969,7 @@ function promptForGraphicsChar(pCurPos)
 					continueOn = false;
 					break;
 				}
-			case '\x03':	/* CTRL-C */
+			case '\x03':	// CTRL-C
 				continueOn = false;
 				break;
 			case '?':
@@ -7126,8 +7006,12 @@ function promptForGraphicsChar(pCurPos)
 				// Refresh the edit lines on the screen
 				var editLinesTopIndex = gEditLinesIndex - (pCurPos.y - gEditTop);
 				displayMessageRectangle(1, gEditTop, gEditWidth, gEditHeight, editLinesTopIndex, true);
-				
+
 				// Return to the char # prompt
+				console.gotoxy(55 + inp.length, console.screen_rows);
+				// Write a few spaces with a background color to indicate input text length
+				console.attributes = 31;
+				console.write(format("%3.3s",""));
 				console.gotoxy(55 + inp.length, console.screen_rows);
 				break;
 			default:
@@ -7237,73 +7121,164 @@ function doMemeInput()
 	return retObj;
 }
 
-// Displays a Frame object and handles the input loop for navigation until
-// the user presses Q, Enter, or ESC To quit the input loop
+// Prompts the user for their desired UI mode (Ice/DCT/Random) and saves their
+// user settings file with their selection.
 //
 // Parameters:
-//  pFrame: The Frame object
-//  pScrollbar: The Scrollbar object for the Frame
-//  pFrameContentStr: The string content that was added to the Frame
-//  pAdditionalQuitKeys: Optional - A string containing additional keys to quit the
-//                       input loop.  This is case-sensitive.
+//  pFreshStart: Whether or not SlyEdit has just been started; will affect
+//               the prompt text.
 //
-// Return value: The last keypress/input from the user
-function doFrameInputLoop(pFrame, pScrollbar, pFrameContentStr, pAdditionalQuitKeys)
+// Return value: The user's chosen UI mode (or empty string if none chosen/user aborted)
+function letUserSelectUIMode(pFreshStart)
 {
-	var checkAdditionalQuitKeys = (typeof(pAdditionalQuitKeys) === "string" && pAdditionalQuitKeys.length > 0);
+	// Show some informational text, after clearing the screen
+	var promptText = "\x01n\x01c";
+	if (pFreshStart)
+		promptText += "Welcome to SlyEdit\x01g\x01h!\x01n\x01c ";
+	promptText += "Please select a UI mode";
+	if (pFreshStart)
+		promptText += " (you can change this later in user settings with Ctrl-U)";
+	promptText += "\x01g\x01h:\x01n";
 
-	// Input loop for the frame to let the user scroll it
-	var frameContentTopYOffset = 0;
-	//var maxFrameYOffset = pFrameContentStr.split("\r\n").length - pFrame.height;
-	var maxFrameYOffset = countOccurrencesInStr(pFrameContentStr, "\r\n") - pFrame.height;
-	if (maxFrameYOffset < 0) maxFrameYOffset = 0;
-	var userInput = "";
-	var continueOn = true;
-	do
+	console.line_counter = 0;
+	console.clear("N");
+	var promptTxtLines = lfexpand(word_wrap(promptText, console.screen_columns-1, console.strlen(promptText), false)).split("\r\n");
+	promptTxtLines.pop(); // Remove the last empty line which was added due to the split as done above
+	for (var i = 0; i < promptTxtLines.length; ++i)
+		console.center(promptTxtLines[i]);
+
+	// Build a lightbar menu with the editor style options
+	const menuWidth = 8;
+	const menuHeight = 5;
+	const menuX = Math.floor(console.screen_columns / 2) - Math.floor(menuWidth / 2);
+	const menuY = promptTxtLines.length + 1;
+	var modeMenu = new DDLightbarMenu(menuX, menuY, menuWidth, menuHeight);
+	modeMenu.wrapNavigation = true;
+	modeMenu.scrollbarEnabled = false;
+	modeMenu.borderEnabled = true;
+	modeMenu.multiSelect = false;
+	modeMenu.ampersandHotkeysInItems = false;
+	modeMenu.wrapNavigation = true;
+	modeMenu.AddAdditionalQuitKeys("qQ");
+	modeMenu.colors.borderColor = "\x01b\x01h";
+	//modeMenu.colors.selectedItemColor = "\x017\x01b";
+	//modeMenu.colors.itemTextCharHighlightColor = "\x017\x01b\x01h";
+	modeMenu.Add("Ice", "ICE");
+	modeMenu.Add("DCT", "DCT");
+	modeMenu.Add("Random", "RANDOM");
+	modeMenu.SetItemHotkey(0, "i");
+	modeMenu.AddItemHotkey(0, "I");
+	modeMenu.SetItemHotkey(1, "d");
+	modeMenu.AddItemHotkey(1, "D");
+	modeMenu.SetItemHotkey(2, "r");
+	modeMenu.AddItemHotkey(2, "R");
+	modeMenu.OnItemNav = function(oldItemIdx, currentItemIdx) {
+		var origAttrs = console.attributes;
+		console.pushxy();
+		var textX = this.pos.x + this.size.width;
+		var textY = this.pos.y + 2;
+		console.gotoxy(textX, textY);
+		//console.cleartoeol();
+		printf("%*s", 30, ""); // Print some spaces to clear out existing text
+		console.gotoxy(textX, textY);
+		console.attributes = "N";
+		switch (currentItemIdx)
+		{
+			case 0:
+				console.write("IceEdit style");
+				break;
+			case 1:
+				console.write("DCTEdit style");
+				break;
+			case 2:
+				console.write("Choose UI style randomly");
+				break;
+		}
+		console.popxy();
+		console.attributes = origAttrs;
+	};
+	modeMenu.callOnItemNavOnStartup = true;
+	// Set the current item based on the user's current UI mode setting
+	if (gUserSettings.slyEditMode == "ICE")
+		modeMenu.selectedItemIdx = 0;
+	else if (gUserSettings.slyEditMode == "DCT")
+		modeMenu.selectedItemIdx = 1;
+	else if (gUserSettings.slyEditMode == "RANDOM")
+		modeMenu.selectedItemIdx = 2;
+
+	// Show the menu & let the user select an option. If the user
+	// chose one, then save their user settings with the new UI
+	// style.
+	var userChoice = modeMenu.GetVal();
+	if (userChoice != null && typeof(userChoice) === "string")
 	{
-		pFrame.scrollTo(0, frameContentTopYOffset);
-		pFrame.invalidate();
-		pScrollbar.cycle();
-		pFrame.cycle();
-		pFrame.draw();
-		// Note: getKeyWithESCChars() is defined in dd_lightbar_menu.js.
-		userInput = getKeyWithESCChars(K_NOECHO|K_NOSPIN|K_NOCRLF, 30000).toUpperCase();
-		if (userInput == KEY_UP)
-		{
-			if (frameContentTopYOffset > 0)
-				--frameContentTopYOffset;
-		}
-		else if (userInput == KEY_DOWN)
-		{
-			if (frameContentTopYOffset < maxFrameYOffset)
-				++frameContentTopYOffset;
-		}
-		else if (userInput == KEY_PAGEUP)
-		{
-			frameContentTopYOffset -= pFrame.height;
-			if (frameContentTopYOffset < 0)
-				frameContentTopYOffset = 0;
-		}
-		else if (userInput == KEY_PAGEDN)
-		{
-			frameContentTopYOffset += pFrame.height;
-			if (frameContentTopYOffset > maxFrameYOffset)
-				frameContentTopYOffset = maxFrameYOffset;
-		}
-		else if (userInput == KEY_HOME)
-			frameContentTopYOffset = 0;
-		else if (userInput == KEY_END)
-			frameContentTopYOffset = maxFrameYOffset;
+		gUserSettings.slyEditMode = userChoice;
+		if (!WriteUserSettingsFile(gUserSettings))
+			log(LOG_ERR, format("%s: Failed to save user settings file (%s)", EDITOR_PROGRAM_NAME, gUserSettingsFilename));
+	}
 
-		// Check for whether to continue the input loop
-		continueOn = (userInput != "Q" && userInput != KEY_ENTER && userInput != KEY_ESC);
-		// If the additional quit keys does not contain the user's keypress, then continue
-		// the input loop.
-		// In other words, if the additional quit keys includes the user's keypress, then
-		// don't continue.
-		if (continueOn && checkAdditionalQuitKeys)
-			continueOn = (pAdditionalQuitKeys.indexOf(userInput) < 0);
-	} while (continueOn);
+	console.attributes = "N";
+	return gUserSettings.slyEditMode;
+}
 
-	return userInput;
+// Sets the global variables related to the UI mode, depending on what
+// UI mode is chosen
+function setUIModeVars()
+{
+	/*
+	gSubjPos = {
+		x: 0,
+		y: 0
+	};
+	gSubjScreenLen = 0;
+	*/
+	if (EDITOR_STYLE == "DCT")
+	{
+		gEditTop = 6;
+		gQuoteWinTextColor = gConfigSettings.DCTColors.QuoteWinText;
+		gQuoteLineHighlightColor = gConfigSettings.DCTColors.QuoteLineHighlightColor;
+		gTextAttrs = "\x01n";
+		gQuoteLineColor = gConfigSettings.DCTColors.QuoteLineColor;
+
+		// Function pointers for the DCTEdit-style screen update functions
+		fpDrawQuoteWindowTopBorder = DrawQuoteWindowTopBorder_DCTStyle;
+		fpDisplayTextAreaBottomBorder = DisplayTextAreaBottomBorder_DCTStyle;
+		fpDrawQuoteWindowBottomBorder = DrawQuoteWindowBottomBorder_DCTStyle;
+		fpRedrawScreen = redrawScreen_DCTStyle;
+		fpUpdateInsertModeOnScreen = updateInsertModeOnScreen_DCTStyle;
+		fpDisplayBottomHelpLine = DisplayBottomHelpLine_DCTStyle;
+		fpDisplayTime = displayTime_DCTStyle;
+		fpDisplayTimeRemaining = displayTimeRemaining_DCTStyle;
+		fpCallESCMenu = callDCTESCMenu;
+		fpGlobalScreenVarsSetup = globalScreenVarsSetup_DCTStyle;
+
+		// Note: gSubjScreenLen is set in redrawScreen_DCTStyle()
+		fpRefreshSubjectOnScreen = refreshSubjectOnScreen_DCTStyle;
+	}
+	else if (EDITOR_STYLE == "ICE")
+	{
+		gEditTop = 5;
+		gQuoteWinTextColor = gConfigSettings.iceColors.QuoteWinText;
+		gQuoteLineHighlightColor = gConfigSettings.iceColors.QuoteLineHighlightColor;
+		gTextAttrs = "\x01n";
+		gQuoteLineColor = gConfigSettings.iceColors.QuoteLineColor;
+
+		// Function pointers for the IceEdit-style screen update functions
+		fpDrawQuoteWindowTopBorder = DrawQuoteWindowTopBorder_IceStyle;
+		fpDisplayTextAreaBottomBorder = DisplayTextAreaBottomBorder_IceStyle;
+		fpDrawQuoteWindowBottomBorder = DrawQuoteWindowBottomBorder_IceStyle;
+		fpRedrawScreen = redrawScreen_IceStyle;
+		fpUpdateInsertModeOnScreen = updateInsertModeOnScreen_IceStyle;
+		fpDisplayBottomHelpLine = DisplayBottomHelpLine_IceStyle;
+		fpDisplayTime = displayTime_IceStyle;
+		fpDisplayTimeRemaining = displayTimeRemaining_IceStyle;
+		fpCallESCMenu = callIceESCMenu;
+		fpGlobalScreenVarsSetup = globalScreenVarsSetup_IceStyle;
+
+		// Note: gSubjScreenLen is set in redrawScreen_IceStyle()
+		fpRefreshSubjectOnScreen = refreshSubjectOnScreen_IceStyle;
+	}
+
+	// Set up any required global screen variables
+	fpGlobalScreenVarsSetup();
 }

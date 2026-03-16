@@ -1,6 +1,4 @@
 /*
- * $Id: xpsem.c,v 1.13 2012/01/26 01:44:02 deuce Exp $
- *
  * Copyright (C) 2000 Jason Evans <jasone@freebsd.org>.
  * All rights reserved.
  *
@@ -85,8 +83,7 @@ xp_sem_init(xp_sem_t *sem, int pshared, unsigned int value)
 	}
 
 	if (pthread_cond_init(&(*sem)->gtzero, NULL) != 0) {
-		while (pthread_mutex_destroy(&(*sem)->lock) == EBUSY)
-			SLEEP(1);
+		pthread_mutex_destroy(&(*sem)->lock);
 		free(*sem);
 		errno = ENOSPC;
 		retval = -1;

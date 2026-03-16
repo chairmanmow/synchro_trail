@@ -33,18 +33,41 @@ function get_fpath(sec, fname)
 function read_list(sec)
 {
 	var f = new File(txtsec_data(sec) + ".ini");
-	if(!f.open("rt"))
+	if(!f.open("r"))
 		return [];
 	var list = f.iniGetAllObjects();
 	f.close();
 	return list;
 }
 
+function read_mode(sec)
+{
+	var dflt = "P_CPM_EOF";
+	var f = new File(txtsec_data(sec) + ".ini");
+	if(!f.open("r"))
+		return dflt;
+	var mode = f.iniGetValue(null, "mode", dflt);
+	f.close();
+	return mode;
+}
+
+function read_cols(sec)
+{
+	var dflt = undefined;
+	var f = new File(txtsec_data(sec) + ".ini");
+	if(!f.open("r"))
+		return dflt;
+	var cols = f.iniGetValue(null, "cols", dflt);
+	f.close();
+	return cols;
+}
+
 function write_list(sec, list)
 {
 	var f = new File(txtsec_data(sec) + ".ini");
-	if(!f.open("w+t"))
+	if(!f.open(f.exists ? 'r+':'w+'))
 		return false;
+	f.iniRemoveSections();
 	f.iniSetAllObjects(list);
 	f.close();
 	return true;
@@ -118,7 +141,7 @@ while(bbs.online) {
 						break;
 					i--;
 				}
-				var fname;
+				var fname = '';
 				var files = directory(backslash(txtsec_data(usrsec[cursec])) + "*");
 				for(var f = 0; f < files.length; f++) {
 					var match = false;
@@ -145,7 +168,7 @@ while(bbs.online) {
 						if(!(console.editfile(path)))
 							break;
 				}
-				console.printfile(path);
+				console.printfile(path, eval(read_mode(usrsec[cursec])), read_cols(usrsec[cursec]));
 				console.crlf();
 				console.print(bbs.text(AddTextFileDesc));
 				var desc = console.getstr(file_getname(path), 70, K_EDIT|K_LINE|K_TRIM|K_AUTODEL);
@@ -194,22 +217,21 @@ while(bbs.online) {
 					prev = cmd;
 					cmd--;
 					console.attributes = LIGHTGRAY;
-					if(!bbs.compare_ars(list[cmd].ars)) {
+					if(list[cmd].ars !== undefined && !bbs.compare_ars(list[cmd].ars)) {
 						alert("Sorry, you can't read that file");
 						break;
 					}
-					var mode = P_CPM_EOF;
-					if(list[cmd].mode !== undefined)
-						mode = eval(list[cmd].mode);
+					var mode = list[cmd].mode || read_mode(usrsec[cursec]);
+					var cols = list[cmd].cols || read_cols(usrsec[cursec]);
 					if(list[cmd].petscii_graphics)
 						console.putbyte(142);
 					if(console.term_supports(USER_RIP))
 						console.write("\x02|*\r\n");
 					var fpath = get_fpath(usrsec[cursec], list[cmd].name);
 					if(list[cmd].tail)
-						console.printtail(fpath, list[cmd].tail, mode);
+						console.printtail(fpath, list[cmd].tail, eval(mode), cols);
 					else
-						console.printfile(fpath, mode);
+						console.printfile(fpath, eval(mode), cols);
 					log(LOG_INFO, "read text file: " + fpath);
 					console.pause();
 					if(console.term_supports(USER_RIP))

@@ -363,14 +363,18 @@ static void read_ini(sbbs_ntsvc_t* svc)
 	}
 
 	/* We call this function to set defaults, even if there's no .ini file */
-	sbbs_read_ini(fp, ini_file
+	if (!sbbs_read_ini(fp, ini_file
 	              , NULL /* global_startup */
 	              , NULL, bbs_startup
 	              , NULL, ftp_startup
 	              , NULL, web_startup
 	              , NULL, mail_startup
 	              , NULL, services_startup
-	              );
+	              )) {
+		SAFEPRINTF(str, "Internal error reading or initializing startup structures from %s", ini_file);
+		svc_lputs(NULL, LOG_CRIT, str);
+	}
+
 
 	/* close .ini file here */
 	if (fp != NULL)
@@ -1154,6 +1158,11 @@ int main(int argc, char** argv)
 	printf("\nSynchronet NT Services  Version %s%c  %s\n\n"
 	       , VERSION, REVISION, COPYRIGHT_NOTICE);
 
+    if(bbs_ver_num() != VERSION_HEX) {
+        fprintf(stderr, "!Incorrect SBBS Library Version (%x, expected %x)\n", bbs_ver_num(), VERSION_HEX);
+		return EXIT_FAILURE;
+	}
+
 	loginAttemptListInit(&login_attempt_list);
 
 	ctrl_dir = get_ctrl_dir(/* warn: */ TRUE);
@@ -1234,14 +1243,17 @@ int main(int argc, char** argv)
 	}
 
 	/* We call this function to set defaults, even if there's no .ini file */
-	sbbs_read_ini(fp, ini_file
+	if (!sbbs_read_ini(fp, ini_file
 	              , NULL /* global_startup */
 	              , &bbs.autostart, NULL
 	              , &ftp.autostart, NULL
 	              , &web.autostart, NULL
 	              , &mail.autostart, NULL
 	              , &services.autostart, NULL
-	              );
+	              )) {
+		SAFEPRINTF(str, "Internal error reading or initializing startup structures from %s", ini_file);
+		svc_lputs(NULL, LOG_CRIT, str);
+	}
 
 	/* close .ini file here */
 	if (fp != NULL)

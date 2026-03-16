@@ -1,0 +1,100 @@
+{
+	"name": "Easy",
+	"initial_gold": 500,
+	"initial_food": 250,
+	"fish_food_value": 12,
+	"fish_catch_max": 10,
+	"max_pirates": 2,
+	"item": {
+		"C": {
+			"cost": 3,
+			"max_damage": 200,
+			"tax": 0.1,
+			"food_turn": 0.9,
+			"food_round": 1,
+			"land": true,
+			"sea": false
+		},
+		"A": {
+			"cost": 15,
+			"max_damage": 750,
+			"tax": 0.1,
+			"food_turn": 0.1,
+			"food_round": 4,
+			"land": true,
+			"sea": false
+		},
+		"T": {
+			"cost": 20,
+			"max_damage": 400,
+			"tax": 0.25,
+			"food_turn": 0.5,
+			"food_round": 5,
+			"land": false,
+			"sea": true
+		},
+		"P": {
+			"cost": 60,
+			"max_damage": 600,
+			"tax": -0.75,
+			"land": false,
+			"sea": true
+		},
+		"V": {
+			"cost": 40,
+			"max_damage": 500,
+			"tax": 0.25,
+			"cap": 50,
+			"land": true,
+			"sea": false
+		},
+		"D": {
+			"cost": 60,
+			"max_damage": 500,
+			"tax": 1,
+			"cap": 2,
+			"land": true,
+			"sea": false
+		},
+		"I": {
+			"cost": 60,
+			"max_damage": 500,
+			"tax": 1,
+			"cap": 1,
+			"land": true,
+			"sea": false
+		},
+		"B": {
+			"cost": 40,
+			"max_damage": 500,
+			"tax": -1,
+			"land": true,
+			"sea": true
+		},
+		"S": {
+			"cost": 50,
+			"max_damage": 500,
+			"tax": -2.5,
+			"edu": 250,
+			"land": true,
+			"sea": false
+		},
+		"H": {
+			"cost": 75,
+			"max_damage": 500,
+			"tax": -3,
+			"cap": 3,
+			"land": true,
+			"sea": false
+		},
+		"F": {
+			"cost": 100,
+			"max_damage": 750,
+			"tax": -5,
+			"cap": 10,
+			"edu": 50,
+			"land": true,
+			"sea": false
+		}
+	}
+}

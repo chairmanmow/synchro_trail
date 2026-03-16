@@ -90,7 +90,7 @@ G_MODULE_EXPORT void update_userlist_item(GtkListStore *lstore, GtkTreeIter *cur
 			return;
 		}
 	}
-	sex[0]=user.sex;
+	sex[0]=user.gender;
 	sex[1]=0;
 	unixtodstr(&cfg, user.firston, first);
 	unixtodstr(&cfg, user.laston, last);
@@ -104,7 +104,7 @@ G_MODULE_EXPORT void update_userlist_item(GtkListStore *lstore, GtkTreeIter *cur
 		,6,user.location
 		,7,user.connection
 		,8,user.note
-		,9,user.comp
+		,9,user.host
 		,10,user.phone
 		,11,user.netmail
 		,12,user.logons
@@ -125,7 +125,7 @@ G_MODULE_EXPORT void update_userlist_callback(GtkWidget *wiggy, gpointer data)
 	char			str[1024];
 
 	free_cfg(&cfg);
-	if(!load_cfg(&cfg, /* text: */NULL, /* prep: */TRUE, /* node: */FALSE, str, sizeof(str))) {
+	if(!load_cfg(&cfg, /* text: */NULL, 0, /* prep: */TRUE, /* node: */FALSE, str, sizeof(str))) {
 		char error[256];
 		SAFEPRINTF(error, "ERROR Loading Configuration Data: %s", str);
 		display_message("Load Error",error,"gtk-dialog-error");

@@ -346,7 +346,9 @@ bool ANSI_Terminal::getdims()
 	if (sbbs->sys_status & SS_USERON
 	    && (sbbs->useron.rows == TERM_ROWS_AUTO || sbbs->useron.cols == TERM_COLS_AUTO)
 	    && sbbs->online == ON_REMOTE) {                                 /* Remote */
+		unsigned saved_line_counter = sbbs->term->lncntr;
 		sbbs->term_out("\x1b[s\x1b[255B\x1b[255C\x1b[6n\x1b[u");
+		sbbs->term->lncntr = saved_line_counter;
 		return sbbs->inkey(K_ANSI_CPR, TIMEOUT_ANSI_GETXY * 1000) == 0;
 	}
 	return false;
@@ -426,6 +428,23 @@ bool ANSI_Terminal::gotoxy(unsigned x, unsigned y)
 		x = 1;
 	if (y == 0)
 		y = 1;
+	if (optimize_gotoxy) {
+		if (y == row + 1 && x == column + 1) {
+			return true;
+		}
+		if (y == row + 1 && x == 1) {
+			carriage_return();
+			return true;
+		}
+		if (x == column + 1 && y > row + 1 && y - (row + 1) <= 6) {
+			line_feed(y - (row + 1));
+			return true;
+		}
+		if (x == 1 && y == 1) {
+			cursor_home();
+			return true;
+		}
+	}
 	sbbs->term_printf("\x1b[%d;%dH", y, x);
 	return true;
 }
@@ -853,7 +872,9 @@ bool ANSI_Terminal::parse_output(char ich) {
 			ansiParser.reset();
 			return true;
 		case ansiState_broken:
-			sbbs->lprintf(LOG_WARNING, "Sent broken ANSI sequence '%s'", ansiParser.ansi_sequence.c_str());
+			sbbs->lprintf(LOG_WARNING, "Sent %zu-character broken ANSI sequence '%s'"
+				, ansiParser.ansi_sequence.length()
+				, ansiParser.ansi_sequence.c_str());
 			ansiParser.reset();
 			return true;
 		case ansiState_none:
@@ -923,6 +944,7 @@ bool ANSI_Terminal::stuff_str(char& ch, const char *str, bool skipctlcheck)
 	bool ret = false;
 	if (!skipctlcheck) {
 		if (str[0] < 32) {
+			ch = str[0];
 			ret = true;
 			end = &str[1];
 		}
@@ -1104,7 +1126,7 @@ bool ANSI_Terminal::parse_input_sequence(char& ch, int mode) {
 		while (!done) {
 			int rc = sbbs->kbincom(100);
 			if (rc == NOINP) {	// Timed out
-				if (++timeouts >= 30)
+				if (++timeouts >= ((ansi.current_state() < ansiState_csi && !(mode & K_GETSTR)) ? 10U : 30U))
 					break;
 			}
 			else if (rc & (~0xff)) {

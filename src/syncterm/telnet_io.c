@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: telnet_io.c,v 1.41 2020/05/02 03:09:15 rswindell Exp $ */
-
 #include <stdlib.h>
 #include <string.h>
 
@@ -162,6 +160,12 @@ telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
 		if ((inbuf[i] == TELNET_IAC) || telnet_cmdlen) {
 			if (telnet_cmdlen < sizeof(telnet_cmd))
 				telnet_cmd[telnet_cmdlen++] = inbuf[i];
+			else {
+				/* Buffer full (long SB): slide last two bytes
+				 * so IAC SE detection still works */
+				telnet_cmd[sizeof(telnet_cmd) - 2] = telnet_cmd[sizeof(telnet_cmd) - 1];
+				telnet_cmd[sizeof(telnet_cmd) - 1] = inbuf[i];
+			}
 
 			command = telnet_cmd[1];
 			option = telnet_cmd[2];
@@ -171,15 +175,14 @@ telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
 				    && (telnet_cmd[telnet_cmdlen - 2] == TELNET_IAC)) {
                                         /* sub-option terminated */
 					if ((option == TELNET_TERM_TYPE) && (telnet_cmd[3] == TELNET_TERM_SEND)) {
-						char        buf[32];
-						const char *emu = get_emulation_str(conn_api.emulation);
+						char        buf[64];
 						int         len = sprintf(buf, "%c%c%c%c%s%c%c",
 						        TELNET_IAC, TELNET_SB,
 						        TELNET_TERM_TYPE, TELNET_TERM_IS,
-						        emu,
+						        term_name,
 						        TELNET_IAC, TELNET_SE);
 
-						lprintf(LOG_INFO, "TX: Terminal Type is %s", emu);
+						lprintf(LOG_INFO, "TX: Terminal Type is %s", term_name);
 						putcom(buf, len);
 						request_telnet_opt(TELNET_WILL, TELNET_NEGOTIATE_WINDOW_SIZE);
 					}

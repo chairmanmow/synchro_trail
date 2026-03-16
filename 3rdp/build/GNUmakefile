@@ -11,6 +11,7 @@ else
  JS_CONFIGURE_ARGS += --enable-optimize=-O3
 endif
 CXXFLAGS = -std=gnu++98
+JS_CFLAGS = -std=gnu17
 JS_CONFIGURE_ENV += 'MAKE=$(MAKE)'
 ifeq ($(shell perl -e 'print "$(machine)"=~/\.arm/?"YES":"NO"'),YES)
  ifeq ($(shell perl -e 'print "$(machine)"=~/\.armv[1-6]/?"YES":"NO"'),YES)
@@ -18,16 +19,17 @@ ifeq ($(shell perl -e 'print "$(machine)"=~/\.arm/?"YES":"NO"'),YES)
  endif
  ifeq ($(shell perl -e 'print `gcc -v 2>&1`=~/--with-fpu=vfp/?"YES":"NO"'),YES)
   ifeq ($(shell perl -e 'print `gcc -v 2>&1`=~/--with-float=hard/?"YES":"NO"'),YES)
-   JS_CONFIGURE_ENV += 'CFLAGS=-mfpu=vfp -mfloat-abi=hard'
+   JS_CFLAGS += -mfpu=vfp -mfloat-abi=hard
    CXXFLAGS += -mfpu=vfp -mfloat-abi=hard
    JS_CONFIGURE_ENV += 'ASFLAGS=-mfpu=vfp -mfloat-abi=hard'
   else
-   JS_CONFIGURE_ENV += 'CFLAGS=-msoft-float'
+   JS_CFLAGS += -msoft-float
    CXXFLAGS += -msoft-float
    JS_CONFIGURE_ENV += 'ASFLAGS=-msoft-float'
   endif
  endif
 endif
+JS_CONFIGURE_ENV += "CFLAGS=$(JS_CFLAGS)"
 # OS/2 and "GNU" (HURD?) also need this, but we never plan to support them.
 ifneq ($(os),linux)
  ifneq ($(os),sunos)
@@ -67,7 +69,7 @@ $(JS_SRC): | $(3RDPSRCDIR)
 $(JS_IDIR): | $(3RDPODIR)
 	$(QUIET)$(IFNOTEXIST) mkdir $(JS_IDIR)
 
-$(JSLIB_BUILD): $(3RDP_ROOT)/dist/libmozjs.tgz $(3RDP_ROOT)/dist/libffi.tgz $(3RDP_ROOT)/build/js_src_jsnativestack_cpp.patch $(3RDP_ROOT)/build/js-configure.patch $(3RDP_ROOT)/build/js-configure.in.patch $(3RDP_ROOT)/build/imacro-asm-fix.patch $(3RDP_ROOT)/build/js-volatile-outside-functions.patch $(3RDP_ROOT)/build/js-Wno-misleading-indentation.patch $(3RDP_ROOT)/build/js-allow-python3.patch $(3RDP_ROOT)/build/js-no-rwx-pages.patch $(3RDP_ROOT)/build/js-disable-shell.patch $(3RDP_ROOT)/build/js-darwin-configure.patch $(3RDP_ROOT)/build/js-keep-ffi-cache.patch $(3RDP_ROOT)/build/js-support-mingw-cross.patch $(3RDP_ROOT)/build/js-int-main-conf.patch $(3RDP_ROOT)/build/js-include-headers.patch $(3RDP_ROOT)/build/js-macos-configure.patch $(3RDP_ROOT)/build/js-isfinite.patch $(3RDP_ROOT)/build/js-libffi-prefix.patch $(3RDP_ROOT)/build/js-map-aligned.patch | $(JS_SRC) $(JS_IDIR)
+$(JSLIB_BUILD): $(3RDP_ROOT)/dist/libmozjs.tgz $(3RDP_ROOT)/dist/libffi.tgz $(3RDP_ROOT)/build/js_src_jsnativestack_cpp.patch $(3RDP_ROOT)/build/js-configure.patch $(3RDP_ROOT)/build/js-configure.in.patch $(3RDP_ROOT)/build/imacro-asm-fix.patch $(3RDP_ROOT)/build/js-volatile-outside-functions.patch $(3RDP_ROOT)/build/js-Wno-misleading-indentation.patch $(3RDP_ROOT)/build/js-allow-python3.patch $(3RDP_ROOT)/build/js-no-rwx-pages.patch $(3RDP_ROOT)/build/js-disable-shell.patch $(3RDP_ROOT)/build/js-darwin-configure.patch $(3RDP_ROOT)/build/js-keep-ffi-cache.patch $(3RDP_ROOT)/build/js-support-mingw-cross.patch $(3RDP_ROOT)/build/js-int-main-conf.patch $(3RDP_ROOT)/build/js-include-headers.patch $(3RDP_ROOT)/build/js-macos-configure.patch $(3RDP_ROOT)/build/js-isfinite.patch $(3RDP_ROOT)/build/js-libffi-prefix.patch $(3RDP_ROOT)/build/js-map-aligned.patch $(3RDP_ROOT)/build/js-aarch64-47bit.patch | $(JS_SRC) $(JS_IDIR)
 	@echo Creating $@ ...
 	$(QUIET)-rm -rf $(JS_SRC)/*
 	$(QUIET)tar -xzpC $(JS_SRC) -f $(3RDPDISTDIR)/libmozjs.tgz
@@ -96,6 +98,7 @@ $(JSLIB_BUILD): $(3RDP_ROOT)/dist/libmozjs.tgz $(3RDP_ROOT)/dist/libffi.tgz $(3R
 	$(QUIET)patch -b -p0 -d $(JS_SRC) < js-isfinite.patch
 	$(QUIET)patch -b -p0 -d $(JS_SRC) < js-libffi-prefix.patch
 	$(QUIET)patch -b -p0 -d $(JS_SRC) < js-map-aligned.patch
+	$(QUIET)patch -b -p0 -d $(JS_SRC) < js-aarch64-47bit.patch
 	-$(QUIET)cd $(JS_SRC)/js-1.8.5/js/src && autoconf-2.13
 	-$(QUIET)cd $(JS_SRC)/js-1.8.5/js/src && autoconf2.13
 	$(QUIET)chmod 0755 $(JS_SRC)/js-1.8.5/js/src/build/hcc
@@ -115,7 +118,7 @@ $(CRYPT_SRC): | $(3RDPSRCDIR)
 $(CRYPT_IDIR): | $(3RDPODIR)
 	$(QUIET)$(IFNOTEXIST) mkdir $(CRYPT_IDIR)
 
-$(CRYPTLIB_BUILD): $(3RDP_ROOT)/dist/cryptlib.zip $(3RDP_ROOT)/build/cl-terminal-params.patch $(3RDP_ROOT)/build/cl-mingw32-static.patch $(3RDP_ROOT)/build/cl-ranlib.patch $(3RDP_ROOT)/build/cl-win32-noasm.patch $(3RDP_ROOT)/build/cl-zz-country.patch $(3RDP_ROOT)/build/cl-algorithms.patch $(3RDP_ROOT)/build/cl-allow-duplicate-ext.patch $(3RDP_ROOT)/build/cl-macosx-minver.patch $(3RDP_ROOT)/build/cl-posix-me-gently.patch $(3RDP_ROOT)/build/cl-PAM-noprompts.patch $(3RDP_ROOT)/build/cl-zlib.patch $(3RDP_ROOT)/build/cl-Dynamic-linked-static-lib.patch $(3RDP_ROOT)/build/cl-SSL-fix.patch $(3RDP_ROOT)/build/cl-bigger-maxattribute.patch $(3RDP_ROOT)/build/cl-endian.patch $(3RDP_ROOT)/build/cl-vcxproj.patch $(3RDP_ROOT)/build/cl-mingw-vcver.patch $(3RDP_ROOT)/build/cl-no-odbc.patch $(3RDP_ROOT)/build/cl-noasm-defines.patch $(3RDP_ROOT)/build/cl-bn-noasm64-fix.patch $(3RDP_ROOT)/build/cl-prefer-ECC.patch $(3RDP_ROOT)/build/cl-prefer-ECC-harder.patch $(3RDP_ROOT)/build/cl-clear-GCM-flag.patch $(3RDP_ROOT)/build/cl-use-ssh-ctr.patch $(3RDP_ROOT)/build/cl-no-tpm.patch $(3RDP_ROOT)/build/cl-no-via-aes.patch $(3RDP_ROOT)/build/cl-just-use-cc.patch $(3RDP_ROOT)/build/cl-no-safe-stack.patch $(3RDP_ROOT)/build/cl-allow-pkcs12.patch $(3RDP_ROOT)/build/cl-allow-none-auth.patch $(3RDP_ROOT)/build/cl-mingw-add-m32.patch $(3RDP_ROOT)/build/cl-poll-not-select.patch $(3RDP_ROOT)/build/cl-good-sockets.patch $(3RDP_ROOT)/build/cl-moar-objects.patch $(3RDP_ROOT)/build/cl-server-term-support.patch $(3RDP_ROOT)/build/cl-add-pubkey-attribute.patch $(3RDP_ROOT)/build/cl-allow-ssh-auth-retries.patch $(3RDP_ROOT)/build/cl-fix-ssh-channel-close.patch $(3RDP_ROOT)/build/cl-vt-lt-2005-always-defined.patch $(3RDP_ROOT)/build/cl-no-pie.patch $(3RDP_ROOT)/build/cl-no-testobjs.patch $(3RDP_ROOT)/build/cl-win32-lean-and-mean.patch $(3RDP_ROOT)/build/cl-thats-not-asm.patch $(3RDP_ROOT)/build/cl-make-channels-work.patch $(3RDP_ROOT)/build/cl-allow-ssh-2.0-go.patch $(3RDP_ROOT)/build/cl-read-timeout-every-time.patch $(3RDP_ROOT)/build/cl-allow-servercheck-pubkeys.patch $(3RDP_ROOT)/build/cl-pass-after-pubkey.patch $(3RDP_ROOT)/build/cl-ssh-list-ctr-modes.patch $(3RDP_ROOT)/build/cl-double-delete-fine-on-close.patch $(3RDP_ROOT)/build/cl-handle-unsupported-pubkey.patch $(3RDP_ROOT)/build/cl-add-patches-info.patch $(3RDP_ROOT)/build/cl-netbsd-hmac-symbol.patch $(3RDP_ROOT)/build/cl-netbsd-no-getfsstat.patch GNUmakefile $(3RDP_ROOT)/build/cl-remove-march.patch $(3RDP_ROOT)/build/cl-fix-shell-exec-types.patch $(3RDP_ROOT)/build/cl-ssh-eof-half-close.patch $(3RDP_ROOT)/build/cl-add-win64.patch $(3RDP_ROOT)/build/cl-fix-mb-w-conv-warnings.patch $(3RDP_ROOT)/build/cl-ssh-service-type-for-channel.patch $(3RDP_ROOT)/build/cl-ssh-sbbs-id-string.patch $(3RDP_ROOT)/build/cl-channel-select-both.patch $(3RDP_ROOT)/build/cl-allow-none-auth-svr.patch $(3RDP_ROOT)/build/cl-quote-cc.patch $(3RDP_ROOT)/build/cl-mingw64-thread-handles.patch $(3RDP_ROOT)/build/cl-mingw64-is-really-new.patch $(3RDP_ROOT)/build/cl-lowercase-versionhelpers.patch $(3RDP_ROOT)/build/cl-fix-cpuid-order.patch $(3RDP_ROOT)/build/cl-fix-cbli-incompatible.patch $(3RDP_ROOT)/build/cl-mingw64-unicode-gibble.patch $(3RDP_ROOT)/build/cl-haiku-build.patch $(3RDP_ROOT)/build/cl-dont-validate-va-list.patch $(3RDP_ROOT)/build/cl-musl-socklen_t.patch $(3RDP_ROOT)/build/cl-no-musl-backtrace.patch $(3RDP_ROOT)/build/cl-fix-constptrptr.patch $(3RDP_ROOT)/build/cl-fix-void-ptrs.patch $(3RDP_ROOT)/build/cl-intptr-t.patch $(3RDP_ROOT)/build/cl-wrong-string-length.patch $(3RDP_ROOT)/build/cl-remove-silly-pragmas.patch $(3RDP_ROOT)/build/cl-size-doesnt-mean-copied.patch $(3RDP_ROOT)/build/cl-add-psk-flag.patch $(3RDP_ROOT)/build/cl-winapi-needed.patch $(3RDP_ROOT)/build/cl-no-stdc-flexarray.patch | $(CRYPT_SRC) $(CRYPT_IDIR)
+$(CRYPTLIB_BUILD): $(3RDP_ROOT)/dist/cryptlib.zip $(3RDP_ROOT)/build/cl-terminal-params.patch $(3RDP_ROOT)/build/cl-mingw32-static.patch $(3RDP_ROOT)/build/cl-ranlib.patch $(3RDP_ROOT)/build/cl-win32-noasm.patch $(3RDP_ROOT)/build/cl-zz-country.patch $(3RDP_ROOT)/build/cl-algorithms.patch $(3RDP_ROOT)/build/cl-allow-duplicate-ext.patch $(3RDP_ROOT)/build/cl-macosx-minver.patch $(3RDP_ROOT)/build/cl-posix-me-gently.patch $(3RDP_ROOT)/build/cl-PAM-noprompts.patch $(3RDP_ROOT)/build/cl-zlib.patch $(3RDP_ROOT)/build/cl-Dynamic-linked-static-lib.patch $(3RDP_ROOT)/build/cl-SSL-fix.patch $(3RDP_ROOT)/build/cl-bigger-maxattribute.patch $(3RDP_ROOT)/build/cl-endian.patch $(3RDP_ROOT)/build/cl-vcxproj.patch $(3RDP_ROOT)/build/cl-mingw-vcver.patch $(3RDP_ROOT)/build/cl-no-odbc.patch $(3RDP_ROOT)/build/cl-noasm-defines.patch $(3RDP_ROOT)/build/cl-bn-noasm64-fix.patch $(3RDP_ROOT)/build/cl-prefer-ECC.patch $(3RDP_ROOT)/build/cl-prefer-ECC-harder.patch $(3RDP_ROOT)/build/cl-clear-GCM-flag.patch $(3RDP_ROOT)/build/cl-use-ssh-ctr.patch $(3RDP_ROOT)/build/cl-no-tpm.patch $(3RDP_ROOT)/build/cl-no-via-aes.patch $(3RDP_ROOT)/build/cl-just-use-cc.patch $(3RDP_ROOT)/build/cl-no-safe-stack.patch $(3RDP_ROOT)/build/cl-allow-pkcs12.patch $(3RDP_ROOT)/build/cl-allow-none-auth.patch $(3RDP_ROOT)/build/cl-mingw-add-m32.patch $(3RDP_ROOT)/build/cl-poll-not-select.patch $(3RDP_ROOT)/build/cl-good-sockets.patch $(3RDP_ROOT)/build/cl-moar-objects.patch $(3RDP_ROOT)/build/cl-server-term-support.patch $(3RDP_ROOT)/build/cl-add-pubkey-attribute.patch $(3RDP_ROOT)/build/cl-allow-ssh-auth-retries.patch $(3RDP_ROOT)/build/cl-fix-ssh-channel-close.patch $(3RDP_ROOT)/build/cl-vt-lt-2005-always-defined.patch $(3RDP_ROOT)/build/cl-no-pie.patch $(3RDP_ROOT)/build/cl-no-testobjs.patch $(3RDP_ROOT)/build/cl-win32-lean-and-mean.patch $(3RDP_ROOT)/build/cl-thats-not-asm.patch $(3RDP_ROOT)/build/cl-make-channels-work.patch $(3RDP_ROOT)/build/cl-allow-ssh-2.0-go.patch $(3RDP_ROOT)/build/cl-read-timeout-every-time.patch $(3RDP_ROOT)/build/cl-allow-servercheck-pubkeys.patch $(3RDP_ROOT)/build/cl-pass-after-pubkey.patch $(3RDP_ROOT)/build/cl-ssh-list-ctr-modes.patch $(3RDP_ROOT)/build/cl-double-delete-fine-on-close.patch $(3RDP_ROOT)/build/cl-handle-unsupported-pubkey.patch $(3RDP_ROOT)/build/cl-add-patches-info.patch $(3RDP_ROOT)/build/cl-netbsd-hmac-symbol.patch $(3RDP_ROOT)/build/cl-netbsd-no-getfsstat.patch GNUmakefile $(3RDP_ROOT)/build/cl-remove-march.patch $(3RDP_ROOT)/build/cl-fix-shell-exec-types.patch $(3RDP_ROOT)/build/cl-ssh-eof-half-close.patch $(3RDP_ROOT)/build/cl-add-win64.patch $(3RDP_ROOT)/build/cl-fix-mb-w-conv-warnings.patch $(3RDP_ROOT)/build/cl-ssh-service-type-for-channel.patch $(3RDP_ROOT)/build/cl-ssh-sbbs-id-string.patch $(3RDP_ROOT)/build/cl-channel-select-both.patch $(3RDP_ROOT)/build/cl-allow-none-auth-svr.patch $(3RDP_ROOT)/build/cl-quote-cc.patch $(3RDP_ROOT)/build/cl-mingw64-thread-handles.patch $(3RDP_ROOT)/build/cl-mingw64-is-really-new.patch $(3RDP_ROOT)/build/cl-lowercase-versionhelpers.patch $(3RDP_ROOT)/build/cl-fix-cpuid-order.patch $(3RDP_ROOT)/build/cl-fix-cbli-incompatible.patch $(3RDP_ROOT)/build/cl-mingw64-unicode-gibble.patch $(3RDP_ROOT)/build/cl-haiku-build.patch $(3RDP_ROOT)/build/cl-dont-validate-va-list.patch $(3RDP_ROOT)/build/cl-musl-socklen_t.patch $(3RDP_ROOT)/build/cl-no-musl-backtrace.patch $(3RDP_ROOT)/build/cl-fix-constptrptr.patch $(3RDP_ROOT)/build/cl-fix-void-ptrs.patch $(3RDP_ROOT)/build/cl-intptr-t.patch $(3RDP_ROOT)/build/cl-wrong-string-length.patch $(3RDP_ROOT)/build/cl-remove-silly-pragmas.patch $(3RDP_ROOT)/build/cl-size-doesnt-mean-copied.patch $(3RDP_ROOT)/build/cl-add-psk-flag.patch $(3RDP_ROOT)/build/cl-winapi-needed.patch $(3RDP_ROOT)/build/cl-no-stdc-flexarray.patch $(3RDP_ROOT)/build/cl-enable-chacha20.patch $(3RDP_ROOT)/build/cl-no-session-cache.patch | $(CRYPT_SRC) $(CRYPT_IDIR)
 	@echo Creating $@ ...
 	$(QUIET)-rm -rf $(CRYPT_SRC)/*
 	$(QUIET)unzip -oa $(3RDPDISTDIR)/cryptlib.zip -d $(CRYPT_SRC)
@@ -203,6 +206,8 @@ $(CRYPTLIB_BUILD): $(3RDP_ROOT)/dist/cryptlib.zip $(3RDP_ROOT)/build/cl-terminal
 	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-add-psk-flag.patch
 	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-winapi-needed.patch
 	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-no-stdc-flexarray.patch
+	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-enable-chacha20.patch
+	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-no-session-cache.patch
 	$(QUIET)perl -pi.bak -e 's/^(#define CRYPTLIB_VERSION.*)$$/"$$1\n#define CRYPTLIB_PATCHES \"" . (chomp($$val = `cat cl-*.patch | if (which md5sum > \/dev\/null 2>&1); then md5sum; else md5; fi`), $$val) . "\""/e' $(CRYPT_SRC)/cryptlib.h
 	$(QUIET)sed -E -iorig 's/%%MIN_MAC_OSX_VERSION%%/${MIN_MAC_OSX_VERSION}/g' $(CRYPT_SRC)/tools/ccopts.sh
 ifdef FIXED_FIXED_SEED

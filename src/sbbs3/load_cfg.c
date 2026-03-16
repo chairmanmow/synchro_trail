@@ -26,6 +26,7 @@
 #include "datewrap.h"
 #include "xpdatetime.h"
 #include "text.h"   /* TOTAL_TEXT */
+#include "readtext.h"
 #include "ini_file.h"
 #if defined(SBBS) && defined(USE_CRYPTLIB)
 	#include "ssl.h"
@@ -35,14 +36,11 @@ static void prep_cfg(scfg_t* cfg);
 
 int     lprintf(int level, const char *fmt, ...);   /* log output */
 
-/* readtext.c */
-char *  readtext(int *line, FILE *stream, long dflt);
-
 // Returns 0-based text string index
 int get_text_num(const char* id)
 {
 	int i;
-	if (isdigit(*id)) {
+	if (IS_DIGIT(*id)) {
 		i = atoi(id);
 		if (i < 1)
 			return TOTAL_TEXT;
@@ -57,7 +55,7 @@ int get_text_num(const char* id)
 /****************************************************************************/
 /* Initializes system and node configuration information and data variables */
 /****************************************************************************/
-bool load_cfg(scfg_t* cfg, char* text[], bool prep, bool req_cfg, char* error, size_t maxerrlen)
+bool load_cfg(scfg_t* cfg, char* text[], size_t total_text, bool prep, bool req_cfg, char* error, size_t maxerrlen)
 {
 	int   i;
 	int   line = 0;
@@ -67,6 +65,11 @@ bool load_cfg(scfg_t* cfg, char* text[], bool prep, bool req_cfg, char* error, s
 	if (cfg->size != sizeof(scfg_t)) {
 		safe_snprintf(error, maxerrlen, "cfg->size (%" PRIu32 ") != sizeof(scfg_t) (%" XP_PRIsize_t "d)"
 		              , cfg->size, sizeof(scfg_t));
+		return false;
+	}
+	if (text != NULL && total_text != TOTAL_TEXT) {
+		safe_snprintf(error, maxerrlen, "total_text (%" XP_PRIsize_t "d) != TOTAL_TEXT (%d)"
+		              , total_text, TOTAL_TEXT);
 		return false;
 	}
 	if (error != NULL)
@@ -93,15 +96,15 @@ bool load_cfg(scfg_t* cfg, char* text[], bool prep, bool req_cfg, char* error, s
 		if (read_node_cfg(cfg, error, maxerrlen) == false && req_cfg)
 			return false;
 	}
-	if (read_msgs_cfg(cfg, error, maxerrlen) == false)
+	if (read_msgs_cfg(cfg, error, maxerrlen) == false && req_cfg)
 		return false;
-	if (read_file_cfg(cfg, error, maxerrlen) == false)
+	if (read_file_cfg(cfg, error, maxerrlen) == false && req_cfg)
 		return false;
-	if (read_xtrn_cfg(cfg, error, maxerrlen) == false)
+	if (read_xtrn_cfg(cfg, error, maxerrlen) == false && req_cfg)
 		return false;
-	if (read_chat_cfg(cfg, error, maxerrlen) == false)
+	if (read_chat_cfg(cfg, error, maxerrlen) == false && req_cfg)
 		return false;
-	if (read_attr_cfg(cfg, error, maxerrlen) == false)
+	if (read_attr_cfg(cfg, error, maxerrlen) == false && req_cfg)
 		return false;
 
 	if (text != NULL) {
@@ -109,13 +112,26 @@ bool load_cfg(scfg_t* cfg, char* text[], bool prep, bool req_cfg, char* error, s
 		/* Free existing text if allocated */
 		free_text(text);
 
+		named_string_t** str_list = NULL;
+		named_string_t** substr_list = NULL;
+		SAFEPRINTF(str, "%stext.ini", cfg->ctrl_dir);
+		if ((fp = fnopen(NULL, str, O_RDONLY)) != NULL) {
+			str_list_t       ini = iniReadFiles(fp, /* includes: */ true);
+			fclose(fp);
+			str_list = iniGetNamedStringList(ini, ROOT_SECTION);
+			substr_list = iniGetNamedStringList(ini, "substr");
+			iniFreeStringList(ini);
+		}
+
 		SAFEPRINTF(str, "%stext.dat", cfg->ctrl_dir);
 		if ((fp = fnopen(NULL, str, O_RDONLY)) == NULL) {
 			safe_snprintf(error, maxerrlen, "%d opening %s", errno, str);
+			iniFreeNamedStringList(str_list);
+			iniFreeNamedStringList(substr_list);
 			return false;
 		}
 		for (i = 0; i < TOTAL_TEXT; i++)
-			if ((text[i] = readtext(&line, fp, i)) == NULL) {
+			if ((text[i] = readtext(&line, fp, i, substr_list)) == NULL) {
 				i--;
 				break;
 			}
@@ -125,28 +141,24 @@ bool load_cfg(scfg_t* cfg, char* text[], bool prep, bool req_cfg, char* error, s
 			safe_snprintf(error, maxerrlen, "line %d: Less than TOTAL_TEXT (%u) strings defined in %s."
 			              , i
 			              , TOTAL_TEXT, str);
+			iniFreeNamedStringList(str_list);
+			iniFreeNamedStringList(substr_list);
 			return false;
 		}
 
-		SAFEPRINTF(str, "%stext.ini", cfg->ctrl_dir);
-		if ((fp = fnopen(NULL, str, O_RDONLY)) != NULL) {
-			str_list_t       ini = iniReadFile(fp);
-			fclose(fp);
-			named_string_t** list = iniGetNamedStringList(ini, ROOT_SECTION);
-			for (i = 0; list != NULL && list[i] != NULL; ++i) {
-				int n = get_text_num(list[i]->name);
-				if (n >= TOTAL_TEXT) {
-					safe_snprintf(error, maxerrlen, "%s text ID (%s) not recognized"
-					              , str
-					              , list[i]->name);
-					continue;
-				}
-				free(text[n]);
-				text[n] = strdup(list[i]->value);
+		for (i = 0; str_list != NULL && str_list[i] != NULL; ++i) {
+			int n = get_text_num(str_list[i]->name);
+			if (n >= TOTAL_TEXT) {
+				safe_snprintf(error, maxerrlen, "%s text ID (%s) not recognized"
+					            , str
+					            , str_list[i]->name);
+				continue;
 			}
-			iniFreeNamedStringList(list);
-			iniFreeStringList(ini);
+			free(text[n]);
+			text[n] = strdup(str_list[i]->value);
 		}
+		iniFreeNamedStringList(str_list);
+		iniFreeNamedStringList(substr_list);
 
 		cfg->text = text;
 	}
@@ -342,6 +354,18 @@ void prep_cfg(scfg_t* cfg)
 	cfg->prepped = true;  /* data prepared for run-time, DO NOT SAVE TO DISK! */
 }
 
+static void free_loadable_module(struct loadable_module* mod)
+{
+	strListFree(&mod->cmd);
+	strListFree(&mod->ars);
+}
+
+static void free_fixed_event(fevent_t* event)
+{
+	strListFree(&event->cmd);
+	FREE_AND_NULL(event->misc);
+}
+
 void free_cfg(scfg_t* cfg)
 {
 	if (cfg->prepped) {
@@ -356,6 +380,47 @@ void free_cfg(scfg_t* cfg)
 
 	if (cfg->text != NULL)
 		free_text(cfg->text);
+
+	free_fixed_event(&cfg->sys_newuser);
+	free_fixed_event(&cfg->sys_logon);
+	free_fixed_event(&cfg->sys_logout);
+	free_fixed_event(&cfg->sys_daily);
+	free_fixed_event(&cfg->sys_weekly);
+	free_fixed_event(&cfg->sys_monthly);
+
+	free_loadable_module(&cfg->logon_mod);
+	free_loadable_module(&cfg->logoff_mod);
+	free_loadable_module(&cfg->newuser_prompts_mod);
+	free_loadable_module(&cfg->newuser_info_mod);
+	free_loadable_module(&cfg->newuser_mod);
+	free_loadable_module(&cfg->login_mod);
+	free_loadable_module(&cfg->logout_mod);
+	free_loadable_module(&cfg->sync_mod);
+	free_loadable_module(&cfg->expire_mod);
+	free_loadable_module(&cfg->emailsec_mod);
+	free_loadable_module(&cfg->textsec_mod);
+	free_loadable_module(&cfg->xtrnsec_mod);
+	free_loadable_module(&cfg->chatsec_mod);
+	free_loadable_module(&cfg->automsg_mod);
+	free_loadable_module(&cfg->feedback_mod);
+	free_loadable_module(&cfg->readmail_mod);
+	free_loadable_module(&cfg->scanposts_mod);
+	free_loadable_module(&cfg->scansubs_mod);
+	free_loadable_module(&cfg->listmsgs_mod);
+	free_loadable_module(&cfg->scandirs_mod);
+	free_loadable_module(&cfg->listfiles_mod);
+	free_loadable_module(&cfg->fileinfo_mod);
+	free_loadable_module(&cfg->nodelist_mod);
+	free_loadable_module(&cfg->whosonline_mod);
+	free_loadable_module(&cfg->privatemsg_mod);
+	free_loadable_module(&cfg->logonlist_mod);
+	free_loadable_module(&cfg->userlist_mod);
+	free_loadable_module(&cfg->usercfg_mod);
+	free_loadable_module(&cfg->prextrn_mod);
+	free_loadable_module(&cfg->postxtrn_mod);
+	free_loadable_module(&cfg->tempxfer_mod);
+	free_loadable_module(&cfg->batxfer_mod);
+	free_loadable_module(&cfg->uselect_mod);
 }
 
 void free_text(char* text[])
@@ -405,7 +470,7 @@ int md(const char* inpath)
 }
 
 /****************************************************************************/
-/* Reads in ATTR.CFG and initializes the associated variables               */
+/* Reads in attr.ini and initializes the associated variables               */
 /****************************************************************************/
 bool read_attr_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 {
@@ -417,35 +482,37 @@ bool read_attr_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	SAFEPRINTF(path, "%sattr.ini", cfg->ctrl_dir);
 	fp = fnopen(NULL, path, O_RDONLY);
 
-	ini = iniReadFile(fp);
+	ini = iniReadFiles(fp, /* includes: */ true);
 	if (fp != NULL)
 		fclose(fp);
 
-	cfg->color[clr_mnehigh]         = strtoattr(iniGetString(ini, ROOT_SECTION, "mnehigh", "WH", value), /* endptr: */ NULL);
-	cfg->color[clr_mnelow]          = strtoattr(iniGetString(ini, ROOT_SECTION, "mnelow", "G", value), /* endptr: */ NULL);
-	cfg->color[clr_mnecmd]          = strtoattr(iniGetString(ini, ROOT_SECTION, "mnecmd", "WH", value), /* endptr: */ NULL);
-	cfg->color[clr_inputline]       = strtoattr(iniGetString(ini, ROOT_SECTION, "inputline", "WH4E", value), /* endptr: */ NULL);
-	cfg->color[clr_err]             = strtoattr(iniGetString(ini, ROOT_SECTION, "error", "RH", value), /* endptr: */ NULL);
-	cfg->color[clr_nodenum]         = strtoattr(iniGetString(ini, ROOT_SECTION, "nodenum", "WH", value), /* endptr: */ NULL);
-	cfg->color[clr_nodeuser]        = strtoattr(iniGetString(ini, ROOT_SECTION, "nodeuser", "GH", value), /* endptr: */ NULL);
-	cfg->color[clr_nodestatus]      = strtoattr(iniGetString(ini, ROOT_SECTION, "nodestatus", "G", value), /* endptr: */ NULL);
-	cfg->color[clr_filename]        = strtoattr(iniGetString(ini, ROOT_SECTION, "filename", "BH", value), /* endptr: */ NULL);
-	cfg->color[clr_filecdt]         = strtoattr(iniGetString(ini, ROOT_SECTION, "filecdt", "M", value), /* endptr: */ NULL);
-	cfg->color[clr_filedesc]        = strtoattr(iniGetString(ini, ROOT_SECTION, "filedesc", "W", value), /* endptr: */ NULL);
-	cfg->color[clr_filelsthdrbox]   = strtoattr(iniGetString(ini, ROOT_SECTION, "filelisthdrbox", "YH", value), /* endptr: */ NULL);
-	cfg->color[clr_filelstline]     = strtoattr(iniGetString(ini, ROOT_SECTION, "filelistline", "B", value), /* endptr: */ NULL);
-	cfg->color[clr_chatlocal]       = strtoattr(iniGetString(ini, ROOT_SECTION, "chatlocal", "GH", value), /* endptr: */ NULL);
-	cfg->color[clr_chatremote]      = strtoattr(iniGetString(ini, ROOT_SECTION, "chatremote", "G", value), /* endptr: */ NULL);
-	cfg->color[clr_multichat]       = strtoattr(iniGetString(ini, ROOT_SECTION, "multichat", "W", value), /* endptr: */ NULL);
-	cfg->color[clr_external]        = strtoattr(iniGetString(ini, ROOT_SECTION, "external", "WH", value), /* endptr: */ NULL);
-	cfg->color[clr_votes_full]      = strtoattr(iniGetString(ini, ROOT_SECTION, "votes_full", "WH5", value), /* endptr: */ NULL);
-	cfg->color[clr_votes_empty]     = strtoattr(iniGetString(ini, ROOT_SECTION, "votes_empty", "WH", value), /* endptr: */ NULL);
-	cfg->color[clr_progress_full]   = strtoattr(iniGetString(ini, ROOT_SECTION, "progress_full", "WH5", value), /* endptr: */ NULL);
-	cfg->color[clr_progress_empty]  = strtoattr(iniGetString(ini, ROOT_SECTION, "progress_empty", "WH", value), /* endptr: */ NULL);
+	cfg->color[clr_userlow]         = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "userlow", "G", value), /* endptr: */ NULL);
+	cfg->color[clr_userhigh]        = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "userhigh", "GH", value), /* endptr: */ NULL);
+	cfg->color[clr_mnehigh]         = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "mnehigh", "WH", value), /* endptr: */ NULL);
+	cfg->color[clr_mnelow]          = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "mnelow", "u", value), /* endptr: */ NULL);
+	cfg->color[clr_mnecmd]          = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "mnecmd", "WH", value), /* endptr: */ NULL);
+	cfg->color[clr_inputline]       = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "inputline", "WH4E", value), /* endptr: */ NULL);
+	cfg->color[clr_err]             = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "error", "RH", value), /* endptr: */ NULL);
+	cfg->color[clr_nodenum]         = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "nodenum", "WH", value), /* endptr: */ NULL);
+	cfg->color[clr_nodeuser]        = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "nodeuser", "GH", value), /* endptr: */ NULL);
+	cfg->color[clr_nodestatus]      = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "nodestatus", "G", value), /* endptr: */ NULL);
+	cfg->color[clr_filename]        = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "filename", "BH", value), /* endptr: */ NULL);
+	cfg->color[clr_filecdt]         = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "filecdt", "M", value), /* endptr: */ NULL);
+	cfg->color[clr_filedesc]        = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "filedesc", "W", value), /* endptr: */ NULL);
+	cfg->color[clr_filelsthdrbox]   = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "filelisthdrbox", "YH", value), /* endptr: */ NULL);
+	cfg->color[clr_filelstline]     = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "filelistline", "B", value), /* endptr: */ NULL);
+	cfg->color[clr_chatlocal]       = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "chatlocal", "GH", value), /* endptr: */ NULL);
+	cfg->color[clr_chatremote]      = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "chatremote", "G", value), /* endptr: */ NULL);
+	cfg->color[clr_multichat]       = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "multichat", "W", value), /* endptr: */ NULL);
+	cfg->color[clr_external]        = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "external", "WH", value), /* endptr: */ NULL);
+	cfg->color[clr_votes_full]      = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "votes_full", "WH5", value), /* endptr: */ NULL);
+	cfg->color[clr_votes_empty]     = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "votes_empty", "WH", value), /* endptr: */ NULL);
+	cfg->color[clr_progress_full]   = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "progress_full", "WH5", value), /* endptr: */ NULL);
+	cfg->color[clr_progress_empty]  = strtoattr(cfg, iniGetString(ini, ROOT_SECTION, "progress_empty", "WH", value), /* endptr: */ NULL);
 
 	iniGetString(ini, ROOT_SECTION, "rainbow", "WH,W,CH,C,MH,M,BH,B,YH,Y,GH,G,RH,R,KH", value);
 	memset(cfg->rainbow, 0, sizeof cfg->rainbow);
-	parse_attr_str_list(cfg->rainbow, LEN_RAINBOW, value);
+	parse_attr_str_list(cfg, cfg->rainbow, LEN_RAINBOW, value);
 	iniFreeStringList(ini);
 	return true;
 }

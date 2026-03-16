@@ -706,8 +706,10 @@ BinkP.prototype.session = function()
 			if (this.senteob)
 				cur_timeout = this.timeout;
 		}
-		if (this.sending !== undefined && this.sending.waitingForGet !== undefined && this.sending.waitingForGet)
-			cur_timeout = this.timeout;
+		if ((this.sending === undefined && this.tx_queue.length === 0) || (this.sending !== undefined && this.sending.waitingForGet !== undefined && this.sending.waitingForGet)) {
+			if (this.tx_queue.length !== 0 || this.senteob !== 0)
+				cur_timeout = this.timeout;
+		}
 		pkt = this.recvFrame(cur_timeout);
 		if (pkt !== undefined && pkt !== this.partialFrame && pkt !== null) {
 			last = Date.now();
@@ -852,8 +854,12 @@ BinkP.prototype.session = function()
 					default:
 						if (pkt.command < this.command_name.length)
 							tmp = this.command_name[pkt.command];
-						else
-							tmp = 'Unknown Command '+pkt.command;
+						else {
+							if (pkt.command === 11 && this.remove_ver === 'ssh-chatter')
+								tmp = "ssh-chatter message: \""+pkt.data+'"';
+							else
+								tmp = 'Unknown Command '+pkt.command;
+						}
 						log(LOG_ERROR, "Unhandled "+tmp+" command from remote: " + this.remote_addrs);
 						this.sendCmd(this.command.M_ERR, "Unhandled command.");
 				}

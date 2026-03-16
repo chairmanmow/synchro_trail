@@ -1,0 +1,438 @@
+**********************************************************************
+TITH                                              THIS ISN'T THAT HARD
+**********************************************************************
+
+Publication:  TSP‑0002
+Revision:     1
+Title:        Route Configuration
+Author(s):    Stephen Hurd
+Date:         2025‑11‑29
+══════════════════════════════════════════════════════════════════════
+
+Status of this document
+───────────────────────
+
+  This document is a TITH Standard Proposal (TSP) — it documents a
+  proposed standard and solicits discussion.  Until promoted to a TTS,
+  this is experimental only and does not describe required behaviour.
+
+  This document is released to the public domain, and may be used,
+  copied or modified for any purpose whatever.
+
+Abstract
+────────
+
+  Routing configuration on FTNs should use a common format. This
+  document outlines a suggested format based on historical FidoNet
+  route files.
+
+Contents
+────────
+
+  1.  Introduction
+  2.  Proposed Syntax
+  3.  Orphans
+  4.  Defaults
+  5.  Examples
+  6.  Feedback and Discussion
+
+  A. References
+  B. History
+
+══════════════════════════════════════════════════════════════════════
+
+
+1. Introduction
+───────────────
+
+  By default, FidoNet only supports direct and host-routed messages.
+  However, it's very common to have an agreement in place to route
+  most or even all of your traffic through a single link. With TITH
+  proposing a new transport, new formats, and new capabilities, it
+  will be beneficial to have gateways willing to forward to legacy
+  systems.
+
+
+2. Proposed Syntax
+──────────────────
+
+  The route file will consist of a number of schedules, each having a
+  number of clases after it. A schedule is started with a Schedule
+  line and terminated by another Schedule line or the end of file.
+
+
+  1. Schedule Line
+  ────────────────
+
+  A Schedule Line consists of the word "Schedule", a space, then a
+  name for the schedule.  The name must be unique and exists for
+  logging and organization purposes.
+
+
+  2. Destinations Clause
+  ──────────────────────
+
+  A Destinations Clause consists of the word "Destinations", a space,
+  then a list of nodes that will be included in bundles generated
+  during the current Schedule.  The format may include wildcards as
+  specified in TTS-0004.  This controls which messages will be
+  transferred during this schedule.
+
+
+  3. Route-Via Clause
+  ───────────────────
+
+  A Route-Via Clause consists of the word "Route-Via", a space, an
+  address as specified in TTS-0004, another space, then a list of
+  addresses with wildcards as specified in TTS-0004.  The address
+  specifies the node to deliver the messages to (ie: a next hop), and
+  the list specifies destination nodes to be delivered.  By default,
+  this clause will only apply if the node cannot be contacted directly
+  and if the nodes net or hub cannot be contacted.
+
+
+  4. No-Direct Clause
+  ───────────────────
+
+  A No-Direct Clause consists of the word "No-Direct", a space, then a
+  list of addresses with wildcards as specified in TTS-0004.  If this
+  clause is present, nodes will not be contacted directly.
+
+
+  5. No-Hub Clause
+  ────────────────
+
+  A No-Hub Clause consists of the word "No-Hub", a space, then a list
+  of addresses with wildcards as specified in TTS-0004.  If this
+  clause is present, hub routing will not be used.
+
+
+  6. No-Host Clause
+  ─────────────────
+
+  A No-Host Clause consists of the word "No-Host", a space, then a
+  list of addresses with wildcards as specified in TTS-0004.  If this
+  clause is present, host routing will not be used.
+
+
+  7. No-Region Clause
+  ───────────────────
+
+  A No-Region Clause consists of the word "No-Region", a space, then a
+  list of addresses with wildcards as specified in TTS-0004.  If this
+  clause is present, region routing will not be used.
+
+
+  8. No-Zone Clause
+  ─────────────────
+
+  A No-Zone Clause consists of the word "No-Zone", a space, then a
+  list of addresses with wildcards as specified in TTS-0004.  If this
+  clause is present, zone routing will not be used.
+
+
+  9. Forward-For Clause
+  ─────────────────────
+
+  A Forward-For Clause consists of the word "Forward-For", a space,
+  then a list of addresses with wildcards as specified in TTS-0004.
+  The list specifies destination nodes messages will be forwarded for.
+  Note that this is the message destination, not the next hop or
+  message origin.
+
+
+  10. Accept-From Clause
+  ──────────────────────
+
+  An Accept-From Clause consists of the word "Accept-From", a space,
+  then a list of addresses with wildcards as specified in TTS-0004.
+  The list specifies origin nodes messages will be forwarded for.
+  Note that this is the origin node, not the previous hop.
+
+
+  11. Hold Clause
+  ───────────────
+
+  A Hold Clause consists of the word "Hold", a space, then a list of
+  addresses with wildcards as specified in TTS-0004.  The list
+  specifies nodes that may call and pick up bundles during the
+  schedule.  Any node listed here will not be contacted during the
+  schedule.
+
+
+  12. Poll Clause
+  ──────────────
+
+  A Poll Clause consists of the word "Poll", a space, then a list of
+  addresses with wildcards as specified in TTS-0004.  The list
+  specifies nodes that will be contacted and sent a poll request
+  during this schedule.
+
+
+  13. Start Clause
+  ────────────────
+
+  A Start Clause consists of the word "Start", a space, optionally the
+  word "Local" followed by a space, then a time in 24-hour format with
+  hours and minutes only.  If Local is specified, the time is in local
+  time.  If not, the time is in UTC.  This clause specifies the time
+  that this schedule should begin.  The schedule may be delayed until
+  the previous schedule completes.  If multiple schedule start at the
+  same time, it is unspecified which will start first, so this should
+  be avoided.  If multiple schedules are waiting to start, the one
+  that has waited the longest will be started.  If the Duration has
+  passed, the schedule will still run.  There may only be one Start
+  Clause per Schedule.
+
+
+  14. Duration Clause
+  ───────────────────
+
+  A Duration Clause consists of the word "Duration", a space, then
+  either a number of minutes, of a number of hours, a colon, then a
+  number of minutes (ie: "60" and "1:00" would be identical).  This
+  is the number of minutes after the time in the Start Clause that the
+  schedule ends.  Since the schedule start may be delayed, this is the
+  maximum duration, not the total duration.  Connections in progress
+  at the end of a schedule will run to completion before the next
+  schedule starts.  The Duration may be zero indicating that
+  connections should be attempted once for all bundles and polls after
+  which the schedule will end.  There may only be one Duration Clause
+  per schedule.
+
+
+  15. Repeat-After Clause
+  ───────────────────────
+
+  A Repeat-After Clause consists of the word "Repeat-After", a space,
+  then either a number of minutes, or a number of hours, a colon, then
+  a number of minutes (ie: "60" and "1:00" would be identical).  This
+  is the number of minutes after the time in the end time that the
+  schedule will attempt to run again.  If another schedule is running
+  at that time, it will be delayed until that schedule ends.  If
+  another schedule will start for the first time, it will be given
+  preference.  If multiple Repeat-After Clauses can take effect, the
+  one that has waited the longest since it's repeat after time expired
+  will run first.  There may only be one Repeat-After Clause per
+  schedule.
+
+
+  16. Orphan-For
+  ──────────────
+
+  A Orphan-For Clause consists of the word "Orphan-For", a space, then
+  a list of addresses with wildcards as specified in TTS-0004, a
+  space, the a reason the message has been orphaned..  If a message is
+  received whose origin matches the wildcard list, the message will be
+  handled as an orphan regardless of any matching Forward-For Clauses.
+
+
+  17. Orphan-From
+  ───────────────
+
+  A Orphan-From Clause consists of the word "Orphan-From", a space,
+  then a list of addresses with wildcards as specified in TTS-0004, a
+  space, the a reason the message has been orphaned.  If a message is
+  received whose destination matches the wildcard list, the message
+  will be handled as an orphan regardless of any matching Accept-From
+  Clauses.
+
+
+  18. Notify-Sender
+  ─────────────────
+
+  A Notify-Sender Clause consists of the word "Notify-Sender", a
+  space, then a list of addresses with wildcards as specified in
+  TTS-0004.  If an orphan message is received whose origin matches the
+  wildcard list, a new message will be generated to the original
+  sender indicating that the message will not be forwarded.  This
+  message should contain at least the original subject and the path
+  the message took as well as a reason for not forwarding.
+
+
+  19. Notify-Sysop
+  ────────────────
+
+  A Notify-Sysop Clause consists of the word "Notify-Sysop", a space,
+  then a list of addresses with wildcards as specified in TTS-0004.
+  If an orphan message is received whose origin matches the wildcard
+  list, a new message will be generated to the sysop of the origin
+  node indicating that the message will not be forwarded.  This
+  message should contain at least the original subject and the path
+  the message took as well as a reason for not forwarding.
+
+
+3. Orphans
+──────────
+
+  Incoming messages that do not have a local destination and do not
+  match a Forward-For or Accept-From clause in any schedule are
+  Orphans.  Orphans are messages which were delivered to us, but we do
+  not have an agreement to route.  The software that detects the
+  orphan should notify the local sysop that an orphan was detected and
+  the path it took to reach the system.
+
+
+5. Routing
+──────────
+
+  A message will be routed by the "best available" method.
+  In order from best to worst, these methods are:
+
+  Direct
+  ──────
+  The message is passed directly to the destination node and no
+  further routing is performed.  This may be disabled via the
+  No-Direct Clause, and is only possible if the destination node
+  supports a protocol the sending node also supports.
+
+  BossNode
+  ────────
+  Only messages whose destination has a non-zero point Component will
+  use BossNode routing.  The message is passed directly to the Boss
+  Node for the point.  This is disabled by the No-Direct Clause.
+
+  Hub
+  ───
+  The message is passed to the Hub listed before the destination node
+  in the nodelist.  This may be disabled via the No-Hub Clause, and is
+  only possible when there is a Hub listed above a node, and there is
+  a shared protocol between the sending node and the Hub.  Note that
+  FidoNet Policy 4 does not require a Hub to actually do anything, so
+  No-Hub should always be used on FidoNet for strict conformance with
+  policy unless you contact all Hubs and get permission to forward
+  trafic to them.
+
+  Host
+  ────
+  The message is passed to the Host listed before the destination node
+  in the nodelist.  This may be disabled via the No-Hub Clause, and is
+  only possible when there is a Host listed above a node, and there is
+  a shared protocol between the sending node and the Host.
+
+  Region
+  ──────
+  The message is passed to the Region listed before the destination
+  node in the nodelist.  This may be disabled via the No-Region
+  Clause, and is only possible when there is a Region listed above a
+  node, and there is a shared protocol between the sending node and
+  the Region.  Note that FidoNet Policy 4 indicates that RCs do not
+  route traffic, so No-Region should always be used on FidoNet for
+  strict conformance with policy unless you contact all RCs and get
+  permission to forward trafic to them.
+
+  Zone
+  ────
+  The message is passed to the Zone listed before the destination node
+  in the nodelist.  This may be disabled via the No-Zone Clause, and
+  is only possible when there is a Host listed above a node, and there
+  is a shared protocol between the sending node and the Host.  Note
+  that FidoNet Policy 4 indicates that ZCs do not route traffic, so
+  No-Zone should always be used on FidoNet for strict conformance with
+  policy unless you contact all ZCs and get permission to forward
+  trafic to them.
+
+  Route-Via
+  ─────────
+  The message is passed to the node listed in the Route-Via Clause in
+  the Route Configuration which has a wildcard matching the
+  destination node.  This is only possible when there is a shared
+  protocol between the sending node and the Route-Via node.  This can
+  be disabled via a Hold Clause for the destination node.
+
+  Hold
+  ────
+  The message is held at the source until the destination makes a
+  connection and polls for messages.  This method is always possible.
+
+
+6. Defaults
+───────────
+
+  If a schedule does not contain any of the following values, the
+  specified default will be assumed:
+
+  Destinations defaults to "Destinations *"
+
+  Start defaults to "Start 00:00"
+
+  Duration defaults to "Duration 0"
+
+  Repeat-After defaults to "Repeat-After 1"
+
+
+7. Examples
+───────────
+
+  A typical node schedule could be to periodically deliver new
+  messages to a single node for forwarding (with an agreement by the
+  other node to perform forwarding) unless the destination can be
+  reached direct or via host-routing:
+
+    Schedule Mail
+    Route-Via BBSDev#885:1/1 BBSDev#*
+
+  As above but only running every half hour:
+
+    Schedule Mail
+    Route-Via BBSDev#885:1/1 BBSDev#*
+    Repeat-After 30
+
+  As above but with no direct or host-routed messages at all:
+
+    Schedule Mail
+    Route-Via BBSDev#885:1/1 BBSDev#*
+    Repeat-After 30
+    No-Direct *
+    No-Host *
+
+  For a net coordinator, you are likely required to accept host-routed
+  messages:
+
+    Schedule Mail
+    Route-Via BBSDev#885:1/1 BBSDev#*
+    Forward-For BBSDev#885:1/*
+
+  As above, but with a problematic node that you have stopped routing
+  for due to violation of policy:
+
+    Schedule Mail
+    Route-Via BBSDev#885:1/1 BBSDev#*
+    Forward-For BBSDev#885:1/*
+    Orphan-For BBSDev#885:1/213 Violation of Policy 4
+    Orphan-From BBSDev#885:1/213 Violation of Policy 4
+    Notify-Sysop BBSDev#885:1/213
+
+  If you are a Boss Node, you will want to hold bundles for and route
+  messages from your points:
+
+    Schedule Mail
+    Destinations *
+    Route-Via BBSDev#885:1/1 *
+    Accept-From BBSDev#885:1/3.*
+    Hold BBSDev#885:1/3.*
+
+
+8. Feedback and Discussion
+──────────────────────────
+
+  Note that this document specifies configuration for Boss Node, but
+  at present there is no standard pointlist format, so no way to
+  configure public keys.  This is still TODO.
+
+
+A. References
+─────────────
+
+  [TTS-0004] Node Addresses. Stephen Hurd. 15 November, 2025.
+
+  [FSC-0003] FidoNet Route Files Explained. Ben Barker, 100/76.
+  23 March, 1986.
+
+
+B. History
+──────────
+
+   Rev.1, 2025‑11‑19: Initial Release.
+
+**********************************************************************

@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: ssh.c,v 1.31 2020/05/28 22:58:26 deuce Exp $ */
-
 #include <assert.h>
 #include <stdlib.h>
 
@@ -892,7 +890,7 @@ ssh_connect(struct bbslist *bbs)
 		uifc.pop(NULL);
 		uifc.pop("Setting Terminal Type");
 	}
-	term = get_emulation_str(get_emulation(bbs));
+	term = get_emulation_str(bbs);
 	status = cryptSetAttributeString(ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_TERMINAL, term, strlen(term));
 
 	get_term_win_size(&cols, &rows, NULL, NULL, &bbs->nostatus);
@@ -1004,14 +1002,11 @@ ssh_connect(struct bbslist *bbs)
 				i = 1;
 			switch(i) {
 				case 1:
-					if ((listfile = fopen(settings.list_path, "r")) != NULL) {
-						inifile = iniReadFile(listfile);
-						fclose(listfile);
+					if ((listfile = fopen(settings.list_path, "r+b")) != NULL) {
+						inifile = iniReadBBSList(listfile, true);
 						iniSetString(&inifile, bbs->name, "SSHFingerprint", fpstr, &ini_style);
-						if ((listfile = fopen(settings.list_path, "w")) != NULL) {
-							iniWriteFile(listfile, inifile);
-							fclose(listfile);
-						}
+						iniWriteFile(listfile, inifile);
+						fclose(listfile);
 						strListFree(&inifile);
 					}
 					break;
@@ -1031,11 +1026,33 @@ ssh_connect(struct bbslist *bbs)
 	if (!bbs->hidepopups)
 		uifc.pop(NULL);
 
-	create_conn_buf(&conn_inbuf, BUFFER_SIZE);
-	create_conn_buf(&conn_outbuf, BUFFER_SIZE);
-	conn_api.rd_buf = (unsigned char *)malloc(BUFFER_SIZE);
+	if (!create_conn_buf(&conn_inbuf, BUFFER_SIZE)) {
+		conn_api.terminate = true;
+		free(pubkey);
+		return -1;
+	}
+	if (!create_conn_buf(&conn_outbuf, BUFFER_SIZE)) {
+		destroy_conn_buf(&conn_inbuf);
+		conn_api.terminate = true;
+		free(pubkey);
+		return -1;
+	}
+	if (!(conn_api.rd_buf = (unsigned char *)malloc(BUFFER_SIZE))) {
+		destroy_conn_buf(&conn_inbuf);
+		destroy_conn_buf(&conn_outbuf);
+		conn_api.terminate = true;
+		free(pubkey);
+		return -1;
+	}
 	conn_api.rd_buf_size = BUFFER_SIZE;
-	conn_api.wr_buf = (unsigned char *)malloc(BUFFER_SIZE);
+	if (!(conn_api.wr_buf = (unsigned char *)malloc(BUFFER_SIZE))) {
+		FREE_AND_NULL(conn_api.rd_buf);
+		destroy_conn_buf(&conn_inbuf);
+		destroy_conn_buf(&conn_outbuf);
+		conn_api.terminate = true;
+		free(pubkey);
+		return -1;
+	}
 	conn_api.wr_buf_size = BUFFER_SIZE;
 
 	_beginthread(ssh_output_thread, 0, NULL);

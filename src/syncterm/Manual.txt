@@ -1,5 +1,5 @@
 :experimental:
-= SyncTERM v1.7b Manual
+= SyncTERM v1.8b Manual
 Stephen Hurd <shurd@sasktel.net>
 :toc:
 
@@ -508,6 +508,9 @@ In this menu, you can modify all the connection settings for an entry.
 The exact contents of this menu will vary a bit by connection type, but
 most of the options are the same or silimar.
 
+kbd:[Ctrl+S]::
+Edit the Explicit Sort Value.
+
 Name::
 The name of the entry.
 
@@ -592,6 +595,13 @@ These modes use the Atari ST VT52 emulation and do not support ANSI-BBS.
 
 See <<_current_screen_mode,Current Screen Mode>> and
 <<custom_screen_mode,Custom Screen Mode>> for additional information.
+
+Terminal Type::
+Sets the value send by protocols that support sending this as a string.
+Currently, Telnet, RLogin, SSH, and Shell.
+When this value is empty (displays as "<Automatic>"), it is chosen based
+on the screen mode as one of `syncterm`, `PETSCII`, `ATASCII`, `Prestel`,
+`Beeb7`, or `AtariST+VT52`.
 
 Hide Status Line::
 Indicates that the "status line" at the bottom of
@@ -693,6 +703,17 @@ at least OpenSSH and new versions of Synchronet.  This option
 requires SFTP support from the remote side, and may cause connection
 stability issues if SFTP is not available or does not work correctly.
 
+Edit Palette::
+This opens a menu allowing you to cusomize the palette for the entry. If
+the default palette has fewer than 16 colours, you can add additional
+palette entries. When you select a colour, you can enter the red, green,
+and blue values separately, and the resulting colour is shown when
+possible.
+
+If there are fewer than sixteen entries in the list, the list will be
+repeated to fill all 16 palette slots. This allows for example, the use
+16 colour Amiga VT-52 mode.
+
 
 ==== Modifying the Sort Order
 
@@ -704,6 +725,10 @@ be sorted on.
 
 Pressing enter on a field will toggle if it's reversed (highest to
 lowest) or not.
+
+The Explicit Sort Value exists to manually control the position of entries
+in the list, and can be accessed using :[Ctrl+D]: in the Edit Directory Entry
+menu.
 
 
 ==== Viewing the Scrollback
@@ -778,6 +803,9 @@ that SyncTERM will access.
 Build Options::
 Shows which optional components SyncTERM was built to support.
 
+List Encryption::
+Allows you to encrypt or decrypt the BBS list. Choose the encryption type
+you want or change the password, etc.
 
 ==== Current Screen Mode
 
@@ -861,6 +889,17 @@ Select to cycle through the values "Blocky", "Pointy", and
 will use 45° angles.  External will use hardware scaling if possible.
 The quality of External scaling varies wildly based on OS, device
 drivers, and output mode.
+
+Invert Mouse Wheel::
+Toggles the direction the mouse wheel moves.
+
+Key Derivation Iterations::
+This specifies the number of iterations to derive a key from a password.
+The higher this value, the more difficult brute forcing is, but the longer
+it takes to read the BBS list.
+
+UIFC Colours::
+Allows changing the colours for the User InterFaCe.
 
 [[custom_screen_mode]]
 Custom Screen Mode::
@@ -1010,6 +1049,7 @@ Same as kbd:[Alt+E]
 
 The following sections delve deeper into technical details, and should
 not be required for normal use.
+
 
 === Persistant State
 

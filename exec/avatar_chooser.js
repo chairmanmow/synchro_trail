@@ -763,6 +763,9 @@ function MainMenu(parent_frame) {
 			console.clear(LIGHTGRAY);
 			frames.parent.invalidate();
 		});
+		state.tree.addItem('Identicon as avatar', function () {
+			avatar_lib.set_identicon(user);
+		});
 		state.tree.addItem('Download your avatar', function () {
 			console.clear(WHITE);
 			console.putmsg(

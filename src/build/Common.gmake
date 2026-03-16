@@ -76,6 +76,7 @@
 #  SOFILE			- Shared object (DLL) file extension (Includes .)		#
 #  LIBFILE			- Static library file extension (Include .)				#
 #  LIBPREFIX		- Prefix to library filename							#
+#  SHLIBPREFIX		- Prefix to shared library filename						#
 #  LIBS				- Library names	(Appropriate for dependencies)			#
 #  LIB_LDFLAGS		- Libraries appropriate for link command-line usage		#
 #  COMPILE_MSG		- Message saying a target is being compiled				#
@@ -253,8 +254,8 @@ ifdef win
  NTDDI ?= 0x06010000
 else
  CFLAGS +=	-DPREFER_POLL
- machine_uname	:=	$(shell if uname -m | egrep -v "(i[3456789]*|x)86" > /dev/null; then uname -m | tr "[A-Z]" "[a-z]" | tr " " "_" ; fi)
- machine_uname	:=	$(shell if uname -m | egrep "64" > /dev/null; then uname -m | tr "[A-Z]" "[a-z]" | tr " " "_" ; else echo $(machine_uname) ; fi)
+ machine_uname	:=	$(shell if uname -m | grep -Ev "(i[3456789]*|x)86" > /dev/null; then uname -m | tr "[A-Z]" "[a-z]" | tr " " "_" ; fi)
+ machine_uname	:=	$(shell if uname -m | grep "64" > /dev/null; then uname -m | tr "[A-Z]" "[a-z]" | tr " " "_" ; else echo $(machine_uname) ; fi)
 endif
 
 ifeq ($(os),darwin)
@@ -306,7 +307,7 @@ endif
 ifeq ($(shell if [ -f /usr/include/inttypes.h ] ; then echo YES ; fi),YES)
  CFLAGS	+=	-DHAS_INTTYPES_H
 else
- ifeq ($(shell if [ -f /boot/develop/headers/posix/inttypes.h ] ; then echo YES ; fi),YES)
+ ifeq ($(shell if [ -f /boot/system/develop/headers/posix/inttypes.h ] ; then echo YES ; fi),YES)
   CFLAGS	+=	-DHAS_INTTYPES_H
  else
   ifeq ($(os),darwin)	# Don't go digging for stuff on Mac, nobody knows what's up.
@@ -340,6 +341,10 @@ else
 endif
 
 LIBPREFIX	:= lib
+SHLIBPREFIX	:= lib
+ifdef win
+ SHLIBPREFIX	:=
+endif
 DIRSEP		:= /
 OFILE		:= .o
 ifdef win
@@ -450,7 +455,7 @@ else
       #CFLAGS	   += -D_POSIX_PTHREAD_SEMANTICS
      else
       ifdef win # Windows
-       CFLAGS		+= -U__STRICT_ANSI__ -D_WIN32 -D_WIN32_WINNT=${WINNT} -DWINVER=${WINVER} -D_WIN32_IE=${WIN32_IE} -DNTDDI_VERSION=${NTDDI}
+       CFLAGS		+= -D_WIN32 -D_WIN32_WINNT=${WINNT} -DWINVER=${WINVER} -D_WIN32_IE=${WIN32_IE} -DNTDDI_VERSION=${NTDDI}
        MT_CFLAGS	+= -D_WIN32
       else
        ifeq ($(os),emscripten)
@@ -545,7 +550,7 @@ $(OBJODIR)/%$(OFILE) : %.s $(BUILD_DEPENDS) | $(OBJODIR)
 # Implicit C Compile Rule
 $(OBJODIR)/%$(OFILE) : %.c $(BUILD_DEPENDS) | $(OBJODIR)
 	@echo $(COMPILE_MSG) $<
-	$(QUIET)$(CC) -std=c11 $(CFLAGS) $(CCFLAGS) -o $@ -c $<
+	$(QUIET)$(CC) -std=c17 $(CFLAGS) $(CCFLAGS) -o $@ -c $<
 
 # Implicit C++ Compile Rule
 $(OBJODIR)/%$(OFILE) : %.cpp $(BUILD_DEPENDS) | $(OBJODIR)
@@ -560,7 +565,7 @@ $(MTOBJODIR)/%$(OFILE) : %.s $(BUILD_DEPENDS) | $(OBJODIR)
 # Implicit MT C Compile Rule
 $(MTOBJODIR)/%$(OFILE) : %.c $(BUILD_DEPENDS) | $(MTOBJODIR)
 	@echo $(COMPILE_MSG) $<
-	$(QUIET)$(CC) -std=c11 $(CFLAGS) $(CCFLAGS) $(MT_CFLAGS) -o $@ -c $<
+	$(QUIET)$(CC) -std=c17 $(CFLAGS) $(CCFLAGS) $(MT_CFLAGS) -o $@ -c $<
 
 # Implicit MT C++ Compile Rule
 $(MTOBJODIR)/%$(OFILE) : %.cpp $(BUILD_DEPENDS) | $(MTOBJODIR)

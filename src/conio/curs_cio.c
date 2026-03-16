@@ -19,6 +19,7 @@
 
 #include <langinfo.h>
 #include <locale.h>
+#include <sys/ioctl.h>
 #include <sys/time.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -781,7 +782,7 @@ int curs_kbhit(void)
 	FD_ZERO(&rfds);
 	FD_SET(fileno(stdin),&rfds);
 
-	return(select(fileno(stdin)+1,&rfds,NULL,NULL,&timeout));
+	return(select(fileno(stdin)+1,&rfds,NULL,NULL,&timeout) == 1);
 }
 
 void curs_gotoxy(int x, int y)
@@ -950,6 +951,21 @@ int curs_getch(void)
 				curs_nextgetch=CIO_KEY_MOUSE>>8;
 				return(CIO_KEY_MOUSE & 0xff);
 			}
+			/* If stdin is at EOF (e.g., SSH session died),
+			 * select() reports it as readable but there are
+			 * no bytes pending. Signal quit to exit cleanly
+			 * instead of spinning. */
+			int nbytes = 0;
+			if (ioctl(fileno(stdin), FIONREAD, &nbytes) == 0 && nbytes == 0) {
+				struct timeval tv = {0, 0};
+				fd_set rfds;
+				FD_ZERO(&rfds);
+				FD_SET(fileno(stdin), &rfds);
+				if (select(fileno(stdin) + 1, &rfds, NULL, NULL, &tv) == 1) {
+					curs_nextgetch = CIO_KEY_QUIT >> 8;
+					return(CIO_KEY_QUIT & 0xff);
+				}
+			}
 		}
 		switch(ch) {
 			case 0xe0:
@@ -1035,12 +1051,12 @@ int curs_getch(void)
 				break;
 
 			case KEY_F(11):			/* Function Key */
-				curs_nextgetch=0x57;
+				curs_nextgetch=0x85;
 				ch=0;
 				break;
 
 			case KEY_F(12):			/* Function Key */
-				curs_nextgetch=0x58;
+				curs_nextgetch=0x86;
 				ch=0;
 				break;
 

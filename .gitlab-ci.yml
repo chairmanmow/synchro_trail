@@ -24,50 +24,61 @@ include:
       os: 'openbsd'
       platform: 'amd64'
       tagname: 'OpenBSD'
-      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1'
+      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 NO_ABSOLUTE_RPATH=1'
+      has_graphics: 'no'
+      slow_system: 'yes'
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: 'netbsd'
       platform: 'amd64'
       tagname: 'NetBSD'
-      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 USE_SYSTEM_CURSES=1'
+      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 USE_SYSTEM_CURSES=1 NO_ABSOLUTE_RPATH=1'
+      has_graphics: 'no'
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: 'freebsd'
       platform: 'amd64'
       tagname: 'FreeBSD'
-      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1'
+      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 NO_ABSOLUTE_RPATH=1'
       has_valgrind: "yes"
+      build_doors: "yes"
   - local: '.gitlab-ci-unix.yml'
     inputs:
-      os: 'raspian'
-      platform: 'armhf-on-aarch64'
+      os: 'raspberrypi'
+      platform: 'arm64'
       tagname: 'RaspberryPi'
-      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1'
+      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 NO_ABSOLUTE_RPATH=1'
+      has_gtk: "yes"
+      has_valgrind: "yes"
+      build_doors: "yes"
+      valgrind_pre_exec: "setarch -L"
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: "linux"
       platform: "x64"
       tagname: "Linux"
       has_gtk: "yes"
-      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1'
+      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 NO_ABSOLUTE_RPATH=1'
       has_valgrind: "yes"
+      build_doors: "yes"
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: "alpine-linux"
       platform: "x64"
       tagname: "alpine-linux"
-      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1'
-      no_javascript: 'yes'
-  - local: '.gitlab-ci-unix.yml'
-    inputs:
-      os: 'mingw-w64'
-      platform: 'x86'
-      tagname: 'FreeBSD'
-      cross_platform: 'yes'
-      build_flags: 'AR=/home/admin/mingw-w32/bin/i686-w64-mingw32-ar AS=/home/admin/mingw-w32/bin/i686-w64-mingw32-as CC="ccache /home/admin/mingw-w32/bin/i686-w64-mingw32-gcc" CXX="ccache /home/admin/mingw-w32/bin/i686-w64-mingw32-g++" RANLIB=/home/admin/mingw-w32/bin/i686-w64-mingw32-ranlib WINDRES=/home/admin/mingw-w32/bin/i686-w64-mingw32-windres RELEASE=1'
-      no_javascript: 'yes'
-      has_curses: 'no'
+      build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1 NO_ABSOLUTE_RPATH=1'
+      has_javascript: 'no'
+      build_doors: "yes"
+#  - local: '.gitlab-ci-unix.yml'
+#    inputs:
+#      os: 'mingw-w64'
+#      platform: 'x86'
+#      tagname: 'FreeBSD'
+#      cross_platform: 'yes'
+#      build_flags: 'AR=/home/admin/mingw-w32/bin/i686-w64-mingw32-ar AS=/home/admin/mingw-w32/bin/i686-w64-mingw32-as CC="ccache /home/admin/mingw-w32/bin/i686-w64-mingw32-gcc" CXX="ccache /home/admin/mingw-w32/bin/i686-w64-mingw32-g++" RANLIB=/home/admin/mingw-w32/bin/i686-w64-mingw32-ranlib WINDRES=/home/admin/mingw-w32/bin/i686-w64-mingw32-windres RELEASE=1'
+#      has_javascript: 'no'
+#      has_curses: 'no'
+#      build_doors: "yes"
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: 'mingw-w64'
@@ -75,8 +86,9 @@ include:
       tagname: 'FreeBSD'
       cross_platform: 'yes'
       build_flags: 'AR=/home/admin/mingw-w64/bin/x86_64-w64-mingw32-ar AS=/home/admin/mingw-w64/bin/x86_64-w64-mingw32-as CC="ccache /home/admin/mingw-w64/bin/x86_64-w64-mingw32-gcc" CXX="ccache /home/admin/mingw-w64/bin/x86_64-w64-mingw32-g++" RANLIB=/home/admin/mingw-w64/bin/x86_64-w64-mingw32-ranlib WINDRES=/home/admin/mingw-w64/bin/x86_64-w64-mingw32-windres RELEASE=1'
-      no_javascript: 'yes'
+      has_javascript: 'no'
       has_curses: 'no'
+      build_doors: "yes"
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: 'darwin-aarch64'
@@ -85,6 +97,7 @@ include:
       gnu_make: 'make'
       has_gtk: "yes"
       build_flags: 'RELEASE=1'
+      build_doors: "yes"
   - local: '.gitlab-ci-unix.yml'
     inputs:
       os: 'darwin-x86'
@@ -93,6 +106,7 @@ include:
       gnu_make: 'make'
       has_gtk: "yes"
       build_flags: 'CC="ccache cc" CXX="ccache c++" RELEASE=1'
+      slow_system: 'yes'
 
 "linux-x64 jsexec-smoketest":
   tags: [Linux]
@@ -111,7 +125,9 @@ include:
   stage: test
   extends: .rules
   script:
-    - make -f install/install-sbbs.mk NOCAP=1
+    - mkdir sbbs
+    - cd sbbs
+    - make -f ../install/install-sbbs.mk NOCAP=1 REPODIR=$(realpath ..) CC="ccache cc" CXX="ccache c++"
   needs: []
 
 "windows-x86 [sbbs]":

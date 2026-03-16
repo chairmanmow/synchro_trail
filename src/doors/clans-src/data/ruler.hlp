@@ -48,8 +48,8 @@
 ^Vault
  |0CThe vault is where the town's gold is stored.  This is the gold used for
  building or upgrading structures within the town (such as a church).
- You can withdraw and deposit into this vault.  Doing with either one
- will either decrease or increase your popularity respectively.
+ You can deposit gold into or withdraw gold from this vault.  Withdrawals
+ are limited to 3 per day.
 
 ^END
 
@@ -62,9 +62,9 @@
 ^END
 
 ^Withdraw from Vault
- |0CThis option allows you to withdraw gold from the town's vault.  Be careful
- when withdrawing gold.  Doing it too often or in excess *will* be noticed
- by other clans.  This may cause them to rebel and overthrow you.
+ |0CThis option allows you to withdraw gold from the town's vault.  Withdrawals
+ are limited to 3 per day.  Be careful: each withdrawal appears in the daily
+ news, so other clans will notice and may vote you out.
 
 ^END
 
@@ -81,18 +81,14 @@
 
 ^END
 
-^Government System
- |0CThe government system used decides how the ruler is chosen each day.  If
- a Dictatorial system is used, the current ruler will continue to reign
- regardless of votes.  (Voting is actually disabled.)  If a Democratic system
- is used, voting decides who the ruler will be each day.
-
-^END
-
 ^Show Empire Stats
- |0CUse this feature to toggle whether or not users can see the village's
- empire stats.  This feature is extremely useful for a Dictator system of
- government as it helps keep the enemy in the dark.
+ |0CThe ruler may toggle whether village empire stats are publicly visible.
+ When enabled, any clan may select |0B(S) See Village Empire Stats|0C from the
+ Town Hall menu to view gold, land, army strength, and buildings.  When
+ disabled, that option displays a message stating the stats are private.
+
+ Empire stats are visible by default at the start of each game.  Use
+ |0B(T) Toggle Empire Stats|0C from the ruler's Town Hall menu to change this.
 
 ^END
 
@@ -104,9 +100,7 @@
 
 ^Voting Booth
  |0CThe voting booth allows you to vote for the clan which you think will rule
- best.  At the end of the day, a new ruler is chosen from the top votes.  Of
- course, if the town is under dictatorial rule, voting is disabled and the
- current ruler will continue to reign unless ousted through an empire war.
+ best.  At the end of the day, a new ruler is chosen from the top votes.
 ^END
 
 ^Pawn Shop

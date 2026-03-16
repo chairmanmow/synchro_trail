@@ -15,12 +15,13 @@ var shell = load({}, "shell_lib.js");
 
 system.settings &= ~SYS_RA_EMU; // Use (R)e-read and (A)uto-reply keys
 
-const help_key = '?';
+shell.help_key = '?';
 // If user has unlimited time, display time-used rather than time-remaining
 const time_code = user.security.exemptions & UFLAG_T ? "@TUSED@" : "@TLEFT@";
 
-const main_menu = {
+shell.main_menu = {
 	file: "main",
+	cls: true,
 	eval: 'bbs.main_cmds++',
 	node_action: NODE_MAIN,
 	prompt: gettext("\x01-\x01c\xfe \x01b\x01h", "shell_prompt_begin")
@@ -39,13 +40,13 @@ const main_menu = {
 			,msg: '\r\n\x01c\x01h' + gettext("Browse/New Message Scan") + '\r\n' },
 	 'C': { eval: 'bbs.chat_sec()' },
 	 'D': { eval: 'bbs.user_config(); exit()' },
-	 'E': { exec: 'email_sec.js' },
+	 'E': { eval: 'bbs.email_sec()' },
 	 'F': { eval: 'bbs.scan_subs(SCAN_FIND)'
 			,msg: '\r\n\x01c\x01h' + gettext("Find Text in Messages") + '\r\n' },
 	'/F': { eval: 'bbs.scan_subs(SCAN_FIND, /* all */true)' },
 	 'G': { eval: 'bbs.text_sec()' },
-	 'I': { eval: 'shell.main_info()' },
-	 'J': { eval: 'shell.select_msg_area()' },
+	 'I': { eval: 'main_info()' },
+	 'J': { eval: 'select_msg_area()' },
 	 'L': { eval: 'bbs.list_msgs()' },
 	'/L': { eval: 'bbs.list_nodes()' },
 	 'M': { eval: 'bbs.time_bank()' },
@@ -53,8 +54,8 @@ const main_menu = {
 	 'N': { eval: 'bbs.scan_subs(SCAN_NEW)'
 			,msg: '\r\n\x01c\x01h' + gettext("New Message Scan") + '\r\n' },
 	'/N': { eval: 'bbs.scan_subs(SCAN_NEW, /* all */true)' },
-	 'O': { eval: 'shell.logoff(/* fast: */false)' },
-	'/O': { eval: 'shell.logoff(/* fast: */true)' },
+	 'O': { eval: 'logoff(/* fast: */false)' },
+	'/O': { eval: 'logoff(/* fast: */true)' },
 	 'P': { eval: 'bbs.post_msg()' },
 	'/P': { exec: 'postpoll.js' },
 	 'Q': { eval: 'bbs.qwk_sec()' },
@@ -62,7 +63,7 @@ const main_menu = {
 	 'S': { eval: 'bbs.scan_subs(SCAN_TOYOU)'
 			,msg: '\r\n\x01c\x01h' + gettext("Scan for Messages Posted to You") + '\r\n' },
 	'/S': { eval: 'bbs.scan_subs(SCAN_TOYOU, /* all */true)' },
-	 'U': { eval: 'shell.list_users()' },
+	 'U': { eval: 'list_users()' },
 	'/U': { eval: 'bbs.list_users(UL_ALL)' },
 	 'V': { exec: 'scanpolls.js' },
 	'/V': { exec: 'scanpolls.js', args: ['all'] },
@@ -71,8 +72,8 @@ const main_menu = {
 	 'Z': { eval: 'bbs.scan_subs(SCAN_NEW | SCAN_CONT)'
 			,msg: '\r\n\x01c\x01h' + gettext("Continuous New Message Scan") + '\r\n' },
 	'/Z': { eval: 'bbs.scan_subs(SCAN_NEW | SCAN_CONT, /* all */true)' },
-	 '*': { eval: 'shell.show_subs(bbs.curgrp)' },
-	'/*': { eval: 'shell.show_grps()' },
+	 '*': { eval: 'show_subs(bbs.curgrp)' },
+	'/*': { eval: 'show_grps()' },
 	 '&': { exec: 'msgscancfg.js' },
 	 '!': { eval: 'bbs.menu("sysmain")'
 			,ars: 'SYSOP or EXEMPT Q or I or N' },
@@ -81,29 +82,33 @@ const main_menu = {
 	},
 	nav: {
 	'\r': { },
-	 'T': { eval: 'shell.enter_file_section(); menu = file_menu' },
-	 '>': { eval: 'shell.sub_up()' },
-	 '}': { eval: 'shell.sub_up()' },
-	 ')': { eval: 'shell.sub_up()' },
-	 '+': { eval: 'shell.sub_up()' },
-	 '=': { eval: 'shell.sub_up()' },
-	 '<': { eval: 'shell.sub_down()' },
-	 '{': { eval: 'shell.sub_down()' },
-	 '(': { eval: 'shell.sub_down()' },
-	 '-': { eval: 'shell.sub_down()' },
-	 ']': { eval: 'shell.grp_up()' },
-	 '[': { eval: 'shell.grp_down()' },
+	 'T': { eval: 'enter_file_section(); menu = file_menu' },
+	 '>': { eval: 'sub_up()' },
+	 '}': { eval: 'sub_up()' },
+	 ')': { eval: 'sub_up()' },
+	 '+': { eval: 'sub_up()' },
+	 '=': { eval: 'sub_up()' },
+	 '<': { eval: 'sub_down()' },
+	 '{': { eval: 'sub_down()' },
+	 '(': { eval: 'sub_down()' },
+	 '-': { eval: 'sub_down()' },
+	 ']': { eval: 'grp_up()' },
+	 '[': { eval: 'grp_down()' },
 	},
 };
 
 // Can't do these statically through initialization:
-main_menu.nav[KEY_UP] = { eval: 'shell.sub_up()' };
-main_menu.nav[KEY_DOWN] = { eval: 'shell.sub_down()' };
-main_menu.nav[KEY_RIGHT] = { eval: 'shell.grp_up()' };
-main_menu.nav[KEY_LEFT] = { eval: 'shell.grp_down()' };
+shell.main_menu.nav[KEY_UP] = { eval: 'sub_up()' };
+shell.main_menu.nav[KEY_DOWN] = { eval: 'sub_down()' };
+shell.main_menu.nav[KEY_RIGHT] = { eval: 'grp_up()' };
+shell.main_menu.nav[KEY_LEFT] = { eval: 'grp_down()' };
 
-const file_menu = {
+if (typeof bbs.email_sec != 'function')
+	shell.main_menu.command['E'] = { exec: 'email_sec.js' };
+
+shell.file_menu = {
 	file: "transfer",
+	cls: true,
 	eval: 'bbs.file_cmds++',
 	node_action: NODE_XFER,
 	prompt: gettext("\x01-\x01c\xfe \x01b\x01h", "shell_prompt_begin")
@@ -116,43 +121,43 @@ const file_menu = {
 	command: {
 	 'B': { eval: 'bbs.batch_menu()' },
 	 'C': { eval: 'bbs.chat_sec()' },
-	 'D': { eval: 'shell.download_files()'
+	 'D': { eval: 'download_files()'
 			,msg: '\r\n\x01c\x01h' + gettext("Download File(s)") + '\r\n'
 			,ars: 'REST NOT D' },
-	'/D': { eval: 'shell.download_user_files()'
+	'/D': { eval: 'download_user_files()'
 			,msg: '\r\n\x01c\x01h' + gettext("Download File(s) from User(s)") + '\r\n'
 			,ars: 'REST NOT D' },
-	 'E': { eval: 'shell.view_file_info(FI_INFO)'
+	 'E': { eval: 'view_file_info(FI_INFO)'
 			,msg: '\r\n\x01c\x01h' + gettext("List Extended File Information") + '\r\n' },
 	 'F': { eval: 'bbs.scan_dirs(FL_FINDDESC);'
 			,msg: '\r\n\x01c\x01h' + gettext("Find Text in File Descriptions (no wildcards)") + '\r\n' },
 	'/F': { eval: 'bbs.scan_dirs(FL_FINDDESC, /* all: */true);' },
-	 'I': { eval: 'shell.file_info()' },
-	 'J': { eval: 'shell.select_file_area()' },
-	 'L': { eval: 'shell.list_files()' },
+	 'I': { eval: 'file_info()' },
+	 'J': { eval: 'select_file_area()' },
+	 'L': { eval: 'list_files()' },
 	'/L': { eval: 'bbs.list_nodes()' },
 	 'N': { eval: 'bbs.scan_dirs(FL_ULTIME)'
 			,msg: '\r\n\x01c\x01h' + gettext("New File Scan") + '\r\n' },
 	'/N': { eval: 'bbs.scan_dirs(FL_ULTIME, /* all */true)' },
-	 'O': { eval: 'shell.logoff(/* fast: */false)' },
-	'/O': { eval: 'shell.logoff(/* fast: */true)' },
-	 'R': { eval: 'shell.view_file_info(FI_REMOVE)'
+	 'O': { eval: 'logoff(/* fast: */false)' },
+	'/O': { eval: 'logoff(/* fast: */true)' },
+	 'R': { eval: 'view_file_info(FI_REMOVE)'
 			,msg: '\r\n\x01c\x01h' + gettext("Remove/Edit File(s)") + '\r\n' },
 	 'S': { eval: 'bbs.scan_dirs(FL_NO_HDR)'
 			,msg: '\r\n\x01c\x01h' + gettext("Search for Filename(s)") + '\r\n' },
 	'/S': { eval: 'bbs.scan_dirs(FL_NO_HDR, /* all */true) ' },
 	 'T': { eval: 'bbs.temp_xfer()' },
-	 'U': { eval: 'shell.upload_file()'
+	 'U': { eval: 'upload_file()'
 			,msg: '\r\n\x01c\x01h' + gettext("Upload File") + '\r\n' },
-	'/U': { eval: 'shell.upload_user_file()'
+	'/U': { eval: 'upload_user_file()'
 			,msg: '\r\n\x01c\x01h' + gettext("Upload File to User") + '\r\n' },
-	 'V': { eval: 'shell.view_files()'
+	 'V': { eval: 'view_files()'
 			,msg: '\r\n\x01c\x01h' + gettext("View File(s)") + '\r\n' },
 	 'W': { eval: 'bbs.whos_online()' },
-	 'Z': { eval: 'shell.upload_sysop_file()'
+	 'Z': { eval: 'upload_sysop_file()'
 			,msg: '\r\n\x01c\x01h' + gettext("Upload File to Sysop") + '\r\n' },
-	 '*': { eval: 'shell.show_dirs(bbs.curlib)' },
-	'/*': { eval: 'shell.show_libs()' },
+	 '*': { eval: 'show_dirs(bbs.curlib)' },
+	'/*': { eval: 'show_libs()' },
 	 '&': { exec: 'filescancfg.js' },
 	 '!': { eval: 'bbs.menu("sysxfer")'
 			,ars: 'SYSOP' },
@@ -162,104 +167,25 @@ const file_menu = {
 	nav: {
 	'\r': { },
 	 'Q': { eval: 'menu = main_menu' },
-	 '>': { eval: 'shell.dir_up()' },
-	 '}': { eval: 'shell.dir_up()' },
-	 ')': { eval: 'shell.dir_up()' },
-	 '+': { eval: 'shell.dir_up()' },
-	 '=': { eval: 'shell.dir_up()' },
-	 '<': { eval: 'shell.dir_down()' },
-	 '{': { eval: 'shell.dir_down()' },
-	 '(': { eval: 'shell.dir_down()' },
-	 '-': { eval: 'shell.dir_down()' },
-	 ']': { eval: 'shell.lib_up()' },
-	 '[': { eval: 'shell.lib_down()' },
+	 '>': { eval: 'dir_up()' },
+	 '}': { eval: 'dir_up()' },
+	 ')': { eval: 'dir_up()' },
+	 '+': { eval: 'dir_up()' },
+	 '=': { eval: 'dir_up()' },
+	 '<': { eval: 'dir_down()' },
+	 '{': { eval: 'dir_down()' },
+	 '(': { eval: 'dir_down()' },
+	 '-': { eval: 'dir_down()' },
+	 ']': { eval: 'lib_up()' },
+	 '[': { eval: 'lib_down()' },
 	},
 };
 
 // Can't do these statically through initialization:
-file_menu.nav[KEY_UP] = { eval: 'shell.dir_up()' };
-file_menu.nav[KEY_DOWN] = { eval: 'shell.dir_down()' };
-file_menu.nav[KEY_RIGHT] = { eval: 'shell.lib_up()' };
-file_menu.nav[KEY_LEFT] = { eval: 'shell.lib_down()' };
+shell.file_menu.nav[KEY_UP] = { eval: 'dir_up()' };
+shell.file_menu.nav[KEY_DOWN] = { eval: 'dir_down()' };
+shell.file_menu.nav[KEY_RIGHT] = { eval: 'lib_up()' };
+shell.file_menu.nav[KEY_LEFT] = { eval: 'lib_down()' };
 
-var menu = main_menu;
-var last_str_cmd = "";
-
-// The menu-display/command-prompt loop
-while(bbs.online && !js.terminated) {
-	if(!(user.settings & USER_EXPERT)) {
-		console.clear();
-		bbs.menu(menu.file);
-	}
-	bbs.node_action = menu.node_action;
-	bbs.nodesync();
-	eval(menu.eval);
-	console.newline();
-	console.aborted = false;
-	console.putmsg(menu.prompt, P_SAVEATR);
-	var cmd = console.getkey(K_UPPER);
-	if(cmd > ' ')
-		console.print(cmd);
-	if(cmd == ';') {
-		cmd = console.getstr(100, K_LINEWRAP);
-		if(cmd == '!')
-			cmd = last_str_cmd;
-		load({}, "str_cmds.js", cmd);
-		last_str_cmd = cmd;
-		continue;
-	}
-	if(cmd == '/') {
-		cmd = console.getkey(K_UPPER);
-		console.print(cmd);
-		if(cmd >= '1' && cmd <= '9') {
-			menu.slash_num_input(cmd);
-			continue;
-		}
-		cmd = '/' + cmd;
-	}
-	if(cmd >= '1' && cmd <= '9') {
-		menu.num_input(cmd);
-		continue;
-	}
-	if(cmd > ' ') {
-		bbs.log_key(cmd, /* comma: */true);
-	}
-	if(menu.nav[cmd]) {
-		if(menu.nav[cmd].eval)
-			eval(menu.nav[cmd].eval);
-		continue;
-	}
-	console.newline();
-	console.line_counter = 0;
-	if(cmd == help_key) {
-		if(user.settings & USER_EXPERT)
-			bbs.menu(menu.file);
-		continue;
-	}
-	var menu_cmd = menu.command[cmd];
-	if(!menu_cmd) {
-		console.print("\r\n\x01c\x01h" + gettext("Unrecognized command."));
-		if(user.settings & USER_EXPERT)
-			console.print("  " + gettext("Hit") + " '\x01i" + help_key + "\x01n\x01c\x01h' " + gettext("for a menu."));
-		console.print("  " + gettext("Type \x01y;help\x01c for more commands."));
-		console.newline();
-		continue;
-	}
-	if(bbs.compare_ars(menu_cmd.ars)) {
-		if(menu_cmd.msg)
-			console.print(menu_cmd.msg);
-		if(menu_cmd.eval)
-			eval(menu_cmd.eval);
-		if(menu_cmd.exec) {
-			var script = system.mods_dir + menu_cmd.exec;
-			if(!file_exists(script))
-				script = system.exec_dir + menu_cmd.exec;
-			if(menu_cmd.args)
-				js.exec.apply(null, [script, {}].concat(menu_cmd.args));
-			else
-				js.exec(script, {});
-		}
-	}
-	else if(menu_cmd.err)
-		console.print(menu_cmd.err);
-}
+shell.menu = shell.main_menu;
+shell.menu_loop();

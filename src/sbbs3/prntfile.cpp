@@ -22,6 +22,7 @@
 #include "sbbs.h"
 #include "utf8.h"
 #include "petdefs.h"
+#include "sauce.h"
 
 #ifndef PRINTFILE_MAX_LINE_LEN
 #define PRINTFILE_MAX_LINE_LEN (8 * 1024)
@@ -29,6 +30,40 @@
 #ifndef PRINTFILE_MAX_FILE_LEN
 #define PRINTFILE_MAX_FILE_LEN (2 * 1024 * 1024)
 #endif
+
+
+/****************************************************************************/
+/* like fgets(), excepts discards all carriage-returns						*/
+/* and if cols is non-zero, stops reading when displayed width >= cols		*/
+/****************************************************************************/
+char* sbbs_t::fgetline(char* s, int size, int cols, FILE* stream, int mode)
+{
+	int len = 0;
+
+	memset(s, 0, size);
+
+	while (len < size) {
+		int ch = fgetc(stream);
+		if (ch == EOF)
+			break;
+		if (ch == '\r')
+			continue;
+		s[len++] = ch;
+		if (ch == '\n')
+			break;
+		if (cols && len >= cols && (int)term->bstrlen(s, mode) >= cols) {
+			ch = fgetc(stream);
+			if (ch == '\r')
+				ch = fgetc(stream);
+			if (ch == EOF || ch == '\n')
+				break;
+			if (fseek(stream, -1, SEEK_CUR) != 0)
+				return NULL;
+			break;
+		}
+	}
+	return len ? s : NULL;
+}
 
 /****************************************************************************/
 /* Prints a file remotely and locally, interpreting ^A sequences, checks    */
@@ -45,6 +80,8 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 	int   l, length, savcon = console;
 	FILE *stream;
 
+	if (*inpath == '\0')
+		return false;
 	if (FULLPATH(fpath, inpath, sizeof fpath) == NULL)
 		SAFECOPY(fpath, inpath);
 	if ((mode & P_MODS) && cfg.mods_dir[0] != '\0') {
@@ -104,6 +141,15 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 		return true;
 	}
 
+	struct sauce_charinfo sauce{};
+	if (sauce_fread_charinfo(stream, /* type */nullptr, &sauce)) {
+		mode |= P_CPM_EOF;
+		if (org_cols == 0 && sauce.width >= TERM_COLS_MIN && sauce.width <= TERM_COLS_MAX) {
+			org_cols = sauce.width;
+			mode |= P_WRAP;
+		}
+	}
+
 	lprintf(LOG_DEBUG, "Printing file: %s", fpath);
 	if (!(mode & P_NOCRLF) && term->row > 0 && !rip) {
 		term->newline();
@@ -115,7 +161,7 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 			errormsg(WHERE, ERR_ALLOC, fpath, length + 1L);
 			return false;
 		}
-		l = read(file, buf, length);
+		l = fread(buf, 1, length, stream);
 		fclose(stream);
 		if (l != length)
 			errormsg(WHERE, ERR_READ, fpath, length);
@@ -132,11 +178,26 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 		uint             org_line_delay = line_delay;
 		uint             tmpatr = curatr;
 		uint             orgcon = console;
+
 		attr_sp = 0;    /* clear any saved attributes */
+		off_t* offset = nullptr;
+		size_t line=0;
+		size_t lines=0;
+		char key = 0;
+		int kmode = K_UPPER;
+		if ((sys_status & SS_USERON) && !(useron.misc & (NOPAUSESPIN)) && cfg.spinning_pause_prompt)
+			kmode |= K_SPIN;
+
+		if (!pause_enabled())
+			mode &= ~P_SEEK;
+
+		if (mode & P_SEEK)
+			mode |= P_NOPAUSE;
 		if (!(mode & P_SAVEATR))
 			attr(LIGHTGRAY);
 		if (mode & P_NOPAUSE)
 			sys_status |= SS_PAUSEOFF;
+
 		if (length > PRINTFILE_MAX_LINE_LEN)
 			length = PRINTFILE_MAX_LINE_LEN;
 		if ((buf = (char*)malloc(length + 1L)) == NULL) {
@@ -144,23 +205,120 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 			errormsg(WHERE, ERR_ALLOC, fpath, length + 1L);
 			return false;
 		}
-		uint rainbow_sav[LEN_RAINBOW + 1];
-		memcpy(rainbow_sav, rainbow, sizeof rainbow_sav);
 
+		uint lncntr = 0; // term->lncntr doesn't increment for initial blank lines
 		ansiParser.reset();
+		int cols = (mode & P_SEEK) ? term->cols : 0;
 		while (!feof(stream) && !msgabort()) {
-			if (fgets(buf, length + 1, stream) == NULL)
+			off_t o = ftello(stream);
+			if (fgetline(buf, length + 1, cols, stream, mode) == NULL)
 				break;
+			truncnl(buf);
+			if ((mode & P_SEEK) && line == lines) {
+				++lines;
+				if ((offset = static_cast<off_t *>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
+					errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
+					break;
+				}
+				offset[line] = o;
+			}
 			if ((mode & P_UTF8) && (term->charset() != CHARSET_UTF8))
 				utf8_normalize_str(buf);
 			if (putmsgfrag(buf, mode, org_cols, obj) != '\0') // early-EOF?
 				break;
+			if (term->bstrlen(buf, mode) < 1 || term->column > 0)
+				term->newline();
+			++lncntr;
+			if ((mode & P_SEEK) && (lncntr == term->rows - 1 || key == TERM_KEY_DOWN || key == '\r')) {
+				lncntr = 0;
+				int curatr = term->curatr;
+				double progress = (double)filelength(file) / ftell(stream);
+				bprintf(P_ATCODES, text[SeekPrompt], (int)(progress ? (100.0 / progress) : 0));
+				auto nextline = line;
+				key = getkey(kmode);
+				if (key == no_key() || key == quit_key())
+					sys_status |= SS_ABORT;
+				attr(curatr);
+				term->carriage_return();
+				term->cleartoeol();
+				switch (key) {
+					case TERM_KEY_HOME:
+						nextline = 0;
+						break;
+					case TERM_KEY_UP:
+						if (line <= term->rows - 1)
+							nextline = 0;
+						else
+							nextline = line - (term->rows - 1);
+						break;
+					case 'B':
+					case TERM_KEY_PAGEUP:
+						if (line <= ((term->rows - 1) * 2) - 1)
+							nextline = 0;
+						else
+							nextline = line - (((term->rows - 1) * 2) - 1);
+						break;
+					case TERM_KEY_END:
+					{
+						if (lines < 1)
+							break;
+						bputs(text[SeekingFile]);
+						if (fseeko(stream, offset[lines - 1], SEEK_SET) != 0) {
+							errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[lines - 1]));
+							break;
+						}
+						if (fgetline(buf, length + 1, cols, stream, mode) == NULL)
+							break;
+						size_t lastline = lines - 1;
+						while (!feof(stream) && !msgabort()) {
+							o = ftello(stream);
+							if (fgetline(buf, length + 1, cols, stream, mode) == NULL)
+								break;
+							++lastline;
+							if (lastline >= lines) {
+								++lines;
+								if ((offset = static_cast<off_t*>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
+									errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
+									break;
+								}
+								offset[lastline] = o;
+							}
+						}
+						bputs(text[SeekingFileDone]);
+						if (lines <= term->rows - 1)
+							nextline = 0;
+						else
+							nextline = lines - (term->rows - 1);
+						break;
+					}
+					case TERM_KEY_PAGEDN:
+						if (feof(stream))
+							continue;
+						// Fall-through
+					default:
+					case TERM_KEY_DOWN:
+						nextline = line + 1;
+						break;
+				}
+				if (offset == nullptr)
+					break;
+				if ((key == TERM_KEY_END || nextline != line + 1) && nextline < lines) {
+					if (fseeko(stream, offset[nextline], 0) != 0) {
+						errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[nextline]));
+						break;
+					}
+				}
+				line = nextline;
+			}
+			else
+				++line;
 		}
 		if (ansiParser.current_state() != ansiState_none)
 			lprintf(LOG_DEBUG, "Incomplete ANSI stripped from end");
-		memcpy(rainbow, rainbow_sav, sizeof rainbow);
+		memcpy(rainbow, cfg.rainbow, sizeof rainbow);
 		free(buf);
 		fclose(stream);
+		free(offset);
 		if (!(mode & P_SAVEATR)) {
 			console = orgcon;
 			attr(tmpatr);

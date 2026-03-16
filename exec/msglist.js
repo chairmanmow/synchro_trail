@@ -517,6 +517,7 @@ function view_msg(msgbase, msg, lines, total_msgs, grp_name, sub_name, is_operat
 				return key;
 		}
 	}
+	return null;
 }
 
 function right_justify(text)
@@ -524,10 +525,10 @@ function right_justify(text)
 	console.print(format("%*s%s", console.screen_columns - console.current_column - (console.strlen(text) + 1), "", text));
 }
 
-function find(msgbase, search_list, text)
+function find(msgbase, search_list, txt)
 {
 	var new_list=[];
-	var text=text.toUpperCase();
+	var text=txt.toUpperCase();
 	for(var i = 0; i < search_list.length; i++) {
 		var msg = search_list[i];
 		var msgtxt = msg.text;
@@ -593,7 +594,7 @@ function get_msg_lines(msgbase, msg, hdr, source, hex, wrap, chop)
 			console.clearline();
 			return [];
 		}
-		if(text.length <= options.large_msg_threshold)
+		if(!(msg.auxattr & MSG_FIXED_FORMAT) && text.length <= options.large_msg_threshold)
 			msg.wrapped = (wrap!==false && !hex);
 	}
 	if(hdr) {
@@ -1445,8 +1446,8 @@ function list_msgs(msgbase, list, current, preview, grp_name, sub_name)
 				}
 				break;
 		}
-			
 	}
+	return false;
 }
 
 function list_msgs_offline(msgbase, list)

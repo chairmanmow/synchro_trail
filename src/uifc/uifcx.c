@@ -46,10 +46,10 @@ static int ulist(uifc_winmode_t, int left, int top, int width, int *dflt, int *b
 static int uinput(uifc_winmode_t, int left, int top, const char *prompt, char *str
                   , int len, int kmode);
 static int umsg(const char *str);
-static int umsgf(char *str, ...);
-static BOOL confirm(char *str, ...);
-static BOOL deny(char *str, ...);
-static void upop(const char *str);
+static int umsgf(const char *str, ...);
+static BOOL confirm(const char *str, ...);
+static BOOL deny(const char *str, ...);
+static void upop(const char *str, ...);
 static void sethelp(int line, char* file);
 
 /****************************************************************************/
@@ -61,7 +61,7 @@ static int uprintf(int x, int y, unsigned attr, char *fmat, ...)
 	int     i;
 
 	va_start(argptr, fmat);
-	vsprintf(str, fmat, argptr);
+	vsnprintf(str, sizeof(str), fmat, argptr);
 	va_end(argptr);
 	i = printf("%s", str);
 	return i;
@@ -338,7 +338,10 @@ int ulist(uifc_winmode_t mode, int left, int top, int width, int *cur, int *bar
 int uinput(uifc_winmode_t mode, int left, int top, const char *prompt, char *outstr,
            int max, int kmode)
 {
-	char str[256];
+	char *str;
+
+	if ((str = malloc(max + 1)) == NULL)
+		return 0;
 
 	while (1) {
 		printf("%s (maxlen=%u): ", prompt, max);
@@ -350,10 +353,11 @@ int uinput(uifc_winmode_t mode, int left, int top, const char *prompt, char *out
 		help();
 	}
 	if (strcmp(outstr, str))
-		api->changes = 1;
+		api->changes = TRUE;
 	if (kmode & K_UPPER)   /* convert to uppercase? */
 		strupr(str);
 	strcpy(outstr, str);
+	free(str);
 	return strlen(outstr);
 }
 
@@ -369,7 +373,7 @@ int umsg(const char *str)
 }
 
 /* Same as above, using printf-style varargs */
-int umsgf(char* fmt, ...)
+int umsgf(const char* fmt, ...)
 {
 	int     retval = -1;
 	va_list va;
@@ -386,7 +390,7 @@ int umsgf(char* fmt, ...)
 	return retval;
 }
 
-BOOL confirm(char* fmt, ...)
+BOOL confirm(const char* fmt, ...)
 {
 	int     ch;
 	va_list va;
@@ -399,7 +403,7 @@ BOOL confirm(char* fmt, ...)
 	return tolower(ch) != 'n' && ch != EOF;
 }
 
-BOOL deny(char* fmt, ...)
+BOOL deny(const char* fmt, ...)
 {
 	int     ch;
 	va_list va;
@@ -415,14 +419,20 @@ BOOL deny(char* fmt, ...)
 /****************************************************************************/
 /* Status popup/down function, see uifc.h for details.						*/
 /****************************************************************************/
-void upop(const char *str)
+void upop(const char *str, ...)
 {
 	static int len;
 
 	if (str == NULL)
 		printf("\r%*s\r", len, "");
-	else
-		len = printf("\r%s\r", str) - 2;
+	else {
+		putchar('\r');
+		va_list va;
+		va_start(va, str);
+		len = vprintf(str, va);
+		va_end(va);
+		putchar('\r');
+	}
 }
 
 /****************************************************************************/
@@ -476,7 +486,7 @@ void help()
 				if (fread(&line, 2, 1, fp) != 1)
 					break;
 				if (stricmp(str, p) || line != helpline) {
-					if (fseek(fp, 4, SEEK_CUR) == 0)
+					if (fseek(fp, 4, SEEK_CUR) != 0)
 						break;
 					continue;
 				}

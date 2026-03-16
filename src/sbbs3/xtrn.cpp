@@ -356,6 +356,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 	bool                use_pipes = false; // NT-compatible console redirection
 	BOOL                success;
 	BOOL                processTerminated = false;
+	bool				input_thread_mutex_locked = false;
 	uint                i;
 	time_t              hungup = 0;
 	HANDLE              rdslot = INVALID_HANDLE_VALUE;
@@ -628,7 +629,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		if (passthru_thread_running)
 			passthru_socket_activate(true);
 		else
-			pthread_mutex_lock(&input_thread_mutex);
+			input_thread_mutex_locked = (pthread_mutex_lock(&input_thread_mutex) == 0);
 	}
 
 	DWORD creation_flags = (mode & EX_NODISPLAY) ? CREATE_NO_WINDOW : CREATE_NEW_CONSOLE;
@@ -652,7 +653,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		if (native && !(mode & (EX_OFFLINE | EX_STDIN))) {
 			if (passthru_thread_running)
 				passthru_socket_activate(false);
-			else
+			else if (input_thread_mutex_locked)
 				pthread_mutex_unlock(&input_thread_mutex);
 		}
 		SetLastError(last_error);   /* Restore LastError */
@@ -917,7 +918,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		if (native && !(mode & EX_STDIN)) {
 			if (passthru_thread_running)
 				passthru_socket_activate(false);
-			else
+			else if (input_thread_mutex_locked)
 				pthread_mutex_unlock(&input_thread_mutex);
 		}
 
@@ -1107,6 +1108,18 @@ static int forkpty(int *amaster, char *name, termios *termp, winsize *winp)
 }
 #endif /* NEED_FORKPTY */
 
+static int
+xtrn_waitpid(pid_t wpid, int *status, int options)
+{
+	int ret;
+
+	do {
+		ret = waitpid(wpid, status, options);
+	} while(ret == -1 && errno == EINTR);
+
+	return ret;
+}
+
 /****************************************************************************/
 /* Runs an external program (on *nix) 										*/
 /****************************************************************************/
@@ -1136,6 +1149,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 	BYTE          wwiv_buf[XTRN_IO_BUF_LEN * 2];
 	BYTE          utf8_buf[XTRN_IO_BUF_LEN * 4];
 	bool          wwiv_flag = false;
+	bool          input_thread_mutex_locked = false;
 	char*         p;
 #ifdef PREFER_POLL
 	struct pollfd fds[2];
@@ -1489,13 +1503,14 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 			{NULL, NULL}
 		};
 
-		named_int_t    externalbat_int_replacements[] = {
+		named_long_t    externalbat_int_replacements[] = {
 			{(char*)"SBBSNNUM", cfg.node_num },
+			{NULL}
 		};
 
 		while (!feof(externalbatfp)) {
 			if (fgets(buf, sizeof(buf), externalbatfp) != NULL) {
-				replace_named_values(buf, bufout, sizeof(bufout), "$", externalbat_replacements,
+				replace_named_values(buf, bufout, sizeof(bufout), "$", NULL, externalbat_replacements,
 				                     externalbat_int_replacements, FALSE);
 				fprintf(dosemubatfp, "%s", bufout);
 			}
@@ -1585,10 +1600,11 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 			{(char*)"RUNTYPE", (char *)runtype},
 			{NULL, NULL}
 		};
-		named_int_t    de_ini_int_replacements[] = {
+		named_long_t    de_ini_int_replacements[] = {
 			{(char*)"NNUM", cfg.node_num },
+			{NULL}
 		};
-		replace_named_values(de_launch_cmd, fullcmdline, sizeof(fullcmdline), (char*)"$",
+		replace_named_values(de_launch_cmd, fullcmdline, sizeof(fullcmdline), (char*)"$", NULL,
 		                     de_ini_replacements, de_ini_int_replacements, FALSE);
 
 		/* Drum roll. */
@@ -1607,7 +1623,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		if (passthru_thread_running)
 			passthru_socket_activate(true);
 		else
-			pthread_mutex_lock(&input_thread_mutex);
+			input_thread_mutex_locked = (pthread_mutex_lock(&input_thread_mutex) == 0);
 	}
 
 	if (!(mode & EX_NOLOG) && pipe(err_pipe) != 0) {
@@ -1721,7 +1737,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 			if (!(mode & (EX_STDIN | EX_OFFLINE))) {
 				if (passthru_thread_running)
 					passthru_socket_activate(false);
-				else
+				else if (input_thread_mutex_locked)
 					pthread_mutex_unlock(&input_thread_mutex);
 			}
 			errormsg(WHERE, ERR_EXEC, fullcmdline, 0);
@@ -1746,7 +1762,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 			if (!(mode & (EX_STDIN | EX_OFFLINE))) {
 				if (passthru_thread_running)
 					passthru_socket_activate(false);
-				else
+				else if (input_thread_mutex_locked)
 					pthread_mutex_unlock(&input_thread_mutex);
 			}
 			errormsg(WHERE, ERR_EXEC, fullcmdline, 0);
@@ -1860,7 +1876,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		}
 		time_t lastnodechk = 0;
 		while (!terminated) {
-			if (waitpid(pid, &i, WNOHANG) != 0)    /* child exited */
+			if (xtrn_waitpid(pid, &i, WNOHANG) != 0)    /* child exited */
 				break;
 
 			if (mode & EX_CHKTIME)
@@ -1992,23 +2008,23 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 
 		}
 
-		if (waitpid(pid, &i, WNOHANG) == 0)  {     // Child still running?
+		if (xtrn_waitpid(pid, &i, WNOHANG) == 0)  {     // Child still running?
 			kill(pid, SIGHUP);                  // Tell child user has hung up
 			time_t start = time(NULL);            // Wait up to 5 seconds
 			while (time(NULL) - start < 5) {        // for child to terminate
-				if (waitpid(pid, &i, WNOHANG) != 0)
+				if (xtrn_waitpid(pid, &i, WNOHANG) != 0)
 					break;
 				mswait(500);
 			}
-			if (waitpid(pid, &i, WNOHANG) == 0) {  // Child still running?
+			if (xtrn_waitpid(pid, &i, WNOHANG) == 0) {  // Child still running?
 				kill(pid, SIGTERM);             // terminate child process (gracefully)
 				start = time(NULL);               // Wait up to 5 (more) seconds
 				while (time(NULL) - start < 5) {    // for child to terminate
-					if (waitpid(pid, &i, WNOHANG) != 0)
+					if (xtrn_waitpid(pid, &i, WNOHANG) != 0)
 						break;
 					mswait(500);
 				}
-				if (waitpid(pid, &i, WNOHANG) == 0) // Child still running?
+				if (xtrn_waitpid(pid, &i, WNOHANG) == 0) // Child still running?
 					kill(pid, SIGKILL);         // terminate child process (ungracefully)
 			}
 		}
@@ -2018,9 +2034,9 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		close(out_pipe[0]);
 	}
 	if (mode & EX_NOLOG)
-		waitpid(pid, &i, 0);
+		xtrn_waitpid(pid, &i, 0);
 	else {
-		while (waitpid(pid, &i, WNOHANG) == 0)  {
+		while (xtrn_waitpid(pid, &i, WNOHANG) == 0)  {
 			bp = buf;
 			i = 0;
 			while (socket_readable(err_pipe[0], 1000) && (i < XTRN_IO_BUF_LEN - 1))  {
@@ -2060,7 +2076,7 @@ int sbbs_t::external(const char* cmdline, int mode, const char* startup_dir)
 		if (!(mode & EX_STDIN)) {
 			if (passthru_thread_running)
 				passthru_socket_activate(false);
-			else
+			else if (input_thread_mutex_locked)
 				pthread_mutex_unlock(&input_thread_mutex);
 		}
 
@@ -2131,7 +2147,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case 'F':   /* File path */
 #if defined(__linux__)
-					if (!native && strncmp(fpath, cfg.node_dir, strlen(cfg.node_dir)) == 0) {
+					if (!native && startup->usedosemu && strncmp(fpath, cfg.node_dir, strlen(cfg.node_dir)) == 0) {
 						strncat(cmd, DOSEMU_NODE_DIR, avail);
 						strncat(cmd, fpath + strlen(cfg.node_dir), avail);
 					}
@@ -2141,7 +2157,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case 'G':   /* Temp directory */
 #if defined(__linux__)
-					if (!native)
+					if (!native && startup->usedosemu)
 						strncat(cmd, DOSEMU_TEMP_DIR, avail);
 					else
 #endif
@@ -2155,7 +2171,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case 'J':
 #if defined(__linux__)
-					if (!native)
+					if (!native && startup->usedosemu)
 						strncat(cmd, DOSEMU_DATA_DIR, avail);
 					else
 #endif
@@ -2163,7 +2179,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case 'K':
 #if defined(__linux__)
-					if (!native)
+					if (!native && startup->usedosemu)
 						strncat(cmd, DOSEMU_CTRL_DIR, avail);
 					else
 #endif
@@ -2177,7 +2193,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case 'N':   /* Node Directory (same as SBBSNODE environment var) */
 #if defined(__linux__)
-					if (!native)
+					if (!native && startup->usedosemu)
 						strncat(cmd, DOSEMU_NODE_DIR, avail);
 					else
 #endif
@@ -2222,7 +2238,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case 'Z':
 #if defined(__linux__)
-					if (!native)
+					if (!native && startup->usedosemu)
 						strncat(cmd, DOSEMU_TEXT_DIR, avail);
 					else
 #endif
@@ -2240,7 +2256,7 @@ char* sbbs_t::cmdstr(const char *instr, const char *fpath, const char *fspec, ch
 					break;
 				case '!':   /* EXEC Directory */
 #if defined(__linux__)
-					if (!native)
+					if (!native && startup->usedosemu)
 						strncat(cmd, DOSEMU_EXEC_DIR, avail);
 					else
 #endif

@@ -16,10 +16,10 @@ while (bbs.online && !console.aborted) {
         break;
     var timestamp = system.timestr(file_date(msg));
     print("\1n\1cInstant messages displayed \1h" + timestamp);
-    console.printfile(msg, P_NOATCODES);
+    console.printfile(msg, P_NOATCODES | P_AUTO_UTF8);
 	++displayed;
     console.mnemonics("\r\n~@Quit@, ~Recent, ~@Previous@ or [~@Next@]: ");
-    switch(console.getkeys("\b-+[]\x02\x1e\x0a\x1d\x06RPN\r" + console.quit_key)) {
+    switch(console.getkeys("\b-+[]\x02\x1e\x0a\x1d\x06RPN\r" + console.quit_key, 0)) {
         case 'R':
         case KEY_HOME:
             num = -1;

@@ -26,6 +26,8 @@
 #include "userdat.h"
 #include "nopen.h"
 
+extern const char* scfg_addr_list_separator;
+
 bool               no_msghdr = false, all_msghdr = false;
 static ini_style_t ini_style = { .key_prefix = "\t", .section_separator = "" };
 
@@ -80,8 +82,8 @@ bool write_node_cfg(scfg_t* cfg)
 
 	str_list_t ini = strListInit();
 	iniSetString(&ini, ROOT_SECTION, "phone", cfg->node_phone, NULL);
-	iniSetString(&ini, ROOT_SECTION, "daily", cfg->node_daily.cmd, NULL);
-	iniSetHexInt(&ini, ROOT_SECTION, "daily_settings", cfg->node_daily.misc, NULL);
+	iniSetString(&ini, ROOT_SECTION, "daily", cfg->node_daily_cmd, NULL);
+	iniSetHexInt(&ini, ROOT_SECTION, "daily_settings", cfg->node_daily_misc, NULL);
 	iniSetString(&ini, ROOT_SECTION, "text_dir", cfg->text_dir, NULL);
 	iniSetString(&ini, ROOT_SECTION, "temp_dir", cfg->temp_dir, NULL);
 	iniSetString(&ini, ROOT_SECTION, "ars", cfg->node_arstr, NULL);
@@ -95,6 +97,52 @@ bool write_node_cfg(scfg_t* cfg)
 	iniFreeStringList(ini);
 
 	return result;
+}
+
+/****************************************************************************/
+/****************************************************************************/
+static void write_loadable_module(str_list_t* ini, const char* name, struct loadable_module mod)
+{
+	char cmd_key[INI_MAX_VALUE_LEN];
+	char ars_key[INI_MAX_VALUE_LEN];
+	const char* section = "module";
+	int i;
+	int ars_count = strListCount(mod.ars);
+
+	if (mod.cmd == NULL)
+		return;
+
+	for (i = 0; mod.cmd[i] != NULL; ++i) {
+		if (i < 1) {
+			SAFECOPY(cmd_key, name);
+			snprintf(ars_key, sizeof ars_key, "%s.ars", name);
+		} else {
+			snprintf(cmd_key, sizeof cmd_key, "%s.%u", name, i);
+			snprintf(ars_key, sizeof ars_key, "%s.%u.ars", name, i);
+		}
+		iniSetString(ini, section, cmd_key, mod.cmd[i], &ini_style);
+		iniSetString(ini, section, ars_key, ars_count > i ? mod.ars[i] : "", &ini_style);
+	}
+}
+
+/****************************************************************************/
+/****************************************************************************/
+static void write_fixed_event(str_list_t* ini, const char* name, fevent_t event)
+{
+	char section[INI_MAX_VALUE_LEN];
+	int i;
+
+	if (event.cmd == NULL)
+		return;
+
+	for (i = 0; event.cmd[i] != NULL; ++i) {
+		if (i < 1)
+			snprintf(section, sizeof section, "%s_event", name);
+		else
+			snprintf(section, sizeof section, "%s_event.%u", name, i);
+		iniSetString(ini, section, "cmd", event.cmd[i], &ini_style);
+		iniSetHexInt(ini, section, "settings", event.misc[i], &ini_style);
+	}
 }
 
 /****************************************************************************/
@@ -127,6 +175,8 @@ bool write_main_cfg(scfg_t* cfg)
 	iniSetUInteger(&ini, ROOT_SECTION, "date_fmt", cfg->sys_date_fmt, NULL);
 	SAFEPRINTF(tmp, "%c", cfg->sys_date_sep);
 	iniSetString(&ini, ROOT_SECTION, "date_sep", tmp, NULL);
+	SAFEPRINTF(tmp, "%c", cfg->sys_vdate_sep);
+	iniSetString(&ini, ROOT_SECTION, "vdate_sep", tmp, NULL);
 	iniSetBool(&ini, ROOT_SECTION, "date_verbal", cfg->sys_date_verbal, NULL);
 	iniSetHexInt(&ini, ROOT_SECTION, "login", cfg->sys_login, NULL);
 	iniSetUInteger(&ini, ROOT_SECTION, "lastnode", cfg->sys_lastnode, NULL);
@@ -155,6 +205,8 @@ bool write_main_cfg(scfg_t* cfg)
 	iniSetUInteger(&ini, ROOT_SECTION, "valuser", cfg->valuser, NULL);
 	iniSetUInteger(&ini, ROOT_SECTION, "erruser", cfg->erruser, NULL);
 	iniSetUInteger(&ini, ROOT_SECTION, "errlevel", cfg->errlevel, NULL);
+	iniSetUInteger(&ini, ROOT_SECTION, "stats_interval", cfg->stats_interval, NULL);
+	iniSetUInteger(&ini, ROOT_SECTION, "cache_filter_files", cfg->cache_filter_files, NULL);
 
 	for (uint i = 0; i < cfg->sys_nodes; i++) {
 		char key[128];
@@ -172,6 +224,83 @@ bool write_main_cfg(scfg_t* cfg)
 		iniSetString(&ini, name, "mods", cfg->mods_dir, &ini_style);
 		iniSetString(&ini, name, "logs", cfg->logs_dir, &ini_style);
 	}
+
+	write_fixed_event(&ini, "newuser", cfg->sys_newuser);
+	write_fixed_event(&ini, "logon", cfg->sys_logon);
+	write_fixed_event(&ini, "logout", cfg->sys_logout);
+	write_fixed_event(&ini, "daily", cfg->sys_daily);
+	write_fixed_event(&ini, "monthly", cfg->sys_monthly);
+	write_fixed_event(&ini, "weekly", cfg->sys_weekly);
+
+	write_loadable_module(&ini, "logon", cfg->logon_mod);
+	write_loadable_module(&ini, "logoff", cfg->logoff_mod);
+	write_loadable_module(&ini, "newuser_prompts", cfg->newuser_prompts_mod);
+	write_loadable_module(&ini, "newuser_info", cfg->newuser_info_mod);
+	write_loadable_module(&ini, "newuser", cfg->newuser_mod);
+	write_loadable_module(&ini, "usercfg", cfg->usercfg_mod);
+	write_loadable_module(&ini, "login", cfg->login_mod);
+	write_loadable_module(&ini, "logout", cfg->logout_mod);
+	write_loadable_module(&ini, "sync", cfg->sync_mod);
+	write_loadable_module(&ini, "expire", cfg->expire_mod);
+	write_loadable_module(&ini, "emailsec", cfg->emailsec_mod);
+	write_loadable_module(&ini, "readmail", cfg->readmail_mod);
+	write_loadable_module(&ini, "scanposts", cfg->scanposts_mod);
+	write_loadable_module(&ini, "scansubs", cfg->scansubs_mod);
+	write_loadable_module(&ini, "listmsgs", cfg->listmsgs_mod);
+	write_loadable_module(&ini, "textsec", cfg->textsec_mod);
+	write_loadable_module(&ini, "chatsec", cfg->chatsec_mod);
+	write_loadable_module(&ini, "automsg", cfg->automsg_mod);
+	write_loadable_module(&ini, "feedback", cfg->feedback_mod);
+	write_loadable_module(&ini, "userlist", cfg->userlist_mod);
+	write_loadable_module(&ini, "nodelist", cfg->nodelist_mod);
+	write_loadable_module(&ini, "whosonline", cfg->whosonline_mod);
+	write_loadable_module(&ini, "privatemsg", cfg->privatemsg_mod);
+	write_loadable_module(&ini, "logonlist", cfg->logonlist_mod);
+	write_loadable_module(&ini, "xtrnsec", cfg->xtrnsec_mod);
+	write_loadable_module(&ini, "prextrn", cfg->prextrn_mod);
+	write_loadable_module(&ini, "postxtrn", cfg->postxtrn_mod);
+	write_loadable_module(&ini, "scandirs", cfg->scandirs_mod);
+	write_loadable_module(&ini, "listfiles", cfg->listfiles_mod);
+	write_loadable_module(&ini, "fileinfo", cfg->fileinfo_mod);
+	write_loadable_module(&ini, "batxfer", cfg->batxfer_mod);
+	write_loadable_module(&ini, "tempxfer", cfg->tempxfer_mod);
+	write_loadable_module(&ini, "uselect", cfg->uselect_mod);
+
+	/* Command Shells */
+	strListPush(&ini, "");
+	for (int i = 0; i < cfg->total_shells; i++) {
+		SAFEPRINTF(name, "shell:%s", cfg->shell[i]->code);
+		str_list_t section = strListInit();
+		iniSetString(&section, name, "name", cfg->shell[i]->name, &ini_style);
+		iniSetString(&section, name, "ars", cfg->shell[i]->arstr, &ini_style);
+		iniSetHexInt(&section, name, "settings", cfg->shell[i]->misc, &ini_style);
+		strListMerge(&ini, section);
+		free(section);
+	}
+
+	{
+		const char* name = "MQTT";
+		iniSetBool(&ini, name, "Enabled", cfg->mqtt.enabled, &ini_style);
+		iniSetBool(&ini, name, "Verbose", cfg->mqtt.verbose, &ini_style);
+		iniSetString(&ini, name, "Broker_addr", cfg->mqtt.broker_addr, &ini_style);
+		iniSetUInt16(&ini, name, "Broker_port", cfg->mqtt.broker_port, &ini_style);
+		iniSetInteger(&ini, name, "Protocol_version", cfg->mqtt.protocol_version, &ini_style);
+		iniSetInteger(&ini, name, "Keepalive", cfg->mqtt.keepalive, &ini_style);
+		iniSetInteger(&ini, name, "Publish_QOS", cfg->mqtt.publish_qos, &ini_style);
+		iniSetInteger(&ini, name, "Subscribe_QOS", cfg->mqtt.subscribe_qos, &ini_style);
+		iniSetString(&ini, name, "Username", cfg->mqtt.username, &ini_style);
+		iniSetString(&ini, name, "Password", cfg->mqtt.password, &ini_style);
+		iniSetLogLevel(&ini, name, "LogLevel", cfg->mqtt.log_level, &ini_style);
+		// TLS
+		iniSetInteger(&ini, name, "TLS_mode", cfg->mqtt.tls.mode, &ini_style);
+		iniSetString(&ini, name, "TLS_cafile", cfg->mqtt.tls.cafile, &ini_style);
+		iniSetString(&ini, name, "TLS_certfile", cfg->mqtt.tls.certfile, &ini_style);
+		iniSetString(&ini, name, "TLS_keyfile", cfg->mqtt.tls.keyfile, &ini_style);
+		iniSetString(&ini, name, "TLS_keypass", cfg->mqtt.tls.keypass, &ini_style);
+		iniSetString(&ini, name, "TLS_psk", cfg->mqtt.tls.psk, &ini_style);
+		iniSetString(&ini, name, "TLS_identity", cfg->mqtt.tls.identity, &ini_style);
+	}
+
 	{
 		const char* name = "newuser";
 		iniSetHexInt(&ini, name, "questions", cfg->uq, &ini_style);
@@ -204,17 +333,6 @@ bool write_main_cfg(scfg_t* cfg)
 		iniSetString(&ini, name, "gender_options", cfg->new_genders, &ini_style);
 	}
 
-	iniSetString(&ini, "logon_event", "cmd", cfg->sys_logon.cmd, &ini_style);
-	iniSetHexInt(&ini, "logon_event", "settings", cfg->sys_logon.misc, &ini_style);
-	iniSetString(&ini, "logout_event", "cmd", cfg->sys_logout.cmd, &ini_style);
-	iniSetHexInt(&ini, "logout_event", "settings", cfg->sys_logout.misc, &ini_style);
-	iniSetString(&ini, "daily_event", "cmd", cfg->sys_daily.cmd, &ini_style);
-	iniSetHexInt(&ini, "daily_event", "settings", cfg->sys_daily.misc, &ini_style);
-	iniSetString(&ini, "monthly_event", "cmd", cfg->sys_monthly.cmd, &ini_style);
-	iniSetHexInt(&ini, "monthly_event", "settings", cfg->sys_monthly.misc, &ini_style);
-	iniSetString(&ini, "weekly_event", "cmd", cfg->sys_weekly.cmd, &ini_style);
-	iniSetHexInt(&ini, "weekly_event", "settings", cfg->sys_weekly.misc, &ini_style);
-
 	{
 		const char* name = "expired";
 		iniSetUInteger(&ini, name, "level", cfg->expired_level, &ini_style);
@@ -226,65 +344,7 @@ bool write_main_cfg(scfg_t* cfg)
 		iniSetHexInt(&ini, name, "restrictions", cfg->expired_rest, &ini_style);
 	}
 
-	{
-		const char* name = "MQTT";
-		iniSetBool(&ini, name, "Enabled", cfg->mqtt.enabled, &ini_style);
-		iniSetBool(&ini, name, "Verbose", cfg->mqtt.verbose, &ini_style);
-		iniSetString(&ini, name, "Broker_addr", cfg->mqtt.broker_addr, &ini_style);
-		iniSetUInt16(&ini, name, "Broker_port", cfg->mqtt.broker_port, &ini_style);
-		iniSetInteger(&ini, name, "Protocol_version", cfg->mqtt.protocol_version, &ini_style);
-		iniSetInteger(&ini, name, "Keepalive", cfg->mqtt.keepalive, &ini_style);
-		iniSetInteger(&ini, name, "Publish_QOS", cfg->mqtt.publish_qos, &ini_style);
-		iniSetInteger(&ini, name, "Subscribe_QOS", cfg->mqtt.subscribe_qos, &ini_style);
-		iniSetString(&ini, name, "Username", cfg->mqtt.username, &ini_style);
-		iniSetString(&ini, name, "Password", cfg->mqtt.password, &ini_style);
-		iniSetLogLevel(&ini, name, "LogLevel", cfg->mqtt.log_level, &ini_style);
-		// TLS
-		iniSetInteger(&ini, name, "TLS_mode", cfg->mqtt.tls.mode, &ini_style);
-		iniSetString(&ini, name, "TLS_cafile", cfg->mqtt.tls.cafile, &ini_style);
-		iniSetString(&ini, name, "TLS_certfile", cfg->mqtt.tls.certfile, &ini_style);
-		iniSetString(&ini, name, "TLS_keyfile", cfg->mqtt.tls.keyfile, &ini_style);
-		iniSetString(&ini, name, "TLS_keypass", cfg->mqtt.tls.keypass, &ini_style);
-		iniSetString(&ini, name, "TLS_psk", cfg->mqtt.tls.psk, &ini_style);
-		iniSetString(&ini, name, "TLS_identity", cfg->mqtt.tls.identity, &ini_style);
-	}
-
-	{
-		const char* name = "module";
-		iniSetString(&ini, name, "logon", cfg->logon_mod, &ini_style);
-		iniSetString(&ini, name, "logoff", cfg->logoff_mod, &ini_style);
-		iniSetString(&ini, name, "newuser", cfg->newuser_mod, &ini_style);
-		iniSetString(&ini, name, "usercfg", cfg->usercfg_mod, &ini_style);
-		iniSetString(&ini, name, "login", cfg->login_mod, &ini_style);
-		iniSetString(&ini, name, "logout", cfg->logout_mod, &ini_style);
-		iniSetString(&ini, name, "sync", cfg->sync_mod, &ini_style);
-		iniSetString(&ini, name, "expire", cfg->expire_mod, &ini_style);
-		iniSetString(&ini, name, "readmail", cfg->readmail_mod, &ini_style);
-		iniSetString(&ini, name, "scanposts", cfg->scanposts_mod, &ini_style);
-		iniSetString(&ini, name, "scansubs", cfg->scansubs_mod, &ini_style);
-		iniSetString(&ini, name, "listmsgs", cfg->listmsgs_mod, &ini_style);
-		iniSetString(&ini, name, "textsec", cfg->textsec_mod, &ini_style);
-		iniSetString(&ini, name, "chatsec", cfg->chatsec_mod, &ini_style);
-		iniSetString(&ini, name, "automsg", cfg->automsg_mod, &ini_style);
-		iniSetString(&ini, name, "feedback", cfg->feedback_mod, &ini_style);
-		iniSetString(&ini, name, "userlist", cfg->userlist_mod, &ini_style);
-
-		iniSetString(&ini, name, "nodelist", cfg->nodelist_mod, &ini_style);
-		iniSetString(&ini, name, "whosonline", cfg->whosonline_mod, &ini_style);
-		iniSetString(&ini, name, "privatemsg", cfg->privatemsg_mod, &ini_style);
-		iniSetString(&ini, name, "logonlist", cfg->logonlist_mod, &ini_style);
-
-		iniSetString(&ini, name, "xtrnsec", cfg->xtrnsec_mod, &ini_style);
-		iniSetString(&ini, name, "prextrn", cfg->prextrn_mod, &ini_style);
-		iniSetString(&ini, name, "postxtrn", cfg->postxtrn_mod, &ini_style);
-
-		iniSetString(&ini, name, "scandirs", cfg->scandirs_mod, &ini_style);
-		iniSetString(&ini, name, "listfiles", cfg->listfiles_mod, &ini_style);
-		iniSetString(&ini, name, "fileinfo", cfg->fileinfo_mod, &ini_style);
-		iniSetString(&ini, name, "batxfer", cfg->batxfer_mod, &ini_style);
-		iniSetString(&ini, name, "tempxfer", cfg->tempxfer_mod, &ini_style);
-	}
-
+	strListPush(&ini, "");
 	for (uint i = 0; i < 10; i++) {
 		SAFEPRINTF(name, "valset:%u", i);
 		str_list_t section = strListInit();
@@ -301,6 +361,7 @@ bool write_main_cfg(scfg_t* cfg)
 		free(section);
 	}
 
+	strListPush(&ini, "");
 	for (uint i = 0; i < 100; i++) {
 		SAFEPRINTF(name, "level:%u", i);
 		str_list_t section = strListInit();
@@ -314,17 +375,6 @@ bool write_main_cfg(scfg_t* cfg)
 		iniSetUInteger(&section, name, "expireto", cfg->level_expireto[i], &ini_style);
 		iniSetBytes(&section, name, "freecdtperday", 1, cfg->level_freecdtperday[i], &ini_style);
 		iniSetUInteger(&section, name, "downloadsperday", cfg->level_downloadsperday[i], &ini_style);
-		strListMerge(&ini, section);
-		free(section);
-	}
-
-	/* Command Shells */
-	for (int i = 0; i < cfg->total_shells; i++) {
-		SAFEPRINTF(name, "shell:%s", cfg->shell[i]->code);
-		str_list_t section = strListInit();
-		iniSetString(&section, name, "name", cfg->shell[i]->name, &ini_style);
-		iniSetString(&section, name, "ars", cfg->shell[i]->arstr, &ini_style);
-		iniSetHexInt(&section, name, "settings", cfg->shell[i]->misc, &ini_style);
 		strListMerge(&ini, section);
 		free(section);
 	}
@@ -499,7 +549,7 @@ bool write_msgs_cfg(scfg_t* cfg)
 		str_list_t  addr_list = strListInit();
 		for (int i = 0; i < cfg->total_faddrs; i++)
 			strListPush(&addr_list, smb_faddrtoa(&cfg->faddr[i], tmp));
-		iniSetStringList(&section, name, "addr_list", ",", addr_list, &ini_style);
+		iniSetStringList(&section, name, "addr_list", scfg_addr_list_separator, addr_list, &ini_style);
 		strListFree(&addr_list);
 
 		iniSetString(&section, name, "default_origin", cfg->origline, &ini_style);
@@ -1041,6 +1091,7 @@ bool write_xtrn_cfg(scfg_t* cfg)
 		iniSetHexInt(&section, name, "mdays", cfg->event[i]->mdays, &ini_style);
 		iniSetUInteger(&section, name, "months", cfg->event[i]->months, &ini_style);
 		iniSetUInteger(&section, name, "errlevel", cfg->event[i]->errlevel, &ini_style);
+		iniSetString(&section, name, "xtrn", cfg->event[i]->xtrn, &ini_style);
 		strListMerge(&ini, section);
 		free(section);
 	}

@@ -47,6 +47,8 @@ static char*             helpfile = 0;
 static uint              helpline = 0;
 static size_t            blk_scrn_len;
 static struct vmem_cell *blk_scrn;
+static unsigned char     blk_scrn_attr = 0;
+static unsigned char     blk_scrn_ch = 0;
 static struct vmem_cell *tmp_buffer;
 static struct vmem_cell *tmp_buffer2;
 static win_t             sav[MAX_BUFS];
@@ -68,10 +70,10 @@ static int  ulist(uifc_winmode_t, int left, int top, int width, int *dflt, int *
 static int  uinput(uifc_winmode_t, int left, int top, const char *prompt, char *str
                    , int len, int kmode);
 static int  umsg(const char *str);
-static int  umsgf(char *fmt, ...);
-static BOOL confirm(char *fmt, ...);
-static BOOL deny(char *fmt, ...);
-static void upop(const char *str);
+static int  umsgf(const char *fmt, ...);
+static BOOL confirm(const char *fmt, ...);
+static BOOL deny(const char *fmt, ...);
+static void upop(const char *str, ...);
 static void sethelp(int line, char* file);
 static void showbuf(uifc_winmode_t, int left, int top, int width, int height, const char *title
                     , const char *hbuf, int *curp, int *barp);
@@ -176,21 +178,15 @@ void uifc_mouse_disable(void)
 	hidemouse();
 }
 
-int kbwait(void) {
-	int timeout = 0;
-	while (timeout++ < 50) {
-		if (kbhit())
-			return TRUE;
-		mswait(1);
-	}
-	return FALSE;
+int uifc_kbwait(void) {
+	return kbwait(100);
 }
 
 static int
 dyn_kbwait(uifc_winmode_t mode) {
 	if (mode & WIN_DYN)
 		return kbhit();
-	return kbwait();
+	return uifc_kbwait();
 }
 
 int inkey(void)
@@ -204,6 +200,24 @@ int inkey(void)
 			c = 0xe0;
 	}
 	return c;
+}
+
+static void
+fill_blk_scrn(BOOL force)
+{
+	uchar attr = api->cclr | (api->bclr << 4);
+	if (!blk_scrn)
+		return;
+	if (force || blk_scrn_attr != attr || blk_scrn_ch != api->chars->background) {
+		for (size_t i = 0; i < blk_scrn_len; i++) {
+			blk_scrn[i].legacy_attr = attr;
+			blk_scrn[i].ch = api->chars->background;
+			blk_scrn[i].font = 0;
+			attr2palette(blk_scrn[i].legacy_attr, &blk_scrn[i].fg, &blk_scrn[i].bg);
+		}
+		blk_scrn_ch = api->chars->background;
+		blk_scrn_attr = attr;
+	}
 }
 
 int uifcini32(uifcapi_t* uifcapi)
@@ -340,12 +354,7 @@ int uifcini32(uifcapi_t* uifcapi)
 		        , __LINE__, blk_scrn_len * sizeof(*blk_scrn));
 		return -1;
 	}
-	for (i = 0; i < blk_scrn_len; i++) {
-		blk_scrn[i].legacy_attr = api->cclr | (api->bclr << 4);
-		blk_scrn[i].ch = api->chars->background;
-		blk_scrn[i].font = 0;
-		attr2palette(blk_scrn[i].legacy_attr, &blk_scrn[i].fg, &blk_scrn[i].bg);
-	}
+	fill_blk_scrn(TRUE);
 
 	cursor = _NOCURSOR;
 	_setcursortype(cursor);
@@ -556,6 +565,7 @@ int uscrn(const char *str)
 	clreol();
 	gotoxy(3, 1);
 	cputs(str);
+	fill_blk_scrn(FALSE);
 	if (!vmem_puttext(1, 2, api->scrn_width, api->scrn_len, blk_scrn))
 		return -1;
 	gotoxy(1, api->scrn_len + 1);
@@ -855,8 +865,9 @@ int ulist(uifc_winmode_t mode, int left, int top, int width, int *cur, int *bar
 			}
 			else {
 				/* Find something available... */
-				while (sav[api->savnum].buf != NULL)
+				while (sav[api->savnum].buf != NULL && api->savnum < MAX_BUFS - 1)
 					api->savnum++;
+				FREE_AND_NULL(sav[api->savnum].buf);
 			}
 		}
 		else {
@@ -881,16 +892,24 @@ int ulist(uifc_winmode_t mode, int left, int top, int width, int *cur, int *bar
 
 	if (!is_redraw) {
 		if (mode & WIN_ORG) { /* Clear around menu */
-			if (top)
+			if (top) {
+				fill_blk_scrn(FALSE);
 				vmem_puttext(1, 2, api->scrn_width, s_top + top - 1, blk_scrn);
-			if ((unsigned)(s_top + height + top) <= api->scrn_len)
+			}
+			if ((unsigned)(s_top + height + top) <= api->scrn_len) {
+				fill_blk_scrn(FALSE);
 				vmem_puttext(1, s_top + height + top, api->scrn_width, api->scrn_len, blk_scrn);
-			if (left)
+			}
+			if (left) {
+				fill_blk_scrn(FALSE);
 				vmem_puttext(1, s_top + top, s_left + left - 1, s_top + height + top
 				             , blk_scrn);
-			if (s_left + left + width <= s_right)
+			}
+			if (s_left + left + width <= s_right) {
+				fill_blk_scrn(FALSE);
 				vmem_puttext(s_left + left + width, s_top + top, /* s_right+2 */ api->scrn_width
 				             , s_top + height + top, blk_scrn);
+			}
 		}
 		ptr = tmp_buffer;
 		if (!(mode & WIN_NOBRDR)) {
@@ -1493,7 +1512,7 @@ int ulist(uifc_winmode_t mode, int left, int top, int width, int *cur, int *bar
 							(*bar) = optheight - vbrdrsize - 1;
 						vmem_gettext(s_left + lbrdrwidth + 2 + left, s_top + y
 						             , s_left + left + width - rbrdrwidth - 1, s_top + y, line);
-						for (i = 0; i < 74; i++)
+						for (i = 0; i < width; i++)
 							set_vmem_attr(&line[i], lbclr);
 						vmem_puttext(s_left + lbrdrwidth + 2 + left, s_top + y
 						             , s_left + left + width - rbrdrwidth - 1, s_top + y, line);
@@ -1970,16 +1989,24 @@ int uinput(uifc_winmode_t mode, int left, int top, const char *inprompt, char *s
 		vmem_gettext(1, api->scrn_len + 1, api->scrn_width, api->scrn_len + 1, save_bottomline);
 	}
 	if (mode & WIN_ORG) { /* Clear around menu */
-		if (top)
+		if (top) {
+			fill_blk_scrn(FALSE);
 			vmem_puttext(1, 2, api->scrn_width, s_top + top - 1, blk_scrn);
-		if ((unsigned)(s_top + height + top) <= api->scrn_len)
+		}
+		if ((unsigned)(s_top + height + top) <= api->scrn_len) {
+			fill_blk_scrn(FALSE);
 			vmem_puttext(1, s_top + height + top, api->scrn_width, api->scrn_len, blk_scrn);
-		if (left)
+		}
+		if (left) {
+			fill_blk_scrn(FALSE);
 			vmem_puttext(1, s_top + top, s_left + left - 1, s_top + height + top
 			             , blk_scrn);
-		if (s_left + left + width <= s_right)
+		}
+		if (s_left + left + width <= s_right) {
+			fill_blk_scrn(FALSE);
 			vmem_puttext(s_left + left + width, s_top + top, /* s_right+2 */ api->scrn_width
 			             , s_top + height + top, blk_scrn);
+		}
 	}
 
 	iwidth = width - plen - slen;
@@ -2091,7 +2118,7 @@ int  umsg(const char *str)
 }
 
 /* Same as above, using printf-style varargs */
-int umsgf(char* fmt, ...)
+int umsgf(const char* fmt, ...)
 {
 	int     retval = -1;
 	va_list va;
@@ -2107,7 +2134,7 @@ int umsgf(char* fmt, ...)
 	return retval;
 }
 
-static int yesno(int dflt, char* fmt, va_list va)
+static int yesno(int dflt, const char* fmt, va_list va)
 {
 	int   retval;
 	char* buf = NULL;
@@ -2121,7 +2148,7 @@ static int yesno(int dflt, char* fmt, va_list va)
 	return retval;
 }
 
-static BOOL confirm(char* fmt, ...)
+static BOOL confirm(const char* fmt, ...)
 {
 	int     retval;
 
@@ -2132,7 +2159,7 @@ static BOOL confirm(char* fmt, ...)
 	return retval == 0;
 }
 
-static BOOL deny(char* fmt, ...)
+static BOOL deny(const char* fmt, ...)
 {
 	int     retval;
 
@@ -2214,7 +2241,7 @@ int ugetstr(int left, int top, int width, char *outstr, int max, long mode, int 
 		}
 		strcpy(str, outstr);
 #if 0
-		while (kbwait() == 0) {
+		while (uifc_kbwait() == 0) {
 			mswait(1);
 		}
 #endif
@@ -2311,9 +2338,9 @@ int ugetstr(int left, int top, int width, char *outstr, int max, long mode, int 
 					pb = NULL;
 				}
 			}
-			if ((mode & K_TRIM) && i < 1 && IS_WHITESPACE(ch))
+			if ((mode & (K_SPACE|K_TRIM)) == K_TRIM && i < 1 && IS_WHITESPACE(ch))
 				continue;
-			if ((mode & K_NOSPACE) && IS_WHITESPACE(ch))
+			if ((mode & (K_SPACE|K_NOSPACE)) == K_NOSPACE && IS_WHITESPACE(ch))
 				continue;
 			if (ch == CIO_KEY_MOUSE) {
 				ch = uifc_getmouse(&mevnt);
@@ -2504,14 +2531,16 @@ int ugetstr(int left, int top, int width, char *outstr, int max, long mode, int 
 					}
 					continue;
 			}
-			if (mode & K_NUMBER && !isdigit(ch))
-				continue;
-			if (mode & K_DECIMAL && !isdigit(ch)) {
-				if (ch != '.')
+			if (!((mode & K_NEGATIVE) && ch == '-' && i == 0)) {
+				if (mode & K_NUMBER && !isdigit(ch))
 					continue;
-				if (gotdecimal)
-					continue;
-				gotdecimal = TRUE;
+				if (mode & K_DECIMAL && !isdigit(ch)) {
+					if (ch != '.')
+						continue;
+					if (gotdecimal)
+						continue;
+					gotdecimal = TRUE;
+				}
 			}
 			if (mode & K_ALPHA && !isalpha(ch))
 				continue;
@@ -2533,17 +2562,19 @@ int ugetstr(int left, int top, int width, char *outstr, int max, long mode, int 
 	str[j] = 0;
 	if (mode & K_EDIT)
 	{
-		if (!(mode & K_FIND) && strcmp(outstr, str))
-			api->changes = 1;
+		if (strcmp(outstr, str) != 0) {
+			if (!(mode & K_FIND))
+				api->changes = TRUE;
+		}
 		else if (mode & K_CHANGED)
 			j = -1;
 	}
 	else
 	{
 		if (!(mode & K_FIND) && j)
-			api->changes = 1;
+			api->changes = TRUE;
 	}
-	if (mode & K_TRIM)
+	if ((mode & (K_SPACE|K_TRIM)) == K_TRIM)
 		truncspctrl(str);
 	strcpy(outstr, str);
 	cursor = _NOCURSOR;
@@ -2564,7 +2595,7 @@ static int uprintf(int x, int y, unsigned attr, char *fmat, ...)
 	int              i;
 
 	va_start(argptr, fmat);
-	vsprintf(str, fmat, argptr);
+	vsnprintf(str, sizeof(str), fmat, argptr);
 	va_end(argptr);
 	for (i = 0; str[i]; i++)
 		set_vmem(&buf[i], str[i], attr, 0);
@@ -2737,9 +2768,9 @@ char *utimestr(time_t *intime)
 /****************************************************************************/
 /* Status popup/down function, see uifc.h for details.						*/
 /****************************************************************************/
-void upop(const char *instr)
+void upop(const char *instr, ...)
 {
-	char                    str[(MAX_COLS - 7) + 1];
+	char*                   str;
 	static struct vmem_cell sav[MAX_COLS * 3], buf[MAX_COLS * 3];
 	int                     i, j, k;
 	static int              width;
@@ -2750,10 +2781,18 @@ void upop(const char *instr)
 		return;
 	}
 
-	strlcpy(str, instr, sizeof str);
-	width = strlen(str);
-	if (!width)
+	va_list va;
+	va_start(va, instr);
+	i = vasprintf(&str, instr, va);
+	va_end(va);
+	if (i < 0)
 		return;
+
+	width = strlen(str);
+	if (!width) {
+		free(str);
+		return;
+	}
 	width += 7;
 	if ((uint)width > api->scrn_width) {
 		str[api->scrn_width - 7] = '\0';
@@ -2781,6 +2820,8 @@ void upop(const char *instr)
 
 	vmem_puttext((api->scrn_width - width + 1) / 2 + 1, (api->scrn_len - 3 + 1) / 2 + 1
 	             , (api->scrn_width + width - 1) / 2 + 1, (api->scrn_len + 3 - 1) / 2 + 1, buf);
+
+	free(str);
 }
 
 /****************************************************************************/
@@ -3153,7 +3194,7 @@ static void help(void)
 				if (fread(&line, 2, 1, fp) != 1)
 					break;
 				if (stricmp(str, p) || line != helpline) {
-					if (fseek(fp, 4, SEEK_CUR) == 0)
+					if (fseek(fp, 4, SEEK_CUR) != 0)
 						break;
 					continue;
 				}

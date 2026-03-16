@@ -45,7 +45,7 @@ size_t sbbs_t::getstr(char *strout, size_t maxlen, int mode, const str_list_t hi
 	if (!(mode & K_WORDWRAP))
 		console &= ~CON_INSERT;
 	clearabort();
-	if (!(mode & K_LINEWRAP) && term->cols >= TERM_COLS_MIN && !(mode & K_NOECHO) && !(console & CON_R_ECHOX)
+	if (!(mode & K_LINEWRAP) && term->cols >= TERM_COLS_MIN && !(mode & K_NOECHO) && !(console & CON_PASSWORD)
 	    && term->column + (int)maxlen >= term->cols)    /* Don't allow the terminal to auto line-wrap */
 		maxlen = term->cols - term->column - 1;
 	if (mode & K_LINE && (term->can_highlight()) && !(mode & K_NOECHO)) {
@@ -83,7 +83,7 @@ size_t sbbs_t::getstr(char *strout, size_t maxlen, int mode, const str_list_t hi
 	if (mode & K_AUTODEL && str1[0] && !(mode & K_NOECHO)) {
 		ch = getkey(mode | K_GETSTR);
 		attr(atr);
-		if (IS_PRINTABLE(ch) || ch == DEL) {
+		if (IS_PRINTABLE(ch) || ch == DEL || ch == BS) {
 			for (i = 0; i < l; i++)
 				term->backspace();
 			i = l = 0;
@@ -120,7 +120,7 @@ size_t sbbs_t::getstr(char *strout, size_t maxlen, int mode, const str_list_t hi
 			break;
 		if (sys_status & SS_ABORT || !online)
 			break;
-		if (ch == LF && mode & K_MSG) { /* Down-arrow same as CR */
+		if (ch == TERM_KEY_DOWN && (mode & K_MSG) && history == nullptr) { // Down-arrow same as CR
 			console |= CON_DOWNARROW;
 			break;
 		}

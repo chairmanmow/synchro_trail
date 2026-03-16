@@ -1,187 +1,21 @@
-/* This is a file lister door for Synchronet.
+/* This is a file lister door for Synchronet.  This file lister has a lightbar/scrolling
+ * interface (for ANSI users) and a traditional user interface (which can be used both
+ * for ANSI and non-ANSI users).
  *
  * Author: Eric Oulashin (AKA Nightfox)
  * BBS: Digital Distortion
  * BBS address: digitaldistortionbbs.com (or digdist.synchro.net)
- *
- * Date       Author            Description
- * 2022-01-17 Eric Oulashin     Version 0.01
- *                              Started work on this script
- * 2022-02-06 Eric Oulashin     Version 2.00
- *                              Functionality implemented (for lightbar/ANSI terminal).
- *                              Seems to work as expected.  Releasing this version.
- *                              I'm calling this version 2.00 because I had already
- *                              released a file lister mod years ago (modding the stock
- *                              Synchronet file list interface).
- * 2022-02-07 Eric Oulashin     Version 2.01
- *                              Fixed file description being undefined when viewing
- *                              file info.  Fixed command bar refreshing when pressing
- *                              the hotkeys.  Added an option to pause after viewing a
- *                              file (defaults to true).
- * 2022-02-13 Eric Oulashin     Version 2.02
- *                              Things overall look good. Releasing this version.  Added
- *                              the ability to do searching via filespec, description, and
- *                              new file search (started working on this 2022-02-08).
- * 2022-02-27 Eric Oulashin     Version 2.03
- *                              For terminals over 25 rows tall, the file info window will
- *                              now be up to 45 rows tall.  Also, fixed the display of the
- *                              trailing blocks for the list header for wide terminals (over
- *                              80 columns).
- * 2022-03-09 Eric Oulashin     Version 2.04
- *                              Bug fix: Now successfully formats filenames without extensions
- *                              when listing files.
- * 2022-03-12 Eric Oulashin     Version 2.05
- *                              Now makes use of the user's extended file description setting:
- *                              If the user's extended file description setting is enabled,
- *                              the lister will now show extended file descriptions on the
- *                              main screen in a split format, with the lightbar file list
- *                              on the left and the extended file description for the
- *                              highlighted file on the right.  Also, made the file info
- *                              window taller for terminals within 25 lines high.
- *                              I had started work on this on March 9, 2022.
- * 2022-03-13 Eric Oulashin     Version 2.05a
- *                              Fix for "fileDesc is not defined" error when displaying
- *                              the file description on the main screen.  Also made a
- *                              small refactor to the main screen refresh function.
- * 2022-04-13 Eric Oulashin     Version 2.06
- *                              When extended file descriptions are enabled, the file
- *                              date is now shown with the file description on the last
- *                              line.
- * 2022-12-02 Eric Oulashin     Version 2.07
- *                              In a file's extended description, added the number of times
- *                              downloaded and date/time last downloaded.  Also, fixed a bug
- *                              where some descriptions were blank in the Frame object because
- *                              of a leading normal attribute (the fix may be a kludge though).
- * 2023-01-18 Eric Oulashin     Version 2.08
- *                              When doing a file search in multiple directories, the file
- *                              library & directory is now shown in the header as the user
- *                              scrolls through the file list/search results.  Also,
- *                              used lfexpand() to ensure the extended description has
- *                              CRLF endings, useful for splitting it into multiple lines properly.
- * 2023-02-25 Eric Oulashin     Version 2.09
- *                              Now supports being used as a loadable module for
- *                              Scan Dirs and List Files
- * 2023-02-27 Eric Oulashin     Version 2.10
- *                              Now allows downloading a single selected file with the D key.
- *                              Also, ddfilelister now checks whether the user has permission to
- *                              download before allowing adding files to their batch download queue
- *                              (and downloading a single file as well).
- * 2023-05-14 Eric Oulashin     Version 2.11
- *                              Refactored the function that reads the configuration file. Also,
- *                              the theme configuration file can now just contain the attribute
- *                              characters, without the control character.
- *
- *                              Future work: Actual support for a traditional/non-lightbar user interface
- * 2023-07-29 Eric Oulashin     Version 2.12 Beta
- *                              Started working on implementing a traditional/non-lightbar UI
- * 2023-08-12 Eric Oulashin     Version 2.12
- *                              Releasing this version
- * 2023-08-13 Eric Oulashin     Version 2.13
- *                              Refactor for printing file info for traditional UI. Fixes for
- *                              quitting certain actions for traditional UI. Prints selected action
- *                              for traditional UI.
- * 2023-09-02 Eric Oulashin     Version 2.14
- *                              Fix for the lightbar interface: When erasing the file info window,
- *                              the file date is not shown on a duplicate line if the file date is
- *                              already showing in the description area (i.e., for a 1-line file
- *                              description)
- * 2023-09-16 Eric Oulashin     Version 2.15
- *                              Fix for "Empty directory" message after quitting (the lister must
- *                              exit with the number of files listed).  Also, updates for filename
- *                              searching, and help screen now should always pause.
- * 2023-09-17 Eric Oulashin     New configuration option: blankNFilesListedStrIfLoadableModule,
- *                              If true (default), then when started as a loadable module, replace the
- *                              "# Files Listed" text with an empty string so that it won't be displayed
- *                              after exit
- * 2023-11-11 Eric Oulashin     Version 2.15a
- *                              On start, if console.aborted is true (due to the user pressing Ctrl-C, etc.),
- *                              then return -1 to stop a file scan in progress.
- * 2024-02-02 Eric Oulashin     Version 2.15b
- *                              More checks for pFileList[pIdx] and the 'desc' property when getting the description
- * 2024-02-10 Eric Oulashin     Version 2.16
- *                              New sort option in the config file: PER_DIR_CFG, which has Synchronet sort
- *                              the file list according to the file directory's configuration (SCFG >
- *                              File Areas > library > File Directories > dir > Advanced Options > Sort Value and Direction)
- * 2024-02-28 Eric Oulashin     Version 2.17
- *                              Fix for possibly no file description when adding to the batch DL queue.
- *                              Also, fix for file description screen refresh (off by one column) for extended
- *                              descriptions
- * 2024-03-08 Eric Oulashin     Version 2.18
- *                              Bug fix: Got description search working when used as a loadable module.
- *                              Added Ctrl-C to the help screen to mention it can be used to abort.
- * 2024-03-11 Eric Oulashin     Version 2.19
- *                              Screen refresh fix: When printing the empty lines after an extended
- *                              description, ensure the whole line width is used (the last character
- *                              was being left there when it should have been written over with a space)
- * 2024-03-22 Eric Oulashin     Version 2.20
- *                              (Hopefully) Fix for descLines being undefined in getFileInfoLineArrayForTraditionalUI()
- * 2024-04-08 Eric Oulashin     Version 2.21 Beta
- *                              Fix: Searching by file date as a loadable module now does the new file search
- * 2024-04-09 Eric Oulashin     Version 2.21
- *                              Releasing this version
- * 2024-08-14 Eric Oulashin     Version 2.22 Beta
- *                              Started working on adding the ability to edit file details/information (for the sysop)
- * 2024-08-16 Eric Oulashin     Version 2.22
- *                              Releasing this version
- * 2024-09-13 Eric Oulashin     Version 2.23
- *                              Check for null when getting extended metadata from the file DB (possibly caused
- *                              by DB corruption). Also, allow changing the filename when editing file info.
- * 2024-09-15 Eric Oulashin     Version 2.24
- *                              When displaying a file description, remove/replace cursor movement
- *                              characters, which can corrupt the display
- * 2024-10-29 Eric Oulashin     Version 2.24a
- *                              When doing a file search, don't call console.pause() between directories.
- *                              This is a fix for issue 806 (reported by nelgin).
- * 2024-10-30 Eric Oulashin     Version 2.25 Beta
- *                              Made 'view file' (FL_VIEW) work when used as a loadable module.
- *                              Refactored some stuff in the process.
- * 2024-10-31 Eric Oulashin     Version 2.25
- *                              Finished up the 'view file' update. Also refactored the way
- *                              file extended info is displayed - Added information to match
- *                              Synchronet's stock lister, and display the uploader's avatar
- *                              if available
- * 2024-11-12 Eric Oulashin     Version 2.25a
- *                              Check to see if cost is in the file metadata before using it.
- *                              Also, when getting a file's full path, ensure the filename is
- *                              passed to get_path() (as described in the JS documentation)
- * 2024-11-24 Eric Oulashin     Version 2.25b
- *                              When editing file information, check whether cost and times_downloaded
- *                              exist in the metadata before accessing them
- * 2024-12-08 Eric Oulashin     Version 2.25c
- *                              Check whether 'desc' is a string in file metadata before trying to use it
- * 2024-12-27 Eric Oulashin     Version 2.26
- *                              New configuration setting: useFilenameIfNoDescription - If a
- *                              file's description is empty, show its filename in the list instead
- * 2025-02-20 Eric Oulashin     Version 2.27
- *                              Now optionally displays the number of files in the directory in the
- *                              header at the top of the list, configurable with the
- *                              displayNumFilesInHeader option in the config file
- * 2025-02-23 Eric Oulashin     Version 2.28
- *                              If extended descriptions are enabled and a filename is too long to
- *                              fully fit in the menu, prepend the full filename (wrapped) to the
- *                              description.
- *                              New bottom line menu option to toggle extended descriptions on/off
- *                              Fix: useFilenameIfNoDescription option now used in traditional
- *                              (non-lightbar) mode.
- * 2025-02-25 Eric Oulashin     Version 2.28a
- *                              Long filename color fix for some edge cases.
- *                              The setting useFilenameIfNoDescription changed to
- *                              useFilenameIfShortDescriptionEmpty.
- *                              New setting: filenameInExtendedDescription
- * 2025-02-27 Eric Oulashin     Version 2.28b
- *                              Formatting improvement for the traditional (non-lightbar) user interface
- *                              for some long descriptions using ANSI - Removal of cursor movement codes
- *                              and expanding newlines
- *                              Refactored the way the settings and colors are structured in the
- *                              code. No functional change.
- * 2025-03-06 Eric Oulashin     Version 2.29
- *                              Bug fix for editing ext'd description when a file has no ext'd
- *                              description initially
- * 2025-06-18 Eric Oulashin     Version 2.30
- *                              Input timeout fix (only applicable when using a scrollable box,
- *                              such as when viwing file info). Also, improvement in showing the
- *                              time to download a file.
  */
+
+// TODO: RIP support?
+// 2026-02-19 - m1ndsurfer in Synchronet IRC mentioned for C64 files, basically converting PETSCII
+// characters to something that can be displayed on other terminals; Generating RIP file descriptions?
+// Using ImageMagick to convert to .png; and display as a small sixel image?
+// <m1ndsurf3r> Nightfox: maybe via c1541 image.d64 -list > listing.txt and then via ImageMagick and a C64 Petscii
+// Font ... magick -background "#4040ff" -fill "#a5a5ff" -font "./C64_Pro_Mono-STYLE.ttf" -pointsize 16 -bordercolor
+// "#4040ff" -border 20 label:"$(cat listing.txt)" listing_output.png
+//
+// https://www.c64-wiki.com/wiki/PETSCII
 
 "use strict";
 
@@ -213,6 +47,7 @@ require("sbbsdefs.js", "K_UPPER");
 require('key_defs.js', 'KEY_UP');
 require("text.js", "Email"); // Text string definitions (referencing text.dat)
 require("dd_lightbar_menu.js", "DDLightbarMenu");
+require("cp437_defs.js", "CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE");
 require("frame.js", "Frame");
 require("scrollbar.js", "ScrollBar");
 require("mouse_getkey.js", "mouse_getkey");
@@ -222,24 +57,14 @@ var gAvatar = load({}, "avatar_lib.js");
 
 
 // Version information
-var LISTER_VERSION = "2.30";
-var LISTER_DATE = "2025-06-18";
+var LISTER_VERSION = "2.33";
+var LISTER_DATE = "2026-03-11";
 
 
 ///////////////////////////////////////////////////////////////////////////////
 // Global variables
 
 var KEY_BACKSPACE = CTRL_H;
-
-// Block characters
-var BLOCK1 = "\xB0"; // Dimmest block
-var BLOCK2 = "\xB1";
-var BLOCK3 = "\xB2";
-var BLOCK4 = "\xDB"; // Brightest block
-var THIN_RECTANGLE_LEFT = "\xDD";
-var THIN_RECTANGLE_RIGHT = "\xDE";
-var RIGHT_T_HDOUBLE_VSINGLE = "\xB5";
-var LEFT_T_HDOUBLE_VSINGLE = "\xcC6";
 
 // For file sizes
 //var BYTES_PER_TB = 1099511627776; // Seems to be too big for JS
@@ -336,6 +161,12 @@ var gScanAllDirs = false;
 
 // Read settings from the configuration file
 var gSettings = readConfigFile();
+
+// In case a custom file list header filename is specified, keep an array of
+// text lines read from that file.
+var gCustomFileListHdrLines = [];
+if (gSettings.headerFilename.length > 0)
+	gCustomFileListHdrLines = loadTextFileIntoArray(gSettings.headerFilename, gSettings.headerMaxLines);
 
 // Parse command-line arguments (which sets program options)
 var gRunningAsLoadableModule = parseArgs(argv);
@@ -598,9 +429,14 @@ else
 	for (var i = 0; i < gFileList.length; ++i)
 		allFileInfoLines = allFileInfoLines.concat(getFileInfoLineArrayForTraditionalUI(gFileList, i, formatInfo));
 
-	// Number of files per page, assuming 1-line descriptions; 3 lines for top
-	// header and 1 line for bottom key help line
-	var numLinesPerPage = console.screen_rows - 4;
+	// Number of files per page, assuming 1-line descriptions
+	// If a custom file list header was loaded, use the number of lines from that;
+	// otherwise, use the default header: 3 lines for top header and 1 line for the
+	// bottom key help line
+	var numTopHeaderLines = 4;
+	if (gCustomFileListHdrLines.length > 0)
+		numTopHeaderLines = gCustomFileListHdrLines + 1; // + 1 for the file list header line "Filename, Size, Description"
+	var numLinesPerPage = console.screen_rows - numTopHeaderLines;
 	var topItemIdx = 0;
 	var topItemIndexForLastPage = allFileInfoLines.length - numLinesPerPage;
 
@@ -857,6 +693,11 @@ else
 	}
 }
 
+// Output a CRLF - In case a file search is happening, a
+// CRLF will allow the "Scanning.." text to appear on its
+// own line
+console.print("\x01n\r\n");
+
 // The exit code needs to be the number of files listed (this is important if this
 // script is used as a loadable module).
 exit(gFileList.length);
@@ -1101,6 +942,8 @@ function showFileInfo_ANSI(pFileMetadata)
 
 	// Short file description (ensure we have a string)
 	var shortFileDesc = (typeof(fileMetadata.desc) === "string" ? fileMetadata.desc : "");
+	// Sanitize the description to avoid display issues
+	shortFileDesc = stripBadCharsFromStr(shortFileDesc, true);
 
 	// The width of the frame to display the file info (including borders).  This
 	// is declared early so that it can be used for string length adjustment.
@@ -1257,6 +1100,8 @@ function showFileInfo_ANSI(pFileMetadata)
 		// since that seems to cause problems with displaying the description in a Frame object.  This
 		// may be a kludge, and perhaps there's a better solution..
 		fileDesc = fileDesc.replace(/^\x01[nN]/, "");
+		// Sanitize the description to avoid display issues
+		fileDesc = stripBadCharsFromStr(fileDesc, true);
 		// Fix line endings if necessary
 		fileDesc = lfexpand(fileDesc);
 		// Convert any non-Synchronet attribute codes to Synchronet attribute codes
@@ -1338,6 +1183,8 @@ function showFileInfo_noANSI(pFileMetadata)
 
 	// Short file description (ensure we have a string)
 	var shortFileDesc = (typeof(fileMetadata.desc) === "string" ? fileMetadata.desc : "");
+	// Sanitize the description to avoid display issues
+	shortFileDesc = stripBadCharsFromStr(shortFileDesc, true);
 
 	var labelLen = 16;
 	var lblSep = " : ";
@@ -1410,13 +1257,15 @@ function showFileInfo_noANSI(pFileMetadata)
 	var timesDownloaded = fileMetadata.hasOwnProperty("times_downloaded") ? fileMetadata.times_downloaded : 0;
 	printf(generalFormatStr, "Times downloaded", timesDownloaded);
 	printf(generalFormatStr, "Time to download", secondsToTimeStr(calcDownloadTimeInSeconds(fileMetadata.size)));
-	// Extended description (if available)
+	// Extended description (if available - And sanitize the description to avoid display issues)
 	console.attributes = "N";
 	console.print(gSettings.colors.desc);
 	if (fileMetadata.hasOwnProperty("extdesc"))
 	{
 		console.crlf();
-		console.print(fileMetadata.extdesc);
+		// Sanitize the description to avoid display issues
+		var extFileDesc = stripBadCharsFromStr(fileMetadata.extdesc, true);
+		console.print(extFileDesc);
 		console.crlf();
 	}
 
@@ -1984,7 +1833,12 @@ function editFileInfo(pFileList, pFileListMenu)
 	retObj.reDrawCmdBar = true;
 	retObj.refreshedSelectedFilesAlready = true;
 
-	console.print("\x01n\r\n\r\n");
+	console.attributes = "N";
+	if (gSettings.useLightbarInterface && console.term_supports(USER_ANSI))
+		console.gotoxy(1, console.screen_rows);
+	else
+		console.crlf();
+	console.crlf();
 	var msg = format("\x01cEditing file\x01g\x01h: \x01c%s\x01n \x01c(in \x01h%s\x01n\x01c)\x01n", fileMetadata.name, getLibAndDirDesc(fileMetadata.dirCode));
 	console.print(lfexpand(word_wrap(msg), console.screen_columns-1));
 	var newMetadata = {};
@@ -1995,6 +1849,8 @@ function editFileInfo(pFileList, pFileListMenu)
 	var editWidth = console.screen_columns - console.strlen(promptText) - 1;
 	console.mnemonics(promptText);
 	var shortFileDesc = (typeof(fileMetadata.desc) === "string" ? fileMetadata.desc : "");
+	// Sanitize the description to avoid display issues
+	shortFileDesc = stripBadCharsFromStr(shortFileDesc, true);
 	newMetadata.desc = console.getstr(shortFileDesc, editWidth, K_EDIT|K_LINE|K_NOSPIN); // K_NOCRLF
 	if (console.aborted)
 		return retObj;
@@ -2022,7 +1878,8 @@ function editFileInfo(pFileList, pFileListMenu)
 				if (typeof(extdMetadata.extdesc) === "string")
 				{
 					// An extended file description is usually up to about 45 characters long
-					var descWrapped = word_wrap(extdMetadata.extdesc, 45, null, false).split("\r\n");
+					// Sanitize the description to avoid display issues
+					var descWrapped = word_wrap(stripBadCharsFromStr(extdMetadata.extdesc, true), 45, null, false).split("\r\n");
 					for (var lineIdx = 0; lineIdx < descWrapped.length; ++lineIdx)
 						outFile.writeln(descWrapped[lineIdx]);
 				}
@@ -2031,7 +1888,7 @@ function editFileInfo(pFileList, pFileListMenu)
 					if (extdMetadata.hasOwnProperty("desc") && typeof(extdMetadata.desc) === "string" && extdMetadata.desc.length > 0)
 					{
 						if (console.yesno("No extended description. Start with short description"))
-							outFile.writeln(extdMetadata.desc);
+							outFile.writeln(stripBadCharsFromStr(extdMetadata.desc, true));
 						else
 							outFile.writeln("");
 					}
@@ -2696,10 +2553,10 @@ function DDFileMenuBar_constructPromptText()
 	var numSolidBlocks = console.screen_columns - numInnerChars - 11;
 	var numSolidBlocksPerSide = Math.floor(numSolidBlocks / 2);
 	// Build the prompt text: Start with the left blocks
-	this.promptText = "\x01n\x01w" + BLOCK1 + BLOCK2 + BLOCK3 + BLOCK4;
+	this.promptText = "\x01n\x01w" + CP437_LIGHT_SHADE + CP437_MEDIUM_SHADE + CP437_DARK_SHADE + CP437_FULL_BLOCK;
 	for (var i = 0; i < numSolidBlocksPerSide; ++i)
-		this.promptText += BLOCK4;
-	this.promptText += THIN_RECTANGLE_LEFT;
+		this.promptText += CP437_FULL_BLOCK;
+	this.promptText += CP437_LEFT_HALF_BLOCK;
 	// Add the menu item text & block characters
 	var menuItemXPos = 6 + numSolidBlocksPerSide; // The X position of the start of item text for each item
 	var maxPromptLineLen = console.screen_columns - 1; // Maximum length of the prompt line
@@ -2731,10 +2588,10 @@ function DDFileMenuBar_constructPromptText()
 		}
 	}
 	// Add the right-side blocks
-	this.promptText += "\x01w" + THIN_RECTANGLE_RIGHT;
+	this.promptText += "\x01w" + CP437_RIGHT_HALF_BLOCK;
 	for (var i = 0; i < numSolidBlocksPerSide; ++i)
-		this.promptText += BLOCK4;
-	this.promptText += BLOCK3 + BLOCK2 + BLOCK1 + "\x01n";
+		this.promptText += CP437_FULL_BLOCK;
+	this.promptText += CP437_DARK_SHADE + CP437_MEDIUM_SHADE + CP437_LIGHT_SHADE + "\x01n";
 }
 // For the DDFileMenuBar class: Gets the text for a prompt item based on its index
 function DDFileMenuBar_getItemTextFromIdx(pIdx)
@@ -2812,7 +2669,7 @@ function DDFileMenuBar_getDDFileMenuBarItemText(pText, pSelected, pWithTrailingB
 		itemText += "\x01" + "6\x01c\x01h" + firstChar + "\x01n\x01" + "6\x01k" + restOfText;
 	itemText += "\x01n";
 	if (withTrailingBlock)
-		itemText += "\x01w" + THIN_RECTANGLE_RIGHT + THIN_RECTANGLE_LEFT + "\x01n";
+		itemText += "\x01w" + CP437_RIGHT_HALF_BLOCK + CP437_LEFT_HALF_BLOCK + "\x01n";
 	return itemText;
 }
 // For the DDFileMenuBar class: Increments to the next menu item and refreshes the
@@ -3229,7 +3086,8 @@ function doFrameInputLoop(pFrame, pScrollbar, pFrameContentStr, pAdditionalQuitK
 //
 // Parameters:
 //  pTextOnly: Only draw the library & directory text (no decoration or other text).
-//             This is optional & defaults to false.
+//             This is optional & defaults to false. If a custom header file is to be
+//             used, the custom header will override this parameter.
 //  pDirCodeOverride: Optional string: If this is valid, this will be used for the library & directory name
 //  pNumberedMode: Boolean - Whether or not the menu/list has numbers in front of the file info items
 function displayFileLibAndDirHeader(pTextOnly, pDirCodeOverride, pNumberedMode)
@@ -3255,7 +3113,9 @@ function displayFileLibAndDirHeader(pTextOnly, pDirCodeOverride, pNumberedMode)
 	var libIdx = 0;
 	var dirIdx = 0;
 	var libDesc = "";
+	var libName = "";
 	var dirDesc =  "";
+	var dirName = "";
 	var dirCode = "";
 	if (gScriptMode == MODE_LIST_DIR)
 		dirCode = gDirCode;
@@ -3266,7 +3126,9 @@ function displayFileLibAndDirHeader(pTextOnly, pDirCodeOverride, pNumberedMode)
 		libIdx = file_area.dir[dirCode].lib_index;
 		dirIdx = file_area.dir[dirCode].index;
 		libDesc = file_area.lib_list[libIdx].description;
+		libName = file_area.lib_list[libIdx].name;
 		dirDesc =  file_area.dir[dirCode].description;
+		dirName = file_area.dir[dirCode].name;
 	}
 	else if (typeof(pDirCodeOverride) === "string" && file_area.dir.hasOwnProperty(pDirCodeOverride))
 	{
@@ -3274,83 +3136,156 @@ function displayFileLibAndDirHeader(pTextOnly, pDirCodeOverride, pNumberedMode)
 		libIdx = file_area.dir[pDirCodeOverride].lib_index;
 		dirIdx = file_area.dir[pDirCodeOverride].index;
 		libDesc = file_area.lib_list[libIdx].description;
+		libName = file_area.lib_list[libIdx].name;
 		dirDesc =  file_area.dir[pDirCodeOverride].description;
+		dirName =  file_area.dir[pDirCodeOverride].name;
 	}
 	else
 	{
 		libIdx = -1;
 		dirIdx = -1;
 		libDesc = "Various";
+		libName = "Various";
 		dirDesc = "Various";
+		dirName = "Various";
 	}
 
-	var hdrTextWidth = console.screen_columns - 21;
-	var descWidth = hdrTextWidth - 11;
-	var libText = format("\x01cLib \x01w\x01h#\x01b%4d\x01c: \x01n\x01c%-" + descWidth + "s\x01n", +(libIdx+1), libDesc.substr(0, descWidth));
-	var dirText = format("\x01cDir \x01w\x01h#\x01b%4d\x01c: \x01n\x01c%-" + descWidth + "s\x01n", +(dirIdx+1), dirDesc.substr(0, descWidth));
-
-	// Library line
-	if (textOnly)
+	// If a custom file list header is to be used, then display it; otherwise,
+	// display the default built-in header.
+	if (gCustomFileListHdrLines.length > 0)
 	{
 		if (console.term_supports(USER_ANSI))
+			console.gotoxy(1, 1);
+		for (var i = 0; i < gCustomFileListHdrLines.length; ++i)
 		{
-			console.gotoxy(6, 1);
-			console.print("\x01n" + libText);
-			console.gotoxy(6, 2);
-			console.print("\x01n" + dirText);
-		}
-	}
-	else
-	{
-		console.print("\x01n\x01w" + BLOCK1 + BLOCK2 + BLOCK3 + BLOCK4 + THIN_RECTANGLE_LEFT);
-		console.print(libText);
-		// Rightmost area: Display either the number of files if enabled, or "DD File"
-		console.print("\x01w" + THIN_RECTANGLE_RIGHT + "\x01k\x01h" + BLOCK4 + "\x01n\x01w" + THIN_RECTANGLE_LEFT);
-		console.attributes = "GH";
-		var wasAbleToDisplayNumFiles = false;
-		if (gSettings.displayNumFilesInHeader && dirCode.length > 0)
-		{
-			// Hopefully there are no more than 9999999 files in this directory
-			// (the field width is 7 here)
-			var fieldWidth = 7;
-			var numFilesAsStr = file_area.dir[dirCode].files.toString();
-			if (numFilesAsStr.length <= fieldWidth)
+			// When doing a file search, this script will be used to display files in
+			// directories other than the user's current file directory, so we will
+			// need to manually replace any instances of @DIRL@, @LIBL@, and similar
+			// here to ensure the correct directory information is displayed. Then
+			// use console.putmsg() to handle other @-codes etc.
+			var fileLine = gCustomFileListHdrLines[i];
+			fileLine = fileLine.replace(/@LIB@/gi, libName); // File library name
+			fileLine = fileLine.replace(/@LIBL@/gi, libDesc); // File library description
+			fileLine = fileLine.replace(/@DIR@/gi, dirName); // File directory name
+			fileLine = fileLine.replace(/@DIRL@/gi, dirDesc); // File directory description
+			// Look for versions with -L or -R for limited width
+			var atCodeObj = findWholeAtCode(fileLine, "LIB-", true);
+			if (atCodeObj.startIdx > -1 && atCodeObj.fieldLen > 0)
 			{
-				var numSpaces = Math.floor(fieldWidth/2) - Math.floor(numFilesAsStr.length/2);
-				var numFilesStr = format("%*s", numSpaces, "") + numFilesAsStr;
-				var numSpacesRemaining = fieldWidth - numFilesStr.length;
-				if (numSpacesRemaining > 0)
-					numFilesStr += format("%*s", numSpacesRemaining, "");
-				console.print(numFilesStr);
-				var wasAbleToDisplayNumFiles = true;
+				// File library name
+				var formatStr = "%" + (atCodeObj.isRightJustify ? "" : "-") + atCodeObj.fieldLen + "s";
+				var text = format(formatStr, libName.substring(0, atCodeObj.fieldLen));
+				fileLine = fileLine.replace(new RegExp(escapeRegExp(atCodeObj.atCode), "gi"), text);
 			}
-			else
-				console.print("DD File");
+			atCodeObj = findWholeAtCode(fileLine, "LIBL-", true);
+			if (atCodeObj.startIdx > -1)
+			{
+				// File library description
+				var formatStr = "%" + (atCodeObj.isRightJustify ? "" : "-") + atCodeObj.fieldLen + "s";
+				var text = format(formatStr, libDesc.substring(0, atCodeObj.fieldLen));
+				fileLine = fileLine.replace(new RegExp(escapeRegExp(atCodeObj.atCode), "gi"), text);
+			}
+			atCodeObj = findWholeAtCode(fileLine, "DIR-", true);
+			if (atCodeObj.startIdx > -1)
+			{
+				// Directory name
+				var formatStr = "%" + (atCodeObj.isRightJustify ? "" : "-") + atCodeObj.fieldLen + "s";
+				var text = format(formatStr, dirName.substring(0, atCodeObj.fieldLen));
+				fileLine = fileLine.replace(new RegExp(escapeRegExp(atCodeObj.atCode), "gi"), text);
+			}
+			atCodeObj = findWholeAtCode(fileLine, "DIRL-", true);
+			if (atCodeObj.startIdx > -1)
+			{
+				// Directory description
+				var formatStr = "%" + (atCodeObj.isRightJustify ? "" : "-") + atCodeObj.fieldLen + "s";
+				var text = format(formatStr, dirDesc.substring(0, atCodeObj.fieldLen));
+				fileLine = fileLine.replace(new RegExp(escapeRegExp(atCodeObj.atCode), "gi"), text);
+			}
+			// P_UTF8 or P_NONE?
+			console.putmsg(fileLine, P_AUTO_UTF8);
+			console.crlf();
 		}
-		else
-			console.print("DD File");
-		console.attributes = "NW";
-		console.print(THIN_RECTANGLE_RIGHT + BLOCK4 + BLOCK3 + BLOCK2 + BLOCK1);
-		console.crlf();
-		// Directory line
-		console.print("\x01n\x01w" + BLOCK1 + BLOCK2 + BLOCK3 + BLOCK4 + THIN_RECTANGLE_LEFT);
-		console.print(dirText);
-		// Rightmost area: Display "Files" if the number of files was able to be displayed, or "Lister"
-		console.print("\x01w" + THIN_RECTANGLE_RIGHT + "\x01k\x01h" + BLOCK4 + "\x01n\x01w" + THIN_RECTANGLE_LEFT);
-		console.attributes = "GH";
-		console.print(wasAbleToDisplayNumFiles ? " Files " : "Lister ");
-		console.attributes = "NW";
-		console.print(THIN_RECTANGLE_RIGHT + BLOCK4 + BLOCK3 + BLOCK2 + BLOCK1);
-		console.attributes = "N";
 
 		// List header
-		console.crlf();
 		displayListHdrLine(false, pNumberedMode);
 
 		if (dispHdrFirstRun)
 		{
-			gNumHeaderLinesDisplayed = 3;
+			gNumHeaderLinesDisplayed = gCustomFileListHdrLines.length + 1;
 			gErrorMsgBoxULY = gNumHeaderLinesDisplayed; // Note: console.screen_rows is 1-based
+		}
+	}
+	else
+	{
+		// Default built-in header
+		var hdrTextWidth = console.screen_columns - 21;
+		var descWidth = hdrTextWidth - 11;
+		var libText = format("\x01cLib \x01w\x01h#\x01b%4d\x01c: \x01n\x01c%-" + descWidth + "s\x01n", +(libIdx+1), libDesc.substr(0, descWidth));
+		var dirText = format("\x01cDir \x01w\x01h#\x01b%4d\x01c: \x01n\x01c%-" + descWidth + "s\x01n", +(dirIdx+1), dirDesc.substr(0, descWidth));
+
+		// Library line
+		if (textOnly)
+		{
+			if (console.term_supports(USER_ANSI))
+			{
+				console.gotoxy(6, 1);
+				console.print("\x01n" + libText);
+				console.gotoxy(6, 2);
+				console.print("\x01n" + dirText);
+			}
+		}
+		else
+		{
+			console.print("\x01n\x01w" + CP437_LIGHT_SHADE + CP437_MEDIUM_SHADE + CP437_DARK_SHADE + CP437_FULL_BLOCK + CP437_LEFT_HALF_BLOCK);
+			console.print(libText);
+			// Rightmost area: Display either the number of files if enabled, or "DD File"
+			console.print("\x01w" + CP437_RIGHT_HALF_BLOCK + "\x01k\x01h" + CP437_FULL_BLOCK + "\x01n\x01w" + CP437_LEFT_HALF_BLOCK);
+			console.attributes = "GH";
+			var wasAbleToDisplayNumFiles = false;
+			if (gSettings.displayNumFilesInHeader && dirCode.length > 0)
+			{
+				// Hopefully there are no more than 9999999 files in this directory
+				// (the field width is 7 here)
+				var fieldWidth = 7;
+				var numFilesAsStr = file_area.dir[dirCode].files.toString();
+				if (numFilesAsStr.length <= fieldWidth)
+				{
+					var numSpaces = Math.floor(fieldWidth/2) - Math.floor(numFilesAsStr.length/2);
+					var numFilesStr = format("%*s", numSpaces, "") + numFilesAsStr;
+					var numSpacesRemaining = fieldWidth - numFilesStr.length;
+					if (numSpacesRemaining > 0)
+						numFilesStr += format("%*s", numSpacesRemaining, "");
+					console.print(numFilesStr);
+					var wasAbleToDisplayNumFiles = true;
+				}
+				else
+					console.print("DD File");
+			}
+			else
+				console.print("DD File");
+			console.attributes = "NW";
+			console.print(CP437_RIGHT_HALF_BLOCK + CP437_FULL_BLOCK + CP437_DARK_SHADE + CP437_MEDIUM_SHADE + CP437_LIGHT_SHADE);
+			console.crlf();
+			// Directory line
+			console.print("\x01n\x01w" + CP437_LIGHT_SHADE + CP437_MEDIUM_SHADE + CP437_DARK_SHADE + CP437_FULL_BLOCK + CP437_LEFT_HALF_BLOCK);
+			console.print(dirText);
+			// Rightmost area: Display "Files" if the number of files was able to be displayed, or "Lister"
+			console.print("\x01w" + CP437_RIGHT_HALF_BLOCK + "\x01k\x01h" + CP437_FULL_BLOCK + "\x01n\x01w" + CP437_LEFT_HALF_BLOCK);
+			console.attributes = "GH";
+			console.print(wasAbleToDisplayNumFiles ? " Files " : "Lister ");
+			console.attributes = "NW";
+			console.print(CP437_RIGHT_HALF_BLOCK + CP437_FULL_BLOCK + CP437_DARK_SHADE + CP437_MEDIUM_SHADE + CP437_LIGHT_SHADE);
+			console.attributes = "N";
+
+			// List header
+			console.crlf();
+			displayListHdrLine(false, pNumberedMode);
+
+			if (dispHdrFirstRun)
+			{
+				gNumHeaderLinesDisplayed = 3;
+				gErrorMsgBoxULY = gNumHeaderLinesDisplayed; // Note: console.screen_rows is 1-based
+			}
 		}
 	}
 }
@@ -3380,8 +3315,75 @@ function displayListHdrLine(pMoveToLocationFirst, pNumberedMode)
 	if (pMoveToLocationFirst && console.term_supports(USER_ANSI))
 		console.gotoxy(1, 3);
 
-	var listHdrEndText = THIN_RECTANGLE_RIGHT + BLOCK4 + BLOCK3 + BLOCK2 + BLOCK1;
+	// End text for the header line: If not using a custom header, then
+	// append blocks to the header line to match the built-in header lines.
+	var listHdrEndText = "";
+	if (gCustomFileListHdrLines.length == 0)
+		listHdrEndText = CP437_RIGHT_HALF_BLOCK + CP437_FULL_BLOCK + CP437_DARK_SHADE + CP437_MEDIUM_SHADE + CP437_LIGHT_SHADE;
 	printf(displayListHdrLine.formatStr, "Filename", "Size", "Description", listHdrEndText);
+}
+
+// Finds a whole @-code in a string (for @-codes that could include a -L.. or -R..).
+// Returns a string with the whole @-code (including the @ characters), or an empty
+// string and -1 if not found.
+//
+// Parameters:
+//  pStr: The string to search
+//  pAtCodeStart: The start of the @-code, without the leading @
+//  pCheckDashLOrDashR: Boolean - Whether or not to check for -L or -R (and if not found, will return empty string & -1)
+//
+// Return value: An object containing the following properties:
+//               atCode: The @-code string (including the starting @), or empty string if not found
+//               startIdx: The index of the @-code within the given string. If not found, this will be -1.
+//               fieldLen: The length of the field (if it's a length-limited @-code)
+//               isRightJustify: Whether or not this is to be right-justified (boolean). If false, then it's left-justify.
+function findWholeAtCode(pStr, pAtCodeStart, pCheckDashLOrDashR)
+{
+	var retObj = {
+		atCode: "",
+		startIdx: -1,
+		fieldLen: 0,
+		isRightJustify: false
+	}
+
+	if (typeof(pStr) !== "string" || pStr.length == 0 || typeof(pAtCodeStart) !== "string" || pAtCodeStart.length == 0)
+		return retObj;
+
+	var idx = pStr.indexOf("@" + pAtCodeStart);
+	if (idx > -1)
+	{
+		var endIdx = pStr.indexOf("@", idx+1);
+		if (endIdx > idx)
+		{
+			retObj.atCode = pStr.substring(idx, endIdx+1);
+			retObj.startIdx = idx;
+			// Check for field length & justification (-R and -L codes)
+			var dashIdx = pStr.indexOf("-", idx+1);
+			if (dashIdx > idx && dashIdx < endIdx)
+			{
+				var nextIdx = dashIdx + 1;
+				var hasDashL = false;
+				var hasDashR = false;
+				if (pStr[nextIdx] == "l" || pStr[nextIdx] == "L")
+					hasDashL = true;
+				else if (pStr[nextIdx] == "r" || pStr[nextIdx] == "R")
+					hasDashR = true;
+				if (hasDashL || hasDashR)
+				{
+					// See if it has [ and ] characters
+					var leftBracketIdx = pStr.indexOf("[", idx);
+					if (leftBracketIdx > idx)
+					{
+						var rightBracketIdx = pStr.indexOf("]", leftBracketIdx+1);
+						retObj.fieldLen = endIdx - idx;
+						retObj.isRightJustify = hasDashR;
+					}
+				}
+			}
+		}
+	}
+
+	return retObj;
 }
 
 // Creates the menu for displaying the file list
@@ -3504,6 +3506,8 @@ function createFileListMenu(pQuitKeys)
 		}
 		*/
 		var desc = (typeof(gFileList[pIdx].desc) === "string" ? gFileList[pIdx].desc : "");
+		// Sanitize the description to avoid display issues
+		desc = stripBadCharsFromStr(desc, true);
 		var descIsEmpty = (desc == "" || /^\s+$/.test(desc));
 		// Remove/replace any cursor movement codes in the description, which can corrupt the display
 		desc = removeOrReplaceSyncCursorMovementChars(desc, false);
@@ -3819,7 +3823,7 @@ function displayTextWithLineBelow(pText, pCenter, pTextColor, pLineColor)
 		var solidLine = "";
 		var textLength = console.strlen(pText);
 		for (var i = 0; i < textLength; ++i)
-			solidLine += HORIZONTAL_SINGLE;
+			solidLine += CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE;
 		console.center(lineColor + solidLine);
 	}
 	else
@@ -3829,7 +3833,7 @@ function displayTextWithLineBelow(pText, pCenter, pTextColor, pLineColor)
 		console.print(lineColor);
 		var textLength = console.strlen(pText);
 		for (var i = 0; i < textLength; ++i)
-			console.print(HORIZONTAL_SINGLE);
+			console.print(CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE);
 		console.crlf();
 	}
 }
@@ -3978,25 +3982,25 @@ function drawBorder(pX, pY, pWidth, pHeight, pColor, pLineStyle, pTitle, pTitleC
 		return;
 
 	var borderChars = {
-		UL: UPPER_LEFT_SINGLE,
-		UR: UPPER_RIGHT_SINGLE,
-		LL: LOWER_LEFT_SINGLE,
-		LR: LOWER_RIGHT_SINGLE,
-		preText: RIGHT_T_SINGLE,
-		postText: LEFT_T_SINGLE,
-		horiz: HORIZONTAL_SINGLE,
-		vert: VERTICAL_SINGLE
+		UL: CP437_BOX_DRAWINGS_UPPER_LEFT_SINGLE,
+		UR: CP437_BOX_DRAWINGS_UPPER_RIGHT_SINGLE,
+		LL: CP437_BOX_DRAWINGS_LOWER_LEFT_SINGLE,
+		LR: CP437_BOX_DRAWINGS_LOWER_RIGHT_SINGLE,
+		preText: CP437_BOX_DRAWINGS_LIGHT_VERTICAL_AND_LEFT,
+		postText: CP437_BOX_DRAWINGS_LIGHT_LEFT_T,
+		horiz: CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE,
+		vert: CP437_BOX_DRAWINGS_LIGHT_VERTICAL
 	};
 	if (typeof(pLineStyle) === "string" && pLineStyle.toUpperCase() == "DOUBLE")
 	{
-		borderChars.UL = UPPER_LEFT_DOUBLE;
-		borderChars.UR = UPPER_RIGHT_DOUBLE;
-		borderChars.LL = LOWER_LEFT_DOUBLE;
-		borderChars.LR = LOWER_RIGHT_DOUBLE;
-		borderChars.preText = RIGHT_T_DOUBLE;
-		borderChars.postText = LEFT_T_DOUBLE
-		borderChars.horiz = HORIZONTAL_DOUBLE;
-		borderChars.vert = VERTICAL_DOUBLE;
+		borderChars.UL = CP437_BOX_DRAWINGS_UPPER_LEFT_DOUBLE;
+		borderChars.UR = CP437_BOX_DRAWINGS_UPPER_RIGHT_DOUBLE;
+		borderChars.LL = CP437_BOX_DRAWINGS_LOWER_LEFT_DOUBLE;
+		borderChars.LR = CP437_BOX_DRAWINGS_LOWER_RIGHT_DOUBLE;
+		borderChars.preText = CP437_BOX_DRAWINGS_RIGHT_DOUBLE_T;
+		borderChars.postText = CP437_BOX_DRAWINGS_LEFT_DOUBLE_T
+		borderChars.horiz = CP437_BOX_DRAWINGS_HORIZONTAL_DOUBLE;
+		borderChars.vert = CP437_BOX_DRAWINGS_DOUBLE_VERTICAL;
 	}
 
 	// Top border
@@ -4083,7 +4087,7 @@ function drawSeparatorLine(pX, pY, pWidth)
 	console.gotoxy(pX, pY);
 	console.print("\x01n\x01g\x01h");
 	for (var i = 0; i < width; ++i)
-		console.print(HORIZONTAL_SINGLE);
+		console.print(CP437_BOX_DRAWINGS_HORIZONTAL_SINGLE);
 	console.attributes = "N";
 }
 
@@ -4191,8 +4195,12 @@ function readConfigFile()
 		useFilenameIfNoDescription_ShortDescs: true,
 		filenameInExtendedDesc: FILENAME_IN_DESC_IF_DESC_EMPTY,
 		// Whether or not to display the number of files in the directory in
-		// the header at the top of the screen
+		// the default header at the top of the screen
 		displayNumFilesInHeader: true,
+		// Full filename of a header file to display above the list and
+		// maximum number of lines from the custom header file to display
+		headerFilename: "",
+		headerMaxLines: 5,
 
 		// Colors
 		colors: {
@@ -4240,12 +4248,33 @@ function readConfigFile()
 
 	// Open the main configuration file.  First look for it in the sbbs/mods
 	// directory, then sbbs/ctrl, then in the same directory as this script.
-	var cfgFilename = "ddfilelister.cfg";
+	// First look for ddfilelister.ini, then ddfilelister.cfg (the .cfg was the
+	// old filename)
+	var cfgFilename = "ddfilelister.ini";
 	var cfgFilenameFullPath = file_cfgname(system.mods_dir, cfgFilename);
 	if (!file_exists(cfgFilenameFullPath))
 		cfgFilenameFullPath = file_cfgname(system.ctrl_dir, cfgFilename);
 	if (!file_exists(cfgFilenameFullPath))
 		cfgFilenameFullPath = file_cfgname(js.exec_dir, cfgFilename);
+	// If the .ini doesn't exist, see if the .cfg exists
+	if (!file_exists(cfgFilenameFullPath))
+	{
+		cfgFilename = "ddfilelister.ini";
+		var cfgFilenameFullPath = file_cfgname(system.mods_dir, cfgFilename);
+		if (!file_exists(cfgFilenameFullPath))
+			cfgFilenameFullPath = file_cfgname(system.ctrl_dir, cfgFilename);
+		if (!file_exists(cfgFilenameFullPath))
+			cfgFilenameFullPath = file_cfgname(js.exec_dir, cfgFilename);
+	}
+	// If the configuration file hasn't been found, look to see if there's a .example.ini file
+	// available in the same directory 
+	if (!file_exists(cfgFilenameFullPath))
+	{
+		var exampleFileName = file_cfgname(js.exec_dir, "ddfilelister.example.ini");
+		if (file_exists(exampleFileName))
+			cfgFilenameFullPath = exampleFileName;
+	}
+
 	var cfgFile = new File(cfgFilenameFullPath);
 	if (cfgFile.open("r"))
 	{
@@ -4370,6 +4399,35 @@ function readConfigFile()
 		{
 			var themeSettingsObj = themeFile.iniGetObject();
 			themeFile.close();
+
+			// Custom header file & maximum number of lines to display from the custom header
+			if (themeSettingsObj.hasOwnProperty("headerFilenameBase") && typeof(themeSettingsObj.headerFilenameBase) === "string")
+			{
+				// First, look for a .rip, .ans, or .asc as specified
+				if (console.term_supports(USER_RIP) && file_exists(themeSettingsObj.headerFilenameBase + ".rip"))
+					settingsObj.headerFilename = themeSettingsObj.headerFilenameBase + ".rip";
+				else if (console.term_supports(USER_ANSI) && file_exists(themeSettingsObj.headerFilenameBase + ".ans"))
+					settingsObj.headerFilename = themeSettingsObj.headerFilenameBase + ".ans";
+				else if (file_exists(themeSettingsObj.headerFilenameBase + ".msg"))
+					settingsObj.headerFilename = themeSettingsObj.headerFilenameBase + ".msg";
+				else if (file_exists(themeSettingsObj.headerFilenameBase + ".asc"))
+					settingsObj.headerFilename = themeSettingsObj.headerFilenameBase + ".asc";
+				// If not found, look for the filename in the same directory as the this file lister mod/script
+				if (settingsObj.headerFilename.length == 0)
+				{
+					var filenameBase = backslash(fullpath(js.exec_dir)) + file_getname(themeSettingsObj.headerFilenameBase);
+					if (console.term_supports(USER_RIP) && file_exists(filenameBase + ".rip"))
+						settingsObj.headerFilename = filenameBase + ".rip";
+					else if (console.term_supports(USER_ANSI) && file_exists(filenameBase + ".ans"))
+						settingsObj.headerFilename = filenameBase + ".ans";
+					else if (file_exists(filenameBase + ".msg"))
+						settingsObj.headerFilename = filenameBase + ".msg";
+					else if (file_exists(filenameBase + ".asc"))
+						settingsObj.headerFilename = filenameBase + ".asc";
+				}
+			}
+			if (themeSettingsObj.hasOwnProperty("headerMaxLines") && typeof(themeSettingsObj.headerMaxLines) === "number" && themeSettingsObj.headerMaxLines > 0)
+				settingsObj.headerMaxLines = themeSettingsObj.headerMaxLines;
 
 			// Set any color values specified
 			for (var prop in settingsObj.colors)
@@ -4725,15 +4783,10 @@ function populateFileList(pSearchMode)
 		var filebase = new FileBase(gDirCode);
 		if (filebase.open())
 		{
-			// If there are no files in the filebase, then say so and exit now.
+			// If there are no files in the filebase, then exit now.
 			if (filebase.files == 0)
 			{
 				filebase.close();
-				var libIdx = file_area.dir[gDirCode].lib_index;
-				console.crlf();
-				console.print("\x01n\x01cThere are no files in \x01h" + file_area.lib_list[libIdx].description + "\x01n\x01c - \x01h" +
-							  file_area.dir[gDirCode].description + "\x01n");
-				console.crlf();
 				retObj.exitNow = true;
 				retObj.exitCode = 0;
 				return retObj;
@@ -5333,6 +5386,8 @@ function displayFileExtDescOnMainScreen(pFileIdx, pStartScreenRow, pEndScreenRow
 		fileDesc = fileMetadata.desc;
 	if (typeof(fileDesc) != "string")
 		fileDesc = "";
+	// Sanitize the description to avoid display issues
+	fileDesc = stripBadCharsFromStr(fileDesc, true);
 
 	// This might be overkill, but just in case, convert any non-Synchronet
 	// attribute codes to Synchronet attribute codes in the description.
@@ -6185,4 +6240,79 @@ function getAvatarArray(pUsername)
 		}
 	}
 	return avatarLineArray;
+}
+
+// Removes characters from a string that may cause issues when
+// being displayed. Mainly intended for file descriptions.
+//
+// Parmaeters:
+//  pStr: A string
+//  pRemoveTrailingWhitespace: Boolean - Whether or not to trim trailing
+//                             whitespace (which could include CR/LF
+//                             chars).
+//
+// Return value: The sanitized string
+function stripBadCharsFromStr(pStr, pRemoveTrailingWhitespace)
+{
+	// Remove control characters except for CR (0xD) and LF (0xA)
+	var str = pStr.replace(/[\x02-\x09\x0B\x0C\x0E-\x1F]/g, "");
+	if (pRemoveTrailingWhitespace)
+	{
+		// Remove any whitespace characters from the end of the string
+		// (which could include CR/LF characters) to avoid issues with
+		// cursor positioning when printing the string
+		str = truncsp(str);
+		// Remove any CR/LF characters from the end of the string to
+		// avoid issues with cursor positioning when printing the string
+		//str = str.replace(/[\x0D\x0A]+$/, "");
+	}
+	return str;
+}
+
+// Loads a text file into an array, with a given maximum line length and maximum number of
+// lines to load into the array.
+//
+// Parameters:
+//  pFilename: The name of the file to load
+//  pMaxNumLines: The maximum number of lines (optional; if not specified, all lines will be read)
+//  pMaxLineLen: The maximum length of the lines (optional; will default to 4096)
+//
+// Return: An array with the lines read from the file. If there are any issues,
+//         the array will be empty.
+function loadTextFileIntoArray(pFilename, pMaxNumLines, pMaxLineLen)
+{
+	if (typeof(pFilename) !== "string" || pFilename.length == 0 || !file_exists(pFilename))
+		return [];
+
+	var fileLines = [];
+	var inFile = new File(pFilename);
+	if (inFile.open("r"))
+	{
+		var maxLineLen = (typeof(pMaxLineLen) === "number" && pMaxLineLen > 0 ? pMaxLineLen : 4096);
+		if (typeof(pMaxNumLines) === "number" && pMaxNumLines > 0)
+		{
+			while (!inFile.eof && fileLines.length < pMaxNumLines)
+			{
+				// Read the next line
+				var fileLine = inFile.readln(maxLineLen);
+				// fileLine should be a string, but I've seen some cases
+				// where it isn't, so check its type.
+				if (typeof(fileLine) !== "string")
+					continue;
+				fileLines.push(fileLine);
+			}
+		}
+		else
+			fileLines = inFile.readAll(maxLineLen);
+		inFile.close();
+	}
+	else
+		if (user.is_sysop) console.print("\x01n\r\n* Header file failed to open!\r\n\x01p"); // Temporary
+	return fileLines;
+}
+
+function escapeRegExp(string)
+{
+	// $& means the whole matched string
+	return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }

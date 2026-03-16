@@ -123,7 +123,6 @@ function mouse_enable(enable)
 {
 	if (graph) {
 		ansiterm.send('mouse', enable ? 'set' : 'clear', ['any_events', 'extended_coord']);
-		return;
 	}
 	const mouse_passthru = (CON_MOUSE_CLK_PASSTHRU | CON_MOUSE_REL_PASSTHRU);
 	if(enable)
@@ -1476,7 +1475,7 @@ function play()
 				mouse_enable(false);
 				console.line_counter = 0;
 				console.clear();
-				console.printfile(help_file);
+				console.printfile(help_file, P_SEEK);
 				if(console.line_counter)
 					console.pause();
 				console.clear();

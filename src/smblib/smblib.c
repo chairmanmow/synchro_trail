@@ -37,7 +37,7 @@
 #include "datewrap.h"
 
 /* Use smb_ver() and smb_lib_ver() to obtain these values */
-#define SMBLIB_VERSION      "3.10"      /* SMB library version */
+#define SMBLIB_VERSION      "3.21"      /* SMB library version */
 #define SMB_VERSION         0x0310      /* SMB format version */
                                         /* High byte major, low byte minor */
 
@@ -60,6 +60,7 @@ char* smb_lib_ver(void)
 int smb_open(smb_t* smb)
 {
 	int      i;
+	int      count = 0;
 	time_t   start = 0;
 	smbhdr_t hdr;
 
@@ -72,7 +73,8 @@ int smb_open(smb_t* smb)
 	smb->shd_fp = smb->sdt_fp = smb->sid_fp = NULL;
 	smb->sha_fp = smb->sda_fp = smb->hash_fp = NULL;
 	smb->last_error[0] = 0;
-	smb->locked = false;
+	smb->is_locked = false;
+	smb->smbhdr_locked = false;
 
 	/* Check for message-base lock semaphore file (under maintenance?) */
 	while (smb_islocked(smb)) {
@@ -81,7 +83,8 @@ int smb_open(smb_t* smb)
 		else
 		if (time(NULL) - start >= (time_t)smb->retry_time)
 			return SMB_ERR_TIMEOUT;
-		SLEEP(smb->retry_delay);
+		++count;
+		FILE_RETRY_DELAY(count, smb->retry_delay);
 	}
 
 	if ((i = smb_open_fp(smb, &smb->shd_fp, SH_DENYNO)) != SMB_SUCCESS)
@@ -159,6 +162,8 @@ void smb_close(smb_t* smb)
 	smb_close_fp(&smb->sda_fp);
 	smb_close_fp(&smb->sha_fp);
 	smb_close_fp(&smb->hash_fp);
+	if (smb->is_locked)
+		smb_unlock(smb);
 }
 
 /****************************************************************************/
@@ -181,6 +186,7 @@ int smb_lock(smb_t* smb)
 {
 	char   path[MAX_PATH + 1];
 	int    file;
+	int    count = 0;
 	time_t start = 0;
 
 	smb_lockfname(smb, path, sizeof(path) - 1);
@@ -194,9 +200,18 @@ int smb_lock(smb_t* smb)
 			              , get_errno(), strerror(get_errno()), path);
 			return SMB_ERR_LOCK;
 		}
-		SLEEP(smb->retry_delay);
+		++count;
+		FILE_RETRY_DELAY(count, smb->retry_delay);
 	}
 	close(file);
+
+	SLEEP(smb->retry_delay);
+	if (access(path, 0) != 0) {
+		safe_snprintf(smb->last_error, sizeof smb->last_error
+			, "%s %s was unexpectedly removed after creation", __FUNCTION__, path);
+		return SMB_ERR_LOCK;
+	}
+	smb->is_locked = true;
 	return SMB_SUCCESS;
 }
 
@@ -211,6 +226,7 @@ int smb_unlock(smb_t* smb)
 		              , get_errno(), strerror(get_errno()), path);
 		return SMB_ERR_DELETE;
 	}
+	smb->is_locked = false;
 	return SMB_SUCCESS;
 }
 
@@ -218,6 +234,8 @@ bool smb_islocked(smb_t* smb)
 {
 	char path[MAX_PATH + 1];
 
+	if (smb->is_locked)
+		return true;
 	if (access(smb_lockfname(smb, path, sizeof(path) - 1), 0) != 0)
 		return false;
 	safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s %s exists", __FUNCTION__, path);
@@ -232,6 +250,7 @@ bool smb_islocked(smb_t* smb)
 int smb_trunchdr(smb_t* smb)
 {
 	time_t start = 0;
+	int    count = 0;
 
 	if (smb->shd_fp == NULL) {
 		safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s msgbase not open", __FUNCTION__);
@@ -249,14 +268,14 @@ int smb_trunchdr(smb_t* smb)
 		}
 		if (!start)
 			start = time(NULL);
-		else
-		if (time(NULL) - start >= (time_t)smb->retry_time) { /* Time-out */
+		else if (time(NULL) - start >= (time_t)smb->retry_time) { /* Time-out */
 			safe_snprintf(smb->last_error, sizeof(smb->last_error)
-			              , "%s timeout changing header file size (retry_time=%u)", __FUNCTION__
-			              , (uint)smb->retry_time);
+							, "%s timeout changing header file size (retry_time=%u)", __FUNCTION__
+							, (uint)smb->retry_time);
 			return SMB_ERR_TIMEOUT;
 		}
-		SLEEP(smb->retry_delay);
+		++count;
+		FILE_RETRY_DELAY(count, smb->retry_delay);
 	}
 	return SMB_SUCCESS;
 }
@@ -273,7 +292,7 @@ int smb_locksmbhdr(smb_t* smb)
 	time_t start = 0;
 	int    count = 0;
 
-	if (smb->locked)
+	if (smb->smbhdr_locked)
 		return SMB_SUCCESS;
 
 	if (smb->shd_fp == NULL) {
@@ -282,19 +301,19 @@ int smb_locksmbhdr(smb_t* smb)
 	}
 	while (1) {
 		if (lock(fileno(smb->shd_fp), 0L, sizeof(smbhdr_t) + sizeof(smbstatus_t)) == 0) {
-			smb->locked = true;
+			smb->smbhdr_locked = true;
 			return SMB_SUCCESS;
 		}
 		/* In case we've already locked it */
 		if (unlock(fileno(smb->shd_fp), 0L, sizeof(smbhdr_t) + sizeof(smbstatus_t)) == 0)
-			smb->locked = false;
+			smb->smbhdr_locked = false;
 		if (!start)
 			start = time(NULL);
 		else
 		if (time(NULL) - start >= (time_t)smb->retry_time)
 			break;
 		++count;
-		SLEEP((count / 10) * smb->retry_delay);
+		FILE_RETRY_DELAY(count, smb->retry_delay);
 	}
 	safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s timeout locking message base after %d seconds"
 	              , __FUNCTION__, (int)(time(NULL) - start));
@@ -360,7 +379,7 @@ int smb_putstatus(smb_t* smb)
 /****************************************************************************/
 int smb_unlocksmbhdr(smb_t* smb)
 {
-	if (smb->locked) {
+	if (smb->smbhdr_locked) {
 		if (smb->shd_fp == NULL) {
 			safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s msgbase not open", __FUNCTION__);
 			return SMB_ERR_NOT_OPEN;
@@ -370,7 +389,7 @@ int smb_unlocksmbhdr(smb_t* smb)
 			              , "%s %d '%s' unlocking message base header", __FUNCTION__, get_errno(), strerror(get_errno()));
 			return SMB_ERR_UNLOCK;
 		}
-		smb->locked = false;
+		smb->smbhdr_locked = false;
 	}
 	return SMB_SUCCESS;
 }
@@ -400,6 +419,7 @@ bool smb_valid_hdr_offset(smb_t* smb, uint offset)
 int smb_lockmsghdr(smb_t* smb, smbmsg_t* msg)
 {
 	time_t start = 0;
+	int    count = 0;
 
 	if (smb->shd_fp == NULL) {
 		safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s msgbase not open", __FUNCTION__);
@@ -416,9 +436,10 @@ int smb_lockmsghdr(smb_t* smb, smbmsg_t* msg)
 		else
 		if (time(NULL) - start >= (time_t)smb->retry_time)
 			break;
+		++count;
 		/* In case we've already locked it */
 		if (unlock(fileno(smb->shd_fp), msg->idx.offset, sizeof(msghdr_t)) != 0) {
-			SLEEP(smb->retry_delay);
+			FILE_RETRY_DELAY(count, smb->retry_delay);
 		}
 	}
 	safe_snprintf(smb->last_error, sizeof(smb->last_error), "%s timeout locking header", __FUNCTION__);
@@ -1506,6 +1527,7 @@ int smb_addcrc(smb_t* smb, uint32_t crc)
 	uint      l;
 	uint32_t *buf;
 	time_t    start = 0;
+	int       count = 0;
 
 	if (!smb->status.max_crcs)
 		return SMB_SUCCESS;
@@ -1529,7 +1551,8 @@ int smb_addcrc(smb_t* smb, uint32_t crc)
 			              , str, (uint)smb->retry_time);
 			return SMB_ERR_TIMEOUT;
 		}
-		SLEEP(smb->retry_delay);
+		++count;
+		FILE_RETRY_DELAY(count, smb->retry_delay);
 	}
 
 	length = filelength(file);
@@ -1618,7 +1641,7 @@ int smb_new_msghdr(smb_t* smb, smbmsg_t* msg, int storage, bool new_msg)
 		return SMB_ERR_NOT_OPEN;
 	}
 
-	if (!smb->locked && smb_locksmbhdr(smb) != SMB_SUCCESS)
+	if (!smb->smbhdr_locked && smb_locksmbhdr(smb) != SMB_SUCCESS)
 		return SMB_ERR_LOCK;
 
 	hdrlen = smb_getmsghdrlen(msg);

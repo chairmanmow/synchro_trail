@@ -77,7 +77,7 @@
 
 
 /* Local helper function prototypes. */
-static void ODEmulateFromBuffer(char *pszBuffer, BOOL bRemoteEcho);
+static void ODEmulateFromBuffer(const char *pszBuffer, BOOL bRemoteEcho);
 static FILE *ODEmulateFindCompatFile(const char *pszBaseName, INT *pnLevel);
 static void ODEmulateFillArea(BYTE btLeft, BYTE btTop, BYTE btRight,
    BYTE btBottom, char chToFillWith);
@@ -564,7 +564,7 @@ ODAPIDEF BOOL ODCALL od_send_file_section(char *pszFileName, char *pszSectionNam
    FILE *pfRemoteFile;
    FILE *pfLocalFile = NULL;
    BOOL bAnythingLocal = TRUE;
-   void *pWindow;
+   void *pWindow = NULL;
    INT nFileLevel;
    BYTE btCount;
    BOOL bPausing;
@@ -908,7 +908,8 @@ end_transmission:
       }
 
       /* Get rid of the window. */
-      ODScrnRemoveMessage(pWindow);
+      if (pWindow)
+         ODScrnRemoveMessage(pWindow);
    }
    
    /* If the section was not found, return FALSE for error */
@@ -1085,13 +1086,13 @@ ODAPIDEF void ODCALL od_emulate(char chToEmulate)
  *
  *     Return: void
  */
-static void ODEmulateFromBuffer(char *pszBuffer, BOOL bRemoteEcho)
+static void ODEmulateFromBuffer(const char *pszBuffer, BOOL bRemoteEcho)
 {
    char chCurrent;
    static tODScrnTextInfo TextInfo;
    INT nTemp;
    BOOL bEchoThisChar;
-   INT nCharsPerTick;
+   INT nCharsPerTick = 0;
    INT nCharsThisTick;
    tODTimer ModemSimTimer;
 

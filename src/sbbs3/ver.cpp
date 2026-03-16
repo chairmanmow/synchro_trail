@@ -25,6 +25,7 @@
 #endif
 #include "git_hash.h"
 #include "git_branch.h"
+#include "os_info.h"
 #include "ver.h"
 #include <archive.h>
 
@@ -53,7 +54,7 @@ extern WSADATA WSAData;
 	#include <sys/utsname.h>    /* uname() */
 #endif
 
-char* socklib_version(char* str, size_t size, char* winsock_ver)
+char* socklib_version(char* str, size_t size, const char* winsock_ver)
 {
 #if defined(_WINSOCKAPI_)
 
@@ -73,44 +74,53 @@ char* socklib_version(char* str, size_t size, char* winsock_ver)
 }
 
 #if defined(SBBS) && !defined(JSDOOR)
-void sbbs_t::ver()
+void sbbs_t::ver(int pmode, bool verbose)
 {
 	char str[128], compiler[32], os[128], cpu[128];
 #ifdef USE_MOSQUITTO
 	char tmp[128];
 #endif
 
-	term->newline();
+	term->cond_blankline();
 	strcpy(str, VERSION_NOTICE);
+	if (verbose) {
 #if defined(_DEBUG)
-	strcat(str, "  Debug");
+		strcat(str, "  Debug");
 #endif
-	term->center(str);
-	term->newline();
+	} else
+		sprintf(str + strlen(str), "%c", REVISION);
+	bputs(str, pmode);
 
-	DESCRIBE_COMPILER(compiler);
+	if (verbose) {
+		term->cond_blankline();
+		DESCRIBE_COMPILER(compiler);
 
-	snprintf(str, sizeof str, "Revision %c%s %s  "
-	         "SMBLIB %s  %s"
-	         , toupper(REVISION)
-	         , beta_version
-	         , git_date
-	         , smb_lib_ver(), compiler);
+		snprintf(str, sizeof str, "Revision %c%s %s  "
+				 "SMBLIB %s  %s"
+				 , toupper(REVISION)
+				 , beta_version
+				 , git_date
+				 , smb_lib_ver(), compiler);
 
-	term->center(str);
-	term->newline();
+		bputs(str, pmode);
+		term->cond_blankline();
 
-	term->center("https://gitlab.synchro.net - " GIT_BRANCH "/" GIT_HASH);
-	term->newline();
-
+		bputs("https://gitlab.synchro.net - " GIT_BRANCH "/" GIT_HASH, pmode);
+		term->cond_blankline();
+	} else
+		term->newline();
 	snprintf(str, sizeof str, "%s - http://synchro.net", COPYRIGHT_NOTICE);
-	term->center(str);
-	term->newline();
+	bputs(str, pmode);
+
+	if (!verbose)
+		return;
+
+	term->cond_blankline();
 
 #ifdef JAVASCRIPT
 	if (!(startup->options & BBS_OPT_NO_JAVASCRIPT)) {
-		term->center((char *)JS_GetImplementationVersion());
-		term->newline();
+		bputs((char *)JS_GetImplementationVersion(), pmode);
+		term->cond_blankline();
 	}
 #endif
 
@@ -123,24 +133,25 @@ void sbbs_t::ver()
 		result = cryptGetAttribute(CRYPT_UNUSED, CRYPT_OPTION_INFO_STEPPING, &cl_step);
 		(void)result;
 		safe_snprintf(str, sizeof(str), "cryptlib %u.%u.%u (%u)", cl_major, cl_minor, cl_step, CRYPTLIB_VERSION);
-		term->center(str);
-		term->newline();
+		bputs(str, pmode);
+		term->cond_blankline();
 	}
 #endif
 
 	safe_snprintf(str, sizeof str, "%s (%u)", archive_version_string(), ARCHIVE_VERSION_NUMBER);
-	term->center(str);
-	term->newline();
+	bputs(str, pmode);
+	term->cond_blankline();
 
 #ifdef USE_MOSQUITTO
 	SAFECOPY(str, mqtt_libver(tmp, sizeof tmp));
 	safe_snprintf(tmp, sizeof tmp, " (%u)", LIBMOSQUITTO_VERSION_NUMBER);
 	SAFECAT(str, tmp);
-	term->center(str);
-	term->newline();
+	bputs(str, pmode);
+	term->cond_blankline();
 #endif
 
 	safe_snprintf(str, sizeof(str), "%s %s", os_version(os, sizeof(os)), os_cpuarch(cpu, sizeof(cpu)));
-	term->center(str);
+	bputs(str, pmode);
+	term->newline();
 }
 #endif

@@ -6,6 +6,8 @@
    // need to use command line parameters...
 */
 
+void player_write(struct player *pl, FILE *f);
+void player_read(struct player *pl, FILE *f);
 
 /* The main() or WinMain() function: program execution begins here. */
 #ifdef ODPLAT_WIN32
@@ -17,8 +19,11 @@ int main(int argc, char *argv[])
 //void main(int argc, char **argv)
 {
 	char filename[128];
-	char temp[10];
 	int online;
+	char *fname = NULL;
+	char *dot = NULL;
+	char *ext = NULL;
+	char tmpname[36];
 
 	// moved up to the top 1/97
 	#ifdef ODPLAT_WIN32
@@ -52,29 +57,49 @@ int main(int argc, char *argv[])
 	
 	// Set a variable to the doors path
 	#ifndef ODPLAT_WIN32
-	strcpy(doorpath, "");
-	strncat(doorpath, argv[0], (strlen(argv[0]) - strlen(executable)) );
+	strlcpy(doorpath, argv[0], sizeof(doorpath));
 	#else
 	doorpath[0]=0;
 	doorpath[1]=PATH_DELIM;
 	doorpath[2]=0;
 	#endif
-	
+	if (doorpath[0] && !isdir(doorpath)) {
+		size_t last = strlen(doorpath) - 1;
+
+		while (last > 0) {
+			last--;
+			if (IS_PATH_DELIM(doorpath[last]))
+				break;
+			doorpath[last] = 0;
+		}
+	}
+
 	// Set the config file name
-	#ifndef ODPLAT_WIN32
-	strcpy(configfile, "");
-	#ifdef ODPLAT_NIX
-	strncat(configfile, argv[0], (strlen(argv[0])) );
-	strcat(configfile, ".");
+	#ifdef ODPLAT_WIN32
+	 // Assumed to end in .EXE
+	 strlcpy(configfile, executable, sizeof(configfile));
 	#else
-	strncat(configfile, argv[0], (strlen(argv[0]) - 3) );
+	 strlcpy(configfile, argv[0], sizeof(configfile));
+#warning TODO: Use the new od_split_cmd_line() function with argv[0]
+	 strlcat(configfile, ".", sizeof(configfile));
 	#endif
-	strcat(configfile, "cfg");
-	#else
-	strcpy(configfile, "");
-	strncat(configfile, executable, (strlen(executable) - 3) );
-	strcat(configfile, "CFG");
-	#endif
+	fname = getfname(configfile);
+	do {
+		if (dot) {
+			ext = strrchr(configfile, '.');
+			if (ext && ext < fname)
+				ext = NULL;
+			if (ext)
+				*ext = 0;
+		}
+		dot = strrchr(configfile, '.');
+		if (dot && dot < fname)
+			dot = NULL;
+		if (dot) {
+			*dot = 0;
+		}
+		strlcat(configfile, ".cfg", sizeof(configfile));
+	} while((dot) && !fexist(configfile));
 
 	od_control.od_config_filename = configfile;
 
@@ -85,22 +110,6 @@ int main(int argc, char *argv[])
 		od_parse_cmd_line(argc, argv);
 	#endif
 	
-	// Set the name of the log file
-	#ifndef ODPLAT_WIN32
-	strcpy(od_control.od_logfile_name, "");
-	//strncat(od_control.od_logfile_name, argv[0], (strlen(argv[0]) - 7) );
-	strcat(od_control.od_logfile_name, "gac" );
-	sprintf(temp, "%d", od_control.od_node);
-	strcat(od_control.od_logfile_name, temp);
-	strcat(od_control.od_logfile_name, ".log");
-	#else
-	strcpy(od_control.od_logfile_name, "");
-	strncat(od_control.od_logfile_name, executable, (strlen(executable) - 7) );
-	sprintf(temp, "%d", od_control.od_node);
-	strcat(od_control.od_logfile_name, temp);
-	strcat(od_control.od_logfile_name, ".log");
-	#endif
-
 	// check for and create in directory
 	strcpy(filename, doorpath);
 	strcat(filename, "IN");
@@ -139,6 +148,8 @@ int main(int argc, char *argv[])
 		binkley = TRUE;
 	else binkley = FALSE;
 
+	// Set the name of the log file
+	snprintf(od_control.od_logfile_name, sizeof(od_control.od_logfile_name), "gac%d.log", od_control.od_node);
 
 	// Check for argv[1] as config
 	#ifndef ODPLAT_WIN32
@@ -354,7 +365,8 @@ int main(int argc, char *argv[])
 	if (access(filename, 00) == 0) remove(filename);
 	online = nopen(filename, O_RDWR|O_CREAT);
 	lseek(online,0L,SEEK_SET);
-	write(online,player.names,36);
+	strlcpy(tmpname, player.names, sizeof(tmpname));
+	write(online,tmpname,sizeof(tmpname));
 	close(online);
 
 	// Check to see if the user has any mail waiting.
@@ -783,7 +795,7 @@ void CheckPlayer( void )
 		// display the rules...
 		od_clr_scr();
 		od_printf("`Bright Cyan`");
-		g_send_file(ibbsgametitle); // 12/96
+		g_send_file_pause(ibbsgametitle); // 12/96
 		gac_pause();
 	}
 
@@ -1054,11 +1066,13 @@ INT16 g_rand( INT16 max )
 void InitGame( INT16 pause)
 {
 
+#ifdef KEEP_REG
 		INT16 i;
-	char regstring[100];
 	time_t now;
 	long int diff;
 	INT16 extra_delay;
+#endif
+	char regstring[100];
 
 	// Set the linked lists to null
 	list = NULL;
@@ -1223,7 +1237,7 @@ void command_line( void )
 	// Check fo the proper number of command line parameters.
 		printf( "The required command line parameters are:\n\n");
 		printf( "  1 - Node Number (-N x), CONFIG, INBOUND, MAINTAIN, ROUTE\n");
-		printf( "           SENDALL, RESET or BULLETINS\n");
+		printf( "           OUTBOUND, SENDALL, RESET or BULLETINS\n");
 		//printf( "  2 - LOCAL or Path to drop file if different from %s.cfg path (optional)\n", ibbsgametitle);
 		//printf( "    - May also be BINKLEY  (e.g. %s OUTBOUND BINKLEY)\n\n", executable);
 		printf( "  2 - Must be BINKLEY if you are using Binkley\n");
@@ -2211,14 +2225,14 @@ void MakeBulletins( INT16 last )
 	if (last == TRUE)
 	{
 // 4/97                fputs(szPlylstANS, playerAns);
-                fputs(szPlycurANS, playerAns);
+                fputs((char *)szPlycurANS, playerAns);
                 fprintf(playerAns, "\r\n     *** Top 15 Players of the Last %s Game ***\r\n\r\n", od_control.od_prog_name);
                 fprintf(playerAsc, "\r\n\r\n     *** Top 15 Players of the Last %s Game ***\r\n\r\n", od_control.od_prog_name);
                 fprintf(playerAsc, "\r\n\r\n     *** Top 15 Players of the Last %s Game ***\r\n\r\n", od_control.od_prog_name);
 	}
 	else
 	{
-		fputs(szPlycurANS, playerAns);
+		fputs((char *)szPlycurANS, playerAns);
                 fprintf(playerAns, "\r\n     *** Top 15 Players of the Current %s Game ***\r\n\r\n", od_control.od_prog_name);
                 fprintf(playerAsc, "\r\n\r\n     *** Top 15 Players of the Current %s Game ***\r\n\r\n", od_control.od_prog_name);
 	}
@@ -2248,9 +2262,9 @@ void MakeBulletins( INT16 last )
 		GetPlayerInfo(&listplayer, current->account, TRUE);
 
 		// 12/96 removed investment
-		fprintf(playerAns, "  \x1B[0;1;37m%3d   \x1B[0;36m%-20s \x1B[0;1;34m$\x1B[0;36m%10lu   \x1B[0;34m%-35.35s\r\n", i+1,  listplayer.names,
+		fprintf(playerAns, "  \x1B[0;1;37m%3d   \x1B[0;36m%-20s \x1B[0;1;34m$\x1B[0;36m%10" PRIu32 "   \x1B[0;34m%-35.35s\r\n", i+1,  listplayer.names,
 					(listplayer.money), getbbsname(listplayer.bbs));
-		fprintf(playerAsc, "  %3d   %-20s $%10lu   %-35.35s\r\n", i+1,  listplayer.names,
+		fprintf(playerAsc, "  %3d   %-20s $%10" PRIu32 "   %-35.35s\r\n", i+1,  listplayer.names,
 					(listplayer.money), getbbsname(listplayer.bbs));
 		// Increment line number
 		i++;
@@ -2286,13 +2300,13 @@ void MakeBulletins( INT16 last )
 	if (last == TRUE)
 	{
 // 4/97                fputs(szBbslstANS, bbsAns);
-                fputs(szBbscurANS, bbsAns);
+                fputs((char *)szBbscurANS, bbsAns);
                 fprintf(bbsAns, "\r\n     *** Top 15 BBSs of the Last %s Game ***\r\n\r\n", od_control.od_prog_name);
                 fprintf(bbsAsc, "\r\n\r\n     *** Top 15 BBSs of the Last %s Game ***\r\n\r\n", od_control.od_prog_name);
 	}
 	else
 	{
-		fputs(szBbscurANS, bbsAns);
+		fputs((char *)szBbscurANS, bbsAns);
                 fprintf(bbsAns, "\r\n     *** Top 15 BBSs of the Current %s Game ***\r\n\r\n", od_control.od_prog_name);
                 fprintf(bbsAsc, "\r\n\r\n     *** Top 15 BBSs of the Current %s Game ***\r\n\r\n", od_control.od_prog_name);
 	}
@@ -2356,6 +2370,8 @@ void    MakeTopBBS( INT16 average )
 	fclose(gac_debug);
 	#endif
 
+	if (InterBBSInfo.nTotalSystems == 0)
+		return;
 
 	// Deallocate the memory for the previous list (if any
 	// Since we allocated mem, we need to free it
@@ -2579,7 +2595,7 @@ void g_clr_scr(void)
 {
 	od_clr_scr();
 	// force screen clearing even if it is turned off for the user
-	if (!od_control.user_attribute & 0x02) od_disp_emu("\xc", TRUE);
+	if (!(od_control.user_attribute & 0x02)) od_disp_emu("\xc", TRUE);
 	// send an extra line for RIP users to avoid losing the top line
 	if (od_control.user_rip)
 	{
@@ -2596,7 +2612,7 @@ void g_clr_scr(void)
 // It will then create a box to prompt the user for the required info...
 // If you pass "ANY" as the third parameter, then the user can hit any key
 // if bottom == TRUE, the box is at the bottom of the screen
-char PromptBox( char prompt1[200], char prompt2[200], char responses[20], INT16 bottom )
+char PromptBox( const char *prompt1, const char *prompt2, const char *responses, INT16 bottom )
 {
 
 	void *instruct_win;   // pop up window
@@ -2611,29 +2627,35 @@ char PromptBox( char prompt1[200], char prompt2[200], char responses[20], INT16 
 	// for ANSI users
 	if (od_control.user_ansi || od_control.user_rip)
 	{
-			if (bottom == FALSE) instruct_win = od_window_create(5,10,75,13,"Make your choice",0x09,0x0b,0x00,0);
-			else instruct_win = od_window_create(5,20,75,23,"Make your choice",0x09,0x0b,0x00,0);
-			od_set_attrib(0x03);
-			if (bottom == FALSE) od_set_cursor(11,7);
-			else od_set_cursor(21,7);
-			od_printf(prompt1);
-			od_set_attrib(0x03);
-			if (bottom == FALSE) od_set_cursor(12,7);
-			else od_set_cursor(22,7);
-			od_printf(prompt2);
-			// response = od_get_answer(responses);
-			// want the players to still be notified when they are deciding and to loop until they pick a correct choice
-			response = '~';  // use a bogus character to start with (the '\0' character could be found)
-			if (stricmp(responses, "ANY") != 0)
-			{
-				while (strchr(responses, response) == NULL)
-					response = GetMenuChoice();
-			}
-			else
-			{
+		if (bottom == FALSE)
+			instruct_win = od_window_create(5,10,75,13,"Make your choice",0x09,0x0b,0x00,0);
+		else
+			instruct_win = od_window_create(5,20,75,23,"Make your choice",0x09,0x0b,0x00,0);
+		od_set_attrib(0x03);
+		if (bottom == FALSE)
+			od_set_cursor(11,7);
+		else
+			od_set_cursor(21,7);
+		od_printf(prompt1);
+		od_set_attrib(0x03);
+		if (bottom == FALSE)
+			od_set_cursor(12,7);
+		else
+			od_set_cursor(22,7);
+		od_printf(prompt2);
+		// response = od_get_answer(responses);
+		// want the players to still be notified when they are deciding and to loop until they pick a correct choice
+		response = '~';  // use a bogus character to start with (the '\0' character could be found)
+		if (stricmp(responses, "ANY") != 0)
+		{
+			while (strchr(responses, response) == NULL)
 				response = GetMenuChoice();
-			}
-			od_window_remove(instruct_win);
+		}
+		else
+		{
+			response = GetMenuChoice();
+		}
+		od_window_remove(instruct_win);
 	}
 	else
 	{
@@ -3068,6 +3090,7 @@ char EditorHelp( void )
 		//od_window_remove(input_window);
 //      od_restore_screen( screen);
 	}
+	else choice = '\0';
 /*
 	else
 	{
@@ -3264,6 +3287,7 @@ INT16 CheckPlayerName( char *input)
 char *g_strstr(char *name, char *input)
 {
 	char newname[21], newinput[21];
+	char *p;
 	INT16 i = 0;
 
 	strcpy(newname, name);
@@ -3281,7 +3305,10 @@ char *g_strstr(char *name, char *input)
 		i++;
 	}
 
-	return( strstr(newname, newinput) );
+	p = strstr(newname, newinput);
+	if (p == NULL)
+		return NULL;
+	return name + (p - newname);
 }
 
 
@@ -3566,6 +3593,81 @@ void UpdateTime( void )
 	return;
 }
 
+static INT16 WriteArchiveLine(FILE *arcfile, INT16 encrypted)
+{
+	char line[261];
+
+	if (arcfile == NULL)
+		return FALSE;
+	if (fgets(line, sizeof(line), arcfile)) {
+		truncnl(line);
+		// look for the end
+		if (strnicmp(line, "@#", 2) == 0) {
+			fclose(arcfile);
+			return FALSE;
+		}
+		// display the line
+		if(encrypted)
+			HelpDecrypt(line);
+		od_disp_emu(line, TRUE);
+		od_printf("\r\n");
+	}
+	else {
+		fclose(arcfile);
+		return FALSE;
+	}
+	return TRUE;
+}
+
+static FILE *FindArchive(char *file, INT16 type, INT16 *encrypted)
+{
+	char archive[128], line[261], keyword[15];
+	FILE *arcfile;
+	char *p;
+
+	if (type == RIP_FILE)
+		sprintf(archive, "%s%4.4srip.art", doorpath, executable);
+	else if (type == ANS_FILE)
+		sprintf(archive, "%s%4.4sans.art", doorpath, executable);
+	else if (type == ASC_FILE)
+		sprintf(archive, "%s%4.4sasc.art", doorpath, executable);
+
+	// open the file and search for the string #@file then display everything
+	// until we get to #@ again
+
+	if (access(archive, 00) != 0) return(NULL);
+
+	arcfile = myopen(archive, "rb", SH_DENYWR);
+	if (arcfile == NULL) return(NULL);
+
+	fseek(arcfile, 0, SEEK_SET);
+	// read one line at a time
+	// NEW Encrypted way...
+	strlcpy(keyword, file, sizeof(keyword));
+	for (;;) {
+		if (fscanf( arcfile, "%[^\r\n]\r\n", line) != 1)
+			break;
+		// look for a word from our prompt line and the starting @#
+		p = &line[2];
+		if (strnicmp(line, "@#", 2) == 0)
+		{
+			if (strnicmp(p, keyword, strlen(keyword)) == 0) {
+				*encrypted = FALSE;
+				return arcfile;
+			}
+			HelpDecrypt(p);
+
+			if (stricmp(p , keyword) == 0 ) {
+				*encrypted = TRUE;
+				return arcfile;
+			}
+			
+		}
+	}
+	fclose(arcfile);
+	return FALSE;
+}
+
 // This function allows me to send a file simply
 // it will send the individual file if available, otherwise it will send
 // the one in the archive xxxxANSI.ART, xxxxASC.ART, or xxxxRIP.ART files
@@ -3575,13 +3677,11 @@ INT16 g_send_file( char *filename)
 	char sendfile[128];
 	INT16 sent=FALSE;
 
-
 	#ifdef GAC_DEBUG
 	gac_debug = fopen(gac_debugfile, "a");
 	fprintf(gac_debug, "  g_send_file()\n");
 	fclose(gac_debug);
 	#endif
-
 
 	if (od_control.user_rip)
 	{
@@ -3613,22 +3713,87 @@ INT16 g_send_file( char *filename)
 		}
 	}
 
-//  sprintf(sendfile, "%s%s", doorpath, filename);
-//  sent = od_send_file(sendfile);
+	return( sent);
 
-	// pause slightly and ignore keyboard to stop ctrl-e
-	// answerbacks to the ANSIs...
-/*
-	if (answered == TRUE)
+
+}
+
+// As above, but does not do RIP and pauses every od_control.user_screen_length lines
+INT16 g_send_file_pause( char *filename)
+{
+	char line[261];
+	char sendfile[128];
+	INT16 sent=FALSE;
+	INT16 archive = FALSE;
+	INT16 encrypted = FALSE;
+	FILE *ifile = NULL;
+	size_t count = 0;
+	const size_t tgt = od_control.user_screen_length - 1;
+
+	#ifdef GAC_DEBUG
+	gac_debug = fopen(gac_debugfile, "a");
+	fprintf(gac_debug, "  g_send_file_pause()\n");
+	fclose(gac_debug);
+	#endif
+
+	if (od_control.user_rip)
 	{
-		od_sleep(500);
-		if(od_get_key(FALSE) != '\0')
+		sprintf(sendfile, "%s%s.rip", doorpath, filename);
+		if ((ifile = fopen(sendfile, "rb")) == NULL)
 		{
-			while(od_get_key(FALSE) != '\0');
+			// attempt to send one from our archive
+			ifile = FindArchive(filename, RIP_FILE, &encrypted);
+			if (ifile)
+				archive = true;
 		}
 	}
-*/
-	return( sent);
+
+	if (od_control.user_ansi && ifile == NULL)
+	{
+		if ((ifile = fopen(sendfile, "rb")) == NULL)
+		{
+			// attempt to send one from our archive
+			ifile = FindArchive(filename, ANS_FILE, &encrypted);
+			if (ifile)
+				archive = true;
+		}
+	}
+
+	if (ifile == NULL)
+	{
+		if ((ifile = fopen(sendfile, "rb")) == NULL)
+		{
+			// attempt to send one from our archive
+			ifile = FindArchive(filename, ASC_FILE, &encrypted);
+			if (ifile)
+				archive = true;
+		}
+	}
+
+	if (ifile == NULL)
+		return FALSE;
+
+	for (;;) {
+		if (archive) {
+			if (!WriteArchiveLine(ifile, encrypted))
+				break;
+		}
+		else {
+			if (!fgets(line, sizeof(line), ifile))
+				break;
+			truncnl(line);
+		}
+		if (++count >= tgt) {
+			INT16 oldattr = od_control.od_cur_attrib;
+			gac_pause();
+			od_disp_str("\r");
+			od_set_attrib(oldattr);
+			od_clr_line();
+			count = 0;
+		}
+	}
+
+	return( TRUE);
 
 
 }
@@ -3637,11 +3802,9 @@ INT16 g_send_file( char *filename)
 // returns TRUE if sent successfully
 INT16 SendArchive(char *file, INT16 type)
 {
-
-		char archive[128], line[261], keyword[15];
+	char archive[128];
 	FILE *arcfile;
-	INT16 found=FALSE, done=FALSE, encrypted=FALSE;
-	char *p;
+	INT16 done=FALSE, encrypted=FALSE;
 
 	if (type == RIP_FILE)
 		sprintf(archive, "%s%4.4srip.art", doorpath, executable);
@@ -3650,98 +3813,19 @@ INT16 SendArchive(char *file, INT16 type)
 	else if (type == ASC_FILE)
 		sprintf(archive, "%s%4.4sasc.art", doorpath, executable);
 
-//od_printf("%s\n\r", archive);
-//od_get_key(TRUE);
-
-
 	// open the file and search for the string #@file then display everything
 	// until we get to #@ again
 
 	if (access(archive, 00) != 0) return(FALSE);
 
-	arcfile = myopen(archive, "rb", SH_DENYWR);
+	arcfile = FindArchive(file, type, &encrypted);
 	if (arcfile == NULL) return(FALSE);
 
-	fseek(arcfile, 0, SEEK_SET);
-	// read one line at a time
-	found=FALSE;
-	done = FALSE;
-/*  OLD UNENCRYPTED WAY  
-	sprintf(keyword, "@#%s", file);
-	while (fscanf( arcfile, "%[^\n\r]\r\n", line) == 1 && found == FALSE)
-	{
-		// look for our keyword...  2+(strlen(file)
-		if (strnicmp(line, keyword, 2+strlen(file)) == 0) found = TRUE;
-	}
-*/
-	// NEW Encrypted way...
-	sprintf(keyword, "%s", file);
-	while (found == FALSE)
-	{
-		if (fscanf( arcfile, "%[^\r\n]\r\n", line) != 1)
-			break;
-		// look for a word from our prompt line and the starting @#
-		p = &line[2];
-		if (strnicmp(line, "@#", 2) == 0)
-		{
-			if (strnicmp(p, keyword, strlen(keyword)) == 0) {
-				found = TRUE;
-				break;
-			}
-			HelpDecrypt(p);
+	while (!done && WriteArchiveLine(arcfile, encrypted))
+		if (od_get_key(FALSE) != 0)
+			done = TRUE;
 
-			// if there are blanks on the end remove them...
-/*
-			while (p[strlen(p)-1] == ' ')
-			{
-				p[strlen(p)-1] = '\0';
-			}
-*/
-			if (p[0] == '\0')
-				found = FALSE;
-			else if (stricmp(p , keyword) == 0 ) {
-				found = TRUE;
-				encrypted = TRUE;
-			}
-			
-		}
-	}
-
-	// display the file...
-	if (found == TRUE)
-	{
-		//od_disp_emu(line, TRUE);
-		//if (type == ASC_FILE) od_printf("\r\n");
-
-		// display one line at a time until done
-		while (fscanf( arcfile, "%[^\r\n]\r\n", line) == 1 && done == FALSE)
-		{
-			// look for the end
-			if (strnicmp(line, "@#", 2) == 0) 
-				done = TRUE;
-			else
-			{
-				// display the line
-				// od_disp_emu(line, TRUE);
-				if(encrypted)
-					HelpDecrypt(line);
-				od_disp_emu(line, TRUE);
-				//if (type == ASC_FILE)
-					od_printf("\r\n");
-
-				//allow user to exit out early
-				if (od_get_key(FALSE) != 0)
-					done = TRUE;
-//od_printf("%s\n\r", line);
-//od_get_key(TRUE);
-			}
-		}
-//    od_printf("\n\r");
-	}
-
-	fclose(arcfile);
-
-	return(found);
+	return(TRUE);
 }
 
 
@@ -3749,7 +3833,8 @@ INT16 SendArchive(char *file, INT16 type)
 void HelpDecrypt( char *line)
 {
 	char *curp;
-	
+	char tmp;
+
 	curp = &line[0];
 	while (curp[0] != '\0')
 	{
@@ -3762,9 +3847,24 @@ void HelpDecrypt( char *line)
 
 	}
 
-	swab(line, line, sizeof(line));
-	strcpy(line, strrev(line));
-			
+	/*
+	 * The swab() that was used did not work properly when src and dst
+	 * overlapped, only the first two pairs got swapped.
+	 */
+	if (line[0] && line[1]) {
+		tmp = line[0];
+		line[0] = line[1];
+		line[1] = tmp;
+	}
+	if (line[2] && line[3]) {
+		tmp = line[2];
+		line[2] = line[3];
+		line[3] = tmp;
+	}
+	//swab(line, line, sizeof(line));
+	//strcpy(line, strrev(line));
+	strrev(line);
+
 	// if there are blanks on the end remove them...
 
 	while (curp[strlen(curp)-1] == ' ')
@@ -3774,82 +3874,6 @@ void HelpDecrypt( char *line)
 
 	return;
 }
-
-/*
-
-// will attempt to open a ART archive and send the file requested.
-// returns TRUE if sent successfully
-INT16 SendArchive(char *file, INT16 type)
-{
-
-	char archive[128], line[260], keyword[15];
-	FILE *arcfile;
-	INT16 found=FALSE, done=FALSE;
-
-	if (type == RIP_FILE)
-		sprintf(archive, "%s%4.4srip.art", doorpath, executable);
-	else if (type == ANS_FILE)
-		sprintf(archive, "%s%4.4sans.art", doorpath, executable);
-	else if (type == ASC_FILE)
-		sprintf(archive, "%s%4.4sasc.art", doorpath, executable);
-
-//od_printf("%s\n\r", archive);
-//od_get_key(TRUE);
-
-
-	// open the file and search for the string #@file then display everything
-	// until we get to #@ again
-
-	if (access(archive, 00) != 0) return(FALSE);
-
-	arcfile = fopen(archive, "rb");
-	if (arcfile == NULL) return(FALSE);
-
-	fseek(arcfile, 0, SEEK_SET);
-	// read one line at a time
-	found=FALSE;
-	done = FALSE;
-	sprintf(keyword, "@#%s", file);
-//od_printf("%s\n\r", keyword);
-//od_get_key(TRUE);
-	while (fscanf( arcfile, "%[^\r\n]\r\n", line) == 1 && found == FALSE)
-	{
-		// look for our keyword...  2+(strlen(file)
-		if (strnicmp(line, keyword, 2+strlen(file)) == 0) found = TRUE;
-//od_printf("%s\n\r", line);
-//od_get_key(TRUE);
-
-	}
-
-	// display first line already read in
-	if (found == TRUE)
-	{
-		od_disp_emu(line, TRUE);
-		if (type == ASC_FILE) od_printf("\r\n");
-
-		// display one line at a time until done
-		while (fscanf( arcfile, "%[^\r\n]\r\n", line) == 1 && done == FALSE)
-		{
-			// look for our keyword...
-			if (strnicmp(line, "@#", 2) == 0) done = TRUE;
-			else
-			{
-				// display the line
-				od_disp_emu(line, TRUE);
-				if (type == ASC_FILE) od_printf("\r\n");
-//od_printf("%s\n\r", line);
-//od_get_key(TRUE);
-			}
-		}
-//    od_printf("\n\r");
-	}
-
-	fclose(arcfile);
-
-	return(found);
-}
-*/
-
 
 // ===========================================================================
 // Simply outputs the list of Participating BBSs to the screen

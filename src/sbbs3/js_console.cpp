@@ -58,6 +58,9 @@ enum {
 	, CON_PROP_TELNET_MODE
 	, CON_PROP_GETSTR_OFFSET
 	, CON_PROP_CTRLKEY_PASSTHRU
+	, CON_PROP_OPTIMIZE_GOTOXY
+	, CON_PROP_USELECT_TITLE
+	, CON_PROP_USELECT_COUNT
 	/* read only */
 	, CON_PROP_INBUF_LEVEL
 	, CON_PROP_INBUF_SPACE
@@ -208,6 +211,16 @@ static JSBool js_console_get(JSContext *cx, JSObject *obj, jsid id, jsval *vp)
 		case CON_PROP_KEYBUF_SPACE:
 			val = sbbs->keybuf_space();
 			break;
+		case CON_PROP_OPTIMIZE_GOTOXY:
+			val = sbbs->term->optimize_gotoxy;
+			break;
+		case CON_PROP_USELECT_TITLE:
+			if ((js_str = JS_NewStringCopyZ(cx, sbbs->uselect_title.c_str())) == NULL)
+				return JS_FALSE;
+			break;
+		case CON_PROP_USELECT_COUNT:
+			val = sbbs->uselect_items.size();
+			break;
 
 		case CON_PROP_YES_KEY:
 			if ((js_str = JS_NewStringCopyN(cx, sbbs->text[Yes], 1)) == NULL)
@@ -297,7 +310,7 @@ static JSBool js_console_set(JSContext *cx, JSObject *obj, jsid id, JSBool stric
 				JSVALUE_TO_MSTRING(cx, *vp, sval, NULL);
 				if (sval == NULL)
 					break;
-				val = strtoattr(sval, /* endptr: */ NULL);
+				val = strtoattr(&sbbs->cfg, sval, /* endptr: */ NULL);
 				free(sval);
 			}
 			rc = JS_SUSPENDREQUEST(cx);
@@ -388,6 +401,20 @@ static JSBool js_console_set(JSContext *cx, JSObject *obj, jsid id, JSBool stric
 		case CON_PROP_OUTPUT_RATE:
 			sbbs->term->set_output_rate((enum output_rate)val);
 			break;
+		case CON_PROP_OPTIMIZE_GOTOXY:
+			sbbs->term->optimize_gotoxy = val;
+			break;
+		case CON_PROP_USELECT_TITLE:
+			JSVALUE_TO_MSTRING(cx, *vp, sval, NULL);
+			if (sval == NULL)
+				break;
+			sbbs->uselect_title = sval;
+			free(sval);
+			break;
+		case CON_PROP_USELECT_COUNT:
+			if ((unsigned)val < sbbs->uselect_items.size())
+				sbbs->uselect_items.resize(val);
+			break;
 
 		default:
 			return JS_TRUE;
@@ -434,6 +461,9 @@ static jsSyncPropertySpec js_console_properties[] = {
 	{   "question", CON_PROP_QUESTION, CON_PROP_FLAGS, 310},
 	{   "getstr_offset", CON_PROP_GETSTR_OFFSET, CON_PROP_FLAGS, 311},
 	{   "ctrlkey_passthru", CON_PROP_CTRLKEY_PASSTHRU, CON_PROP_FLAGS, 310},
+	{   "optimize_gotoxy", CON_PROP_OPTIMIZE_GOTOXY, CON_PROP_FLAGS, 321},
+	{   "uselect_title", CON_PROP_USELECT_TITLE, CON_PROP_FLAGS, 321},
+	{   "uselect_count", CON_PROP_USELECT_COUNT, CON_PROP_FLAGS, 321},
 	{   "input_buffer_level", CON_PROP_INBUF_LEVEL, JSPROP_ENUMERATE | JSPROP_READONLY, 312},
 	{   "input_buffer_space", CON_PROP_INBUF_SPACE, JSPROP_ENUMERATE | JSPROP_READONLY, 312},
 	{   "output_buffer_level", CON_PROP_OUTBUF_LEVEL, JSPROP_ENUMERATE | JSPROP_READONLY, 312},
@@ -453,14 +483,15 @@ static jsSyncPropertySpec js_console_properties[] = {
 
 #ifdef BUILD_JSDOCS
 static const char*        con_prop_desc[] = {
-	"Status bit-field (see <tt>CON_*</tt> in <tt>sbbsdefs.js</tt> for bit definitions)"
+	  "Array of text colors (in IBM CGA attribute format), as configured in the <tt>attr.ini</tt> file"
+	, "Array of items (each with a <tt>name</tt> and <tt>num</tt> property) enqueued via the <tt>uselect()</tt> method for user selection"
+	, "Status bit-field (see <tt>CON_*</tt> in <tt>sbbsdefs.js</tt> for bit definitions)"
 	, "Mouse mode bit-field (see <tt>MOUSE_MODE_*</tt> in <tt>sbbsdefs.js</tt> for bit definitions, "
 	"set to <tt>true</tt> for default enabled mode, <tt>false</tt> to disable)"
 	, "Current 0-based line counter (used for automatic screen pause)"
 	, "Current 0-based row position, set to move cursor"
 	, "Current 0-based column position, set to move cursor"
 	, "Column the cursor was on when last CR was sent to terminal or the line wrapped"
-	, "Obsolete alias for last_cr_column"
 	, "Duration of delay (in milliseconds) before each line-feed character is sent to the terminal"
 	, "Current display attributes (set with number or string value)"
 	, "<tt>true</tt> if the terminal cursor is already at the top of the screen - <small>READ ONLY</small>"
@@ -486,14 +517,17 @@ static const char*        con_prop_desc[] = {
 	, "Current yes/no question (set by yesno and noyes)"
 	, "Cursor position offset for use with <tt>getstr(K_USEOFFSET)</tt>"
 	, "Control key pass-through bit-mask, set bits represent control key combinations "
-	"<i>not</i> handled by <tt>inkey()</tt> method.<br> "
-	"This may optionally be specified as a string of characters. "
-	"The format of this string is [+-][@-_].<br>If neither plus nor minus is "
-	"the first character, the value will be replaced by one constructed "
-	"from the string.<br>A + indicates that characters following will be "
-	"added to the set, and a - indicates they should be removed.<br>"
-	"ex: <tt>console.ctrlkey_passthru=\"-UP+AB\"</tt> will clear CTRL-U and "
-	"CTRL-P and set CTRL-A and CTRL-B."
+		"<i>not</i> handled by <tt>inkey()</tt> method.<br> "
+		"This may optionally be specified as a string of characters. "
+		"The format of this string is [+-][@-_].<br>If neither plus nor minus is "
+		"the first character, the value will be replaced by one constructed "
+		"from the string.<br>A + indicates that characters following will be "
+		"added to the set, and a - indicates they should be removed.<br>"
+		"ex: <tt>console.ctrlkey_passthru=\"-UP+AB\"</tt> will clear CTRL-U and "
+		"CTRL-P and set CTRL-A and CTRL-B."
+	, "Set to <tt>true</tt> to avoid sending redundant cursor position changes to the terminal"
+	, "Title to display in user selection prompts (via <tt>uselect()</tt>)"
+	, "Number of items currently enqueued for a user selection prompt (via <tt>uselect()</tt>) - <small>Can be decreased only</small>"
 	, "Number of bytes currently in the input buffer (from the remote client) - <small>READ ONLY</small>"
 	, "Number of bytes available in the input buffer	- <small>READ ONLY</small>"
 	, "Number of bytes currently in the output buffer (from the local server) - <small>READ ONLY</small>"
@@ -771,7 +805,7 @@ js_getstr(JSContext *cx, uintN argc, jsval *arglist)
 
 	for (i = 0; i < argc; i++) {
 		if (JSVAL_IS_NUMBER(argv[i])) {
-			if (!maxlen) {
+			if (maxlen == 0) {
 				if (!JS_ValueToInt32(cx, argv[i], &maxlen))
 					return JS_FALSE;
 			}
@@ -808,7 +842,7 @@ js_getstr(JSContext *cx, uintN argc, jsval *arglist)
 		}
 	}
 
-	if (!maxlen)
+	if (maxlen < 1)
 		maxlen = 128;
 
 	if ((p = (char *)calloc(1, maxlen + 1)) == NULL)
@@ -820,7 +854,7 @@ js_getstr(JSContext *cx, uintN argc, jsval *arglist)
 			free(p);
 			return JS_FALSE;
 		}
-		strlcpy(p, p2, maxlen);
+		strlcpy(p, p2, maxlen + 1);
 		free(p2);
 	}
 
@@ -1115,6 +1149,7 @@ js_mnemonics(JSContext *cx, uintN argc, jsval *arglist)
 	sbbs_t*    sbbs;
 	JSString*  js_str;
 	char*      cstr;
+	int        mode = K_NONE;
 	jsrefcount rc;
 
 	if ((sbbs = (sbbs_t*)js_GetClassPrivate(cx, JS_THIS_OBJECT(cx, arglist), &js_console_class)) == NULL)
@@ -1124,12 +1159,17 @@ js_mnemonics(JSContext *cx, uintN argc, jsval *arglist)
 
 	if ((js_str = JS_ValueToString(cx, argv[0])) == NULL)
 		return JS_FALSE;
-
 	JSSTRING_TO_MSTRING(cx, js_str, cstr, NULL);
 	if (cstr == NULL)
 		return JS_FALSE;
+	if (argc > 1 && JSVAL_IS_NUMBER(argv[1])) {
+		if (!JS_ValueToInt32(cx, argv[1], &mode)) {
+			free(cstr);
+			return JS_FALSE;
+		}
+	}
 	rc = JS_SUSPENDREQUEST(cx);
-	sbbs->mnemonics(cstr);
+	sbbs->mnemonics(cstr, mode);
 	free(cstr);
 	JS_RESUMEREQUEST(cx, rc);
 	return JS_TRUE;
@@ -1146,12 +1186,12 @@ js_set_attr(JSContext* cx, sbbs_t* sbbs, jsval val)
 		JSVALUE_TO_MSTRING(cx, val, as, NULL);
 		if (as == NULL)
 			return JS_FALSE;
-		attr = strtoattr(as, /* endptr: */ NULL);
+		attr = strtoattr(&sbbs->cfg, as, /* endptr: */ NULL);
 		free(as);
 	}
 	else {
 		if (!JS_ValueToInt32(cx, val, &attr))
-			return JS_FALSE; ;
+			return JS_FALSE;
 	}
 
 	rc = JS_SUSPENDREQUEST(cx);
@@ -2639,7 +2679,7 @@ static jsSyncMethodSpec js_console_functions[] = {
 	 , JSDOCSTR("NO/yes question - returns <tt>true</tt> if 'no' is selected")
 	 , 310
 	},
-	{"mnemonics",       js_mnemonics,       1, JSTYPE_VOID,     JSDOCSTR("text")
+	{"mnemonics",       js_mnemonics,       1, JSTYPE_VOID,     JSDOCSTR("text [,<i>number</i> p_mode=P_NONE]")
 	 , JSDOCSTR("Print a mnemonics string, command keys highlighted with tilde (~) characters")
 	 , 310
 	},
@@ -2746,16 +2786,17 @@ static jsSyncMethodSpec js_console_functions[] = {
 		"See <tt>sbbsdefs.js</tt> for possible <tt>WM_*</tt> mode flags.")
 	 , 310
 	},
-	{"uselect",         js_uselect,         0, JSTYPE_NUMBER,   JSDOCSTR("[<i>number</i> index, title, item] [,ars]")
-	 , JSDOCSTR("User selection menu, first call for each item, then finally with no args (or just the default item index number) to display select menu")
+	{"uselect",         js_uselect,         0, JSTYPE_NUMBER,   JSDOCSTR("[<i>number</i> index, <i>string</i> title, <i>string</i> item] [,<i>string</i> ars]")
+	 , JSDOCSTR("User selection menu: first call for each item, then finally with no arguments (or just the default item index number) to display a numbered-item selection menu/prompt.<br>"
+				"Returns the index of the selected item or a negative number (e.g. when aborted).  See also the <tt>uselect_count</tt>, <tt>uselect_title</tt>, and <tt>uselect_items</tt> properties (new in v3.21).")
 	 , 312
 	},
 	{"saveline",        js_saveline,        0, JSTYPE_BOOLEAN,  JSDOCSTR("")
-	 , JSDOCSTR("Push the current console line of text and attributes to a (local) LIFO list of //saved lines//")
+	 , JSDOCSTR("Push the current console line of text and attributes to a (local) LIFO list of <i>saved lines</i>")
 	 , 310
 	},
 	{"restoreline",     js_restoreline,     0, JSTYPE_BOOLEAN,  JSDOCSTR("")
-	 , JSDOCSTR("Pop the most recently //saved line// of text and attributes and display it on the remote console")
+	 , JSDOCSTR("Pop the most recently <i>saved line</i> of text and attributes and display it on the remote console")
 	 , 310
 	},
 	{"ansi",            js_ansi,            1, JSTYPE_STRING,   JSDOCSTR("attribute [,current_attribute]")
@@ -2932,6 +2973,35 @@ static JSBool js_console_enumerate(JSContext *cx, JSObject *obj)
 	return js_console_resolve(cx, obj, JSID_VOID);
 }
 
+static JSBool uselect_items_getter(JSContext *cx, JSObject *obj, jsid id, jsval *vp)
+{
+	sbbs_t*   sbbs;
+
+	if ((sbbs = (sbbs_t*)JS_GetContextPrivate(cx)) == nullptr)
+		return JS_FALSE;
+
+	JSObject* array;
+	if ((array = JS_NewArrayObject(cx, 0, NULL)) == nullptr)
+		return JS_FALSE;
+	for (size_t i = 0; i < sbbs->uselect_items.size(); ++i) {
+		JSObject* item = JS_NewObject(cx, NULL, NULL, array);
+		if (item == nullptr)
+			return JS_FALSE;
+
+		JSString* js_str = JS_NewStringCopyZ(cx, sbbs->uselect_items[i].name.c_str());
+		if (js_str == nullptr)
+			break;
+		JS_DefineProperty(cx, item, "name", STRING_TO_JSVAL(js_str), NULL, NULL, JSPROP_ENUMERATE);
+		JS_DefineProperty(cx, item, "num", INT_TO_JSVAL(sbbs->uselect_items[i].num), NULL, NULL, JSPROP_ENUMERATE);
+
+		jsval val = OBJECT_TO_JSVAL(item);
+		if (!JS_SetElement(cx, array, i, &val))
+			return JS_FALSE;
+	}
+	*vp = OBJECT_TO_JSVAL(array);
+	return JS_TRUE;
+}
+
 JSClass js_console_class = {
 	"Console"               /* name			*/
 	, JSCLASS_HAS_PRIVATE    /* flags		*/
@@ -2967,7 +3037,7 @@ JSObject* js_CreateConsoleObject(JSContext* cx, JSObject* parent)
 		return NULL;
 
 	if (!JS_DefineProperty(cx, obj, "color_list", OBJECT_TO_JSVAL(color_list)
-	                       , NULL, NULL, 0))
+	                       , NULL, NULL, JSPROP_ENUMERATE | JSPROP_READONLY))
 		return NULL;
 
 	for (uint i = 0; i < NUM_COLORS; i++) {
@@ -2976,6 +3046,14 @@ JSObject* js_CreateConsoleObject(JSContext* cx, JSObject* parent)
 		if (!JS_SetElement(cx, color_list, i, &val))
 			return NULL;
 	}
+
+	// Array to enable uselect loadable module functionality
+	JSObject* array;
+	if ((array = JS_NewArrayObject(cx, 0, NULL)) == NULL)
+		return NULL;
+	if (!JS_DefineProperty(cx, obj, "uselect_items", OBJECT_TO_JSVAL(array)
+	                       , uselect_items_getter, NULL, JSPROP_ENUMERATE | JSPROP_READONLY))
+		return NULL;
 
 #ifdef BUILD_JSDOCS
 	js_DescribeSyncObject(cx, obj, "Controls the remote terminal", 310);

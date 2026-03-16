@@ -1400,7 +1400,6 @@ int edit_security(scfg_t *cfg, user_t *user)
  *     Real Name
  *     Alias
  *     Chat Handle
- *     Computer
  *     NetMail
  *     Gender
  *     Birthdate
@@ -1408,7 +1407,7 @@ int edit_security(scfg_t *cfg, user_t *user)
  *     Location
  *     Postal/ZIP
  *     Phone
- *     Computer
+ *     Host Name
  *     Connection
  *     Password
  *     Note
@@ -1434,13 +1433,13 @@ int edit_personal(scfg_t *cfg, user_t *user)
 		sprintf(opt[i++],"Alias       %s",user->alias);
 		sprintf(opt[i++],"Chat Handle %s",user->handle);
 		sprintf(opt[i++],"NetMail     %s",user->netmail);
-		sprintf(opt[i++],"Gender      %c",user->sex);
+		sprintf(opt[i++],"Gender      %c",user->gender);
 		sprintf(opt[i++],"D.O.B.      %s",user->birth);
 		sprintf(opt[i++],"Address     %s",user->address);
 		sprintf(opt[i++],"Location    %s",user->location);
 		sprintf(opt[i++],"Postal/Zip  %s",user->zipcode);
 		sprintf(opt[i++],"Phone       %s",user->phone);
-		sprintf(opt[i++],"Computer    %s",user->comp);
+		sprintf(opt[i++],"Host Name   %s",user->host);
 		sprintf(opt[i++],"Connection  %s",user->connection);
 		sprintf(opt[i++],"IP Address  %s",user->ipaddr);
 		sprintf(opt[i++],"Password    %s",user->pass);
@@ -1484,10 +1483,10 @@ int edit_personal(scfg_t *cfg, user_t *user)
 			case 4:
 				/* Gender */
 				GETUSERDAT(cfg,user);
-				sprintf(onech,"%c",user->sex);
+				sprintf(onech,"%c",user->gender);
 				uifc.input(WIN_MID|WIN_ACT|WIN_SAV,0,0,"Gender",onech,1,K_UPPER|K_ALPHA|K_EDIT);
 				if(uifc.changes) {
-					user->sex=onech[0];
+					user->gender=onech[0];
 					putuserstr(cfg, user->number, USER_GENDER, onech);
 				}
 				break;
@@ -1529,9 +1528,9 @@ int edit_personal(scfg_t *cfg, user_t *user)
 			case 10:
 				/* Host Name */
 				GETUSERDAT(cfg,user);
-				uifc.input(WIN_MID|WIN_ACT|WIN_SAV,0,0,"Hostname",user->comp,LEN_HOST,K_EDIT);
+				uifc.input(WIN_MID|WIN_ACT|WIN_SAV,0,0,"Hostname",user->host,LEN_HOST,K_EDIT);
 				if(uifc.changes)
-					putuserstr(cfg, user->number, USER_HOST, user->comp);
+					putuserstr(cfg, user->number, USER_HOST, user->host);
 				break;
 
             case 11:
@@ -1705,7 +1704,11 @@ int finduser(scfg_t *cfg, user_t *user)
 		j=0;
 		for(i=1; i<=last; i++) {
 			user->number=i;
-			GETUSERDAT(cfg,user);
+			if (getuserdat(cfg, user) != 0) {
+				free_opts((char **)opt);
+				uifc.msg("Error reading user database!");
+				return -1;
+			}
 			if(strcasestr(user->alias, str)!=NULL || strcasestr(user->name, str)!=NULL || strcasestr(user->handle, str)!=NULL
 					|| user->number==un) {
 				FREE_AND_NULL(opt[j]);
@@ -1759,7 +1762,11 @@ int getuser(scfg_t *cfg, user_t *user, char* str)
 		j=0;
 		for(i=1; i<=last; i++) {
 			user->number=i;
-			GETUSERDAT(cfg,user);
+			if (getuserdat(cfg, user) != 0) {
+				free_opts((char **)opt);
+				uifc.msg("Error reading user database!");
+				return -1;
+			}
 			if(strcasestr(user->alias, str)!=NULL || strcasestr(user->name, str)!=NULL || strcasestr(user->handle, str)!=NULL) {
 				FREE_AND_NULL(opt[j]);
 				if((opt[j]=(struct user_list *)malloc(sizeof(struct user_list)))==NULL)
@@ -1797,10 +1804,7 @@ int createdefaults(scfg_t* cfg)
 
 {
 	int		i;
-	time_t	now;
 	user_t	user;
-
-	now=time(NULL);
 
 	memset(&user,0,sizeof(user));
 
@@ -1808,69 +1812,16 @@ int createdefaults(scfg_t* cfg)
     SAFECOPY(user.name,"New User");
     SAFECOPY(user.handle,"Handle");
     SAFECOPY(user.pass,"PASSWORD");
-    SAFECOPY(user.birth,"19800101");
 
-    SAFECOPY(user.address,"123 My Street");
-    SAFECOPY(user.location,"City, St");
-    SAFECOPY(user.zipcode,"123456");
-
-	SAFECOPY(user.phone,"123-456-7890");
-
-    user.level=10;
-
-    SAFECOPY(user.comment," ");
-
-    SAFECOPY(user.netmail,"name@address.com");
-
-	user.level=cfg->new_level;
-	user.flags1=cfg->new_flags1;
-	user.flags2=cfg->new_flags2;
-	user.flags3=cfg->new_flags3;
-	user.flags4=cfg->new_flags4;
-	user.rest=cfg->new_rest;
-	user.exempt=cfg->new_exempt;
-
-	user.cdt=cfg->new_cdt;
-	user.min=cfg->new_min;
-	user.freecdt=cfg->level_freecdtperday[user.level];
-
-	if(cfg->total_fcomps)
-		SAFECOPY(user.tmpext,cfg->fcomp[0]->ext);
-	else
-		SAFECOPY(user.tmpext,"ZIP");
-	for(i=0;i<cfg->total_xedits;i++)
-		if(!stricmp(cfg->xedit[i]->code,cfg->new_xedit))
-			break;
-	if(i<cfg->total_xedits)
-		user.xedit=i+1;
-
-	user.shell=cfg->new_shell;
-	user.misc=(cfg->new_misc&~(DELETED|INACTIVE|QUIET|NETMAIL));
-    user.misc^=AUTOTERM;
-    user.misc^=ANSI;
-    user.misc^=COLOR;
-	user.qwk=QWK_DEFAULT;
-	user.firston=now;
-	user.laston=now;
-	user.pwmod=now;
-	user.logontime=now;
-	user.sex=' ';
-	user.prot=cfg->new_prot;
-	if(cfg->new_expire)
-		user.expire=now+((long)cfg->new_expire*24L*60L*60L);
+	newuserdefaults(cfg, &user);
 
 	if((i=matchuser(cfg,user.alias,FALSE))!=0) {
 	    lprintf("Error!  Default User already in Userfile");
 		return(2);
 	}
 
-	if(user.handle[0]==0)
-		SAFECOPY(user.handle,user.alias);
-	if(user.name[0]==0)
-		SAFECOPY(user.name,user.alias);
-
 	if((i=newuserdat(cfg, &user))!=0) {
-	    lprintf("%s %d", "Error creating Default User.  Error # ",i);
+	    lprintf("Error %d creating New User", i);
 		return(i);
 	}
 	return(i);
@@ -1949,7 +1900,7 @@ int main(int argc, char** argv)  {
     memset(&cfg,0,sizeof(cfg));
 	cfg.size=sizeof(cfg);
 	SAFECOPY(cfg.ctrl_dir,bbs_startup.ctrl_dir);
-	if(!load_cfg(&cfg, /* text: */NULL, /* prep: */TRUE, /* node: */FALSE, str, sizeof(str))) {
+	if(!load_cfg(&cfg, /* text: */NULL, 0, /* prep: */TRUE, /* node: */FALSE, str, sizeof(str))) {
 		printf("ERROR! %s\n",str);
 		exit(1);
 	}
@@ -2139,7 +2090,11 @@ int main(int argc, char** argv)  {
 				last=lastuser(&cfg);
 				for(i=1; i<=last; i++) {
 					user.number=i;
-					GETUSERDAT(&cfg,&user);
+					if (getuserdat(&cfg, &user) != 0) {
+						free_opts(opt);
+						uifc.msg("Error reading user database!");
+						return -1;
+					}
 					sprintf(opt[i-1],"%-*s%c %-25.25s %c %-25.25s"
 						,user_status_len,user_status(&user)
 						,sepchar,user.name,sepchar,user.alias);
@@ -2164,7 +2119,11 @@ int main(int argc, char** argv)  {
 				last=lastuser(&cfg);
 				for(i=1,j=0; i<=last; i++) {
 					user.number = i;
-					GETUSERDAT(&cfg, &user);
+					if (getuserdat(&cfg, &user) != 0) {
+						free_opts(opt);
+						uifc.msg("Error reading user database!");
+						return -1;
+					}
 					if (user.misc & (DELETED | INACTIVE))
 						continue;
 					sprintf(opt[j++], "%-4u %c %-25.25s %c %-25.25s", i, sepchar, user.name, sepchar, user.alias);

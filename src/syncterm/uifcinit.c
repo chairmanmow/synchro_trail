@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Sephen Hurd */
 
-/* $Id: uifcinit.c,v 1.44 2020/05/15 11:05:40 deuce Exp $ */
-
 #include <ciolib.h>
 #include <gen_defs.h>
 #include <stdio.h>
@@ -70,8 +68,6 @@ init_uifc(bool scrn, bool bottom)
 			fprintf(stderr, "uifc library init returned error %d\n", i);
 			return -1;
 		}
-		bottomfunc = uifc.bottomline;
-		uifc_initialized = UIFC_INIT;
 		if ((cio_api.options & (CONIO_OPT_EXTENDED_PALETTE | CONIO_OPT_PALETTE_SETTING))
 		    == (CONIO_OPT_EXTENDED_PALETTE | CONIO_OPT_PALETTE_SETTING)) {
 			uifc.bclr = BLUE;
@@ -80,6 +76,20 @@ init_uifc(bool scrn, bool bottom)
 			uifc.cclr = CYAN;
 			uifc.lbclr = BLUE | (LIGHTGRAY << 4); /* lightbar color */
 		}
+		if (settings.uifc_bclr != 8)
+			uifc.bclr = settings.uifc_bclr;
+		if (settings.uifc_cclr != 8)
+			uifc.cclr = settings.uifc_cclr;
+		if (settings.uifc_hclr != 16)
+			uifc.hclr = settings.uifc_hclr;
+		if (settings.uifc_lbclr != 16)
+			uifc.lbclr = (uifc.lbclr & 0xf0) | settings.uifc_lbclr;
+		if (settings.uifc_lbbclr != 8)
+			uifc.lbclr = (uifc.lbclr & 0x0f) | (settings.uifc_lbbclr << 4);
+		if (settings.uifc_lclr != 16)
+			uifc.lclr = settings.uifc_lclr;
+		bottomfunc = uifc.bottomline;
+		uifc_initialized = UIFC_INIT;
 	}
 
 	if (scrn) {

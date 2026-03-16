@@ -19,7 +19,7 @@
  * Note: If this box doesn't appear square, then you need to fix your tabs.	*
  ****************************************************************************/
 
-#define SMBUTIL_VER "3.20"
+#define SMBUTIL_VER "3.21"
 char        compiler[32];
 
 const char *wday[] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
@@ -77,6 +77,21 @@ BOOL   pause_on_exit = FALSE;
 BOOL   pause_on_error = FALSE;
 char*  beep = "";
 long   msgtxtmode = GETMSGTXT_ALL | GETMSGTXT_PLAIN;
+bool   terminated = false;
+
+#if defined _WIN32
+BOOL WINAPI ControlHandler(unsigned long CtrlType)
+{
+	terminated = true;
+	return true;
+}
+#elif defined __unix__
+#include <signal.h>
+void sighandler_quit(int sig)
+{
+	terminated = true;
+}
+#endif
 
 /************************/
 /* Program usage/syntax */
@@ -136,6 +151,11 @@ char *usage =
 #endif
 	"      -#    = set number of messages to view/list (e.g. -1)\n"
 ;
+
+void close_msgbase(void)
+{
+	smb_close(&smb);
+}
 
 void bail(int code)
 {
@@ -212,6 +232,8 @@ void postmsg(char type, char* to, char* to_number, char* to_address,
 	/* Read message text from stream (file or stdin) */
 	msgtxtlen = 0;
 	while (!feof(fp)) {
+		if (terminated)
+			return;
 		i = fread(buf, 1, sizeof(buf), fp);
 		if (i < 1)
 			break;
@@ -547,6 +569,8 @@ void listmsgs(ulong start, ulong count)
 	if (!count)
 		count = ~0;
 	while (l < count) {
+		if (terminated)
+			return;
 		ZERO_VAR(msg);
 		fseek(smb.sid_fp, ((start - 1L) + l) * idxreclen, SEEK_SET);
 		if (!fread(&msg.idx, sizeof(msg.idx), 1, smb.sid_fp))
@@ -606,6 +630,8 @@ void dumpindex(ulong start, ulong count)
 	if (!count)
 		count = ~0;
 	while (l < count) {
+		if (terminated)
+			return;
 		fseek(smb.sid_fp, ((start - 1L) + l) * idxreclen, SEEK_SET);
 		if (!fread(&idx, sizeof(idx), 1, smb.sid_fp))
 			break;
@@ -653,6 +679,8 @@ void viewmsgs(ulong start, ulong count, BOOL verbose)
 	if (!count)
 		count = ~0;
 	while (l < count) {
+		if (terminated)
+			return;
 		ZERO_VAR(msg);
 		fseek(smb.sid_fp, ((start - 1L) + l) * idxreclen, SEEK_SET);
 		if (!fread(&msg.idx, sizeof(msg.idx), 1, smb.sid_fp))
@@ -675,10 +703,10 @@ void viewmsgs(ulong start, ulong count, BOOL verbose)
 		printf("%-16.16s %ld\n", "index record", ftell(smb.sid_fp) / idxreclen);
 		smb_dump_msghdr(stdout, &msg);
 		if (verbose) {
-			for (i = 0; i < msg.total_hfields; i++) {
+			for (i = 0; i < msg.total_hfields && !terminated; i++) {
 				printf("hdr field[%02u]        type %02Xh, length %u, data:"
 				       , i, msg.hfield[i].type, msg.hfield[i].length);
-				for (j = 0; j < msg.hfield[i].length; j++)
+				for (j = 0; j < msg.hfield[i].length && !terminated; j++)
 					printf(" %02X", *((uint8_t*)msg.hfield_dat[i] + j));
 				printf("\n");
 			}
@@ -704,6 +732,8 @@ void dump_hashes(void)
 	}
 
 	while (!smb_feof(smb.hash_fp)) {
+		if (terminated)
+			return;
 		if (smb_fread(&smb, &hash, sizeof(hash), smb.hash_fp) != sizeof(hash))
 			break;
 		printf("\n");
@@ -802,6 +832,8 @@ void maint(void)
 	printf("\nDone.\n\n");
 	printf("Scanning for pre-flagged messages...\n");
 	for (m = 0; m < l; m++) {
+		if (terminated)
+			return;
 		idx = (idxrec_t*)(idxbuf + (m * idxreclen));
 //		printf("\r%2lu%%",m ? (long)(100.0/((float)l/m)) : 0);
 		if (idx->attr & MSG_DELETE)
@@ -813,6 +845,8 @@ void maint(void)
 		printf("Scanning for messages more than %u days old...\n"
 		       , smb.status.max_age);
 		for (m = f = 0; m < l; m++) {
+			if (terminated)
+				return;
 			idx = (idxrec_t*)(idxbuf + (m * idxreclen));
 //			printf("\r%2lu%%",m ? (long)(100.0/((float)l/m)) : 0);
 			if (idx->attr & (MSG_PERMANENT | MSG_DELETE))
@@ -830,6 +864,8 @@ void maint(void)
 	printf("Scanning for read messages to be killed...\n");
 	uint32_t total_msgs = 0;
 	for (m = f = 0; m < l; m++) {
+		if (terminated)
+			return;
 		idx = (idxrec_t*)(idxbuf + (m * idxreclen));
 		enum smb_msg_type type = smb_msg_type(idx->attr);
 		if (type == SMB_MSG_TYPE_NORMAL || type == SMB_MSG_TYPE_POLL)
@@ -848,6 +884,8 @@ void maint(void)
 	if (smb.status.max_msgs && total_msgs - flagged > smb.status.max_msgs) {
 		printf("Flagging excess messages for deletion...\n");
 		for (m = n = 0, f = flagged; l - flagged > smb.status.max_msgs && m < l; m++) {
+			if (terminated)
+				return;
 			idx = (idxrec_t*)(idxbuf + (m * idxreclen));
 			if (idx->attr & (MSG_PERMANENT | MSG_DELETE))
 				continue;
@@ -885,6 +923,8 @@ void maint(void)
 		}
 
 		for (m = n = 0; m < l; m++) {
+			if (terminated)
+				return;
 			idx = (idxrec_t*)(idxbuf + (m * idxreclen));
 			if (idx->attr & MSG_DELETE) {
 				printf("%lu of %lu\r", ++n, flagged);
@@ -1155,11 +1195,63 @@ void packmsgs(ulong packable)
 		       , n, n * SDT_BLOCK_LEN, m, m * SHD_BLOCK_LEN);
 	}
 
-	sprintf(fname, "%s.sd$", smb.file);
+	smb_close_fp(&smb.sdt_fp);
+	sprintf(fname, "%s.sdt", smb.file);
+	sprintf(tmpfname, "%s.sdt_", smb.file);
+	if (rename(fname, tmpfname) != 0) {
+		smb_unlocksmbhdr(&smb);
+		smb_close_ha(&smb);
+		smb_close_da(&smb);
+		fprintf(errfp, "\n%s!Error %d (%s) renaming %s to %s\n", beep, errno, strerror(errno), fname, tmpfname);
+		return;
+	}
+	if ((smb.sdt_fp = fopen(tmpfname, "rb")) == NULL) {
+		smb_unlocksmbhdr(&smb);
+		smb_close_ha(&smb);
+		smb_close_da(&smb);
+		fprintf(errfp, "\n%s!Error %d (%s) opening %s for reading\n", beep, errno, strerror(errno), tmpfname);
+		return;
+	}
+	smb_close_fp(&smb.shd_fp);
+	sprintf(fname, "%s.shd", smb.file);
+	sprintf(tmpfname, "%s.shd_", smb.file);
+	if (rename(fname, tmpfname) != 0) {
+		smb_unlocksmbhdr(&smb);
+		smb_close_ha(&smb);
+		smb_close_da(&smb);
+		fprintf(errfp, "\n%s!Error %d (%s) renaming %s to %s\n", beep, errno, strerror(errno), fname, tmpfname);
+		return;
+	}
+	if ((smb.shd_fp = fopen(tmpfname, "rb")) == NULL) {
+		smb_unlocksmbhdr(&smb);
+		smb_close_ha(&smb);
+		smb_close_da(&smb);
+		fprintf(errfp, "\n%s!Error %d (%s) opening %s for reading\n", beep, errno, strerror(errno), tmpfname);
+		return;
+	}
+	smb_close_fp(&smb.sid_fp);
+	sprintf(fname, "%s.sid", smb.file);
+	sprintf(tmpfname, "%s.sid_", smb.file);
+	if (rename(fname, tmpfname) != 0) {
+		smb_unlocksmbhdr(&smb);
+		smb_close_ha(&smb);
+		smb_close_da(&smb);
+		fprintf(errfp, "\n%s!Error %d (%s) renaming %s to %s\n", beep, errno, strerror(errno), fname, tmpfname);
+		return;
+	}
+	if ((smb.sid_fp = fopen(tmpfname, "rb")) == NULL) {
+		smb_unlocksmbhdr(&smb);
+		smb_close_ha(&smb);
+		smb_close_da(&smb);
+		fprintf(errfp, "\n%s!Error %d (%s) opening %s for reading\n", beep, errno, strerror(errno), tmpfname);
+		return;
+	}
+
+	sprintf(fname, "%s.sdt$", smb.file);
 	tmp_sdt = fopen(fname, "wb");
-	sprintf(fname, "%s.sh$", smb.file);
+	sprintf(fname, "%s.shd$", smb.file);
 	tmp_shd = fopen(fname, "wb");
-	sprintf(fname, "%s.si$", smb.file);
+	sprintf(fname, "%s.sid$", smb.file);
 	tmp_sid = fopen(fname, "wb");
 	if (!tmp_sdt || !tmp_shd || !tmp_sid) {
 		smb_unlocksmbhdr(&smb);
@@ -1206,7 +1298,7 @@ void packmsgs(ulong packable)
 		ZERO_VAR(msg);
 		fseek(smb.sid_fp, l * idxreclen, SEEK_SET);
 		printf("%lu of %" PRIu32 "\r", l + 1, smb.status.total_msgs);
-		if (!fread(&msg.idx, sizeof(msg.idx), 1, smb.sid_fp))
+		if (!fread(&msg.idx, idxreclen, 1, smb.sid_fp))
 			break;
 		if (msg.idx.attr & MSG_DELETE) {
 			printf("\nDeleted index %lu: msg number %lu\n", l, (ulong) msg.idx.number);
@@ -1239,7 +1331,7 @@ void packmsgs(ulong packable)
 			if (msg.hdr.offset == datoffset[m].old)
 				break;
 		if (m < datoffsets) {              /* another index pointed to this data */
-			printf("duplicate index\n");
+//			printf("duplicate data at offset %08" PRIx32 "\n", msg.hdr.offset);
 			msg.hdr.offset = datoffset[m].new;
 			smb_incmsgdat(&smb, datoffset[m].new, smb_getmsgdatlen(&msg), 1);
 		} else {
@@ -1305,8 +1397,7 @@ void packmsgs(ulong packable)
 		} else {
 			msg.idx.offset = (uint32_t)offset;
 			smb_init_idx(&smb, &msg);
-			fseek(tmp_sid, l * idxreclen, SEEK_SET);
-			fwrite(&msg.idx, 1, sizeof(msg.idx), tmp_sid);
+			fwrite(&msg.idx, 1, idxreclen, tmp_sid);
 
 			/* Write the new header entry */
 			fseek(tmp_shd, msg.idx.offset, SEEK_SET);
@@ -1333,46 +1424,47 @@ void packmsgs(ulong packable)
 		smb_close_da(&smb);
 	}
 
-	/* Change *.sh$ into *.shd */
+	/* Change *.shd$ into *.shd */
 	fclose(smb.shd_fp), smb.shd_fp = NULL;
 	fclose(tmp_shd);
-	sprintf(fname, "%s.shd", smb.file);
+	sprintf(fname, "%s.shd_", smb.file);
 	if (remove(fname) != 0) {
 		error = TRUE;
 		fprintf(errfp, "\n%s!Error %d removing %s\n", beep, errno, fname);
 	}
-	sprintf(tmpfname, "%s.sh$", smb.file);
+	*lastchar(fname) = '\0';
+	sprintf(tmpfname, "%s.shd$", smb.file);
 	if (!error && rename(tmpfname, fname) != 0) {
 		error = TRUE;
 		fprintf(errfp, "\n%s!Error %d renaming %s to %s\n", beep, errno, tmpfname, fname);
 	}
 
 
-	/* Change *.sd$ into *.sdt */
+	/* Change *.sdt$ into *.sdt */
 	fclose(smb.sdt_fp), smb.sdt_fp = NULL;
 	fclose(tmp_sdt);
-	sprintf(fname, "%s.sdt", smb.file);
+	sprintf(fname, "%s.sdt_", smb.file);
 	if (!error && remove(fname) != 0) {
 		error = TRUE;
 		fprintf(errfp, "\n%s!Error %d removing %s\n", beep, errno, fname);
 	}
-
-	sprintf(tmpfname, "%s.sd$", smb.file);
+	*lastchar(fname) = '\0';
+	sprintf(tmpfname, "%s.sdt$", smb.file);
 	if (!error && rename(tmpfname, fname) != 0) {
 		error = TRUE;
 		fprintf(errfp, "\n%s!Error %d renaming %s to %s\n", beep, errno, tmpfname, fname);
 	}
 
-	/* Change *.si$ into *.sid */
+	/* Change *.sid$ into *.sid */
 	fclose(smb.sid_fp), smb.sid_fp = NULL;
 	fclose(tmp_sid);
-	sprintf(fname, "%s.sid", smb.file);
+	sprintf(fname, "%s.sid_", smb.file);
 	if (!error && remove(fname) != 0) {
 		error = TRUE;
 		fprintf(errfp, "\n%s!Error %d removing %s\n", beep, errno, fname);
 	}
-
-	sprintf(tmpfname, "%s.si$", smb.file);
+	*lastchar(fname) = '\0';
+	sprintf(tmpfname, "%s.sid$", smb.file);
 	if (!error && rename(tmpfname, fname) != 0) {
 		error = TRUE;
 		fprintf(errfp, "\n%s!Error %d renaming %s to %s\n", beep, errno, tmpfname, fname);
@@ -1409,6 +1501,8 @@ int delmsgs(BOOL del)
 	smbmsg_t msg;
 
 	for (uint i = 0; i < smb.status.total_msgs; i++) {
+		if (terminated)
+			break;
 		ZERO_VAR(msg);
 		msg.idx_offset = i;
 		result = smb_getmsgidx(&smb, &msg);
@@ -1549,6 +1643,8 @@ void readmsgs(ulong start, ulong count)
 	else
 		msg.idx_offset = 0;
 	while (!done) {
+		if (terminated)
+			return;
 		if (domsg) {
 			fseek(smb.sid_fp, msg.idx_offset * idxreclen, SEEK_SET);
 			if (!fread(&msg.idx, sizeof(msg.idx), 1, smb.sid_fp))
@@ -1784,6 +1880,15 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
+	/* Install Ctrl-C/Break signal handler here */
+#if defined _WIN32
+	SetConsoleCtrlHandler(ControlHandler, /* Add */ true);
+#elif defined __unix__
+	signal(SIGINT, sighandler_quit);
+#endif
+
+	atexit(close_msgbase);
+
 	/* Automatically detect the system time zone (if possible) */
 	tzset();
 	now = time(NULL);
@@ -1795,6 +1900,8 @@ int main(int argc, char **argv)
 	}
 
 	for (x = 1; x < argc && x > 0; x++) {
+		if (terminated)
+			break;
 		if (argv[x][0] == '-') {
 			if (IS_DIGIT(argv[x][1])) {
 				count = strtol(argv[x] + 1, NULL, 10);

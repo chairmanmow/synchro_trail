@@ -126,10 +126,12 @@ include sbbsdefs.mk
 MT_CFLAGS	+=	$(SBBSDEFS) $(SFTP-MT_CFLAGS)
 
 ifneq ($(os),darwin)
- ifdef SBBSDIR
-  LIB_RPATH += -Wl,-rpath,$(SBBSDIR)/exec
+ ifndef NO_ABSOLUTE_RPATH
+  ifdef SBBSDIR
+   LIB_RPATH += -Wl,-rpath,$(SBBSDIR)/exec
+  endif
+  LIB_RPATH += -Wl,-rpath,$(PWD)/$(LIBODIR)
  endif
- LIB_RPATH += -Wl,-rpath,$(PWD)/$(LIBODIR)
  LIB_RPATH += '-Wl,-rpath,$$ORIGIN,-rpath,$$ORIGIN/../$(LIBODIR),-z,origin,--enable-new-dtags'
 endif
 
@@ -177,22 +179,22 @@ endif
 # FTP Server Link Rule
 $(FTPSRVR): $(MTOBJODIR)/ftpsrvr.o
 	@echo Linking $@
-	$(QUIET)$(MKSHLIB) $(LDFLAGS) $(MTOBJODIR)/ftpsrvr.o $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
+	$(QUIET)$(MKSHPPLIB) $(LDFLAGS) $(MTOBJODIR)/ftpsrvr.o $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
 
 # Mail Server Link Rule
 $(MAILSRVR): $(MAIL_OBJS)
 	@echo Linking $@
-	$(QUIET)$(MKSHLIB) $(LDFLAGS) $(MAIL_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
+	$(QUIET)$(MKSHPPLIB) $(LDFLAGS) $(MAIL_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
 
 # Web Server Link Rule
 $(WEBSRVR): $(WEB_OBJS)
 	@echo Linking $@
-	$(QUIET)$(MKSHLIB) $(LDFLAGS) $(WEB_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ $(ENCODE_LIBS) -lsbbs $(XPDEV-MT_LIBS)
+	$(QUIET)$(MKSHPPLIB) $(LDFLAGS) $(WEB_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ $(ENCODE_LIBS) -lsbbs $(XPDEV-MT_LIBS)
 
 # Services Link Rule
 $(SERVICES): $(SERVICE_OBJS)
 	@echo Linking $@
-	$(QUIET)$(MKSHLIB) $(LDFLAGS) $(SERVICE_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
+	$(QUIET)$(MKSHPPLIB) $(LDFLAGS) $(SERVICE_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
 
 # Synchronet Console Build Rule
 $(SBBSCON): $(CON_OBJS) $(SBBS) $(FTPSRVR) $(WEBSRVR) $(MAILSRVR) $(SERVICES)
@@ -315,7 +317,7 @@ $(READSAUCE): $(READSAUCE_OBJS) | $(EXEODIR) $(OBJODIR)
 # PKTDUMP
 $(PKTDUMP): $(PKTDUMP_OBJS) | $(OBJODIR) $(EXEODIR)
 	@echo Linking $@
-	$(QUIET)$(CC) $(CONSOLE_LDFLAGS) -o $@ $(PKTDUMP_OBJS)
+	$(QUIET)$(CC) $(CONSOLE_LDFLAGS) -o $@ $(PKTDUMP_OBJS) $(XPDEV_LIBS)
 
 # FMSGDUMP
 $(FMSGDUMP): $(FMSGDUMP_OBJS) | $(EXEODIR) $(OBJODIR)

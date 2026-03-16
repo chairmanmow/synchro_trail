@@ -64,6 +64,7 @@
 
 #define HDRLEN     5    /* size of a zmodem header */
 
+#define SET_PARITY(c)	((c) | 0x80)
 #define STRIPPED_PARITY(c)  ((c) & 0x7f)
 
 static int lprintf(zmodem_t* zm, int level, const char *fmt, ...)
@@ -1167,13 +1168,13 @@ BOOL zmodem_recv_hex_header(zmodem_t* zm)
 	 * drop the end of line sequence after a hex header
 	 */
 	c = zmodem_rx(zm);
-	if (c == '\r') {
+	if (c == '\r' || c == SET_PARITY('\r')) { // CR with Even Parity (Tera Term's ZMODEM sends this)
 		/*
-		 * both are expected with CR
+		 * both bytes are expected when the first received is a CR
 		 */
 		c = zmodem_rx(zm);  /* drop LF */
 	}
-	if (c != '\n' && c != 0x8A) {
+	if (c != '\n' && c != SET_PARITY('\n')) { // LF with Odd Parity
 		lprintf(zm, LOG_ERR, "%s HEX header not terminated with LF: %s"
 		        , __FUNCTION__, chr(c));
 		return FALSE;
@@ -1196,7 +1197,7 @@ BOOL zmodem_recv_bin32_header(zmodem_t* zm)
 	for (n = 0; n < HDRLEN; n++) {
 		c = zmodem_rx(zm);
 		if (c < 0)
-			return TRUE;
+			return FALSE;
 		crc = ucrc32(c, crc);
 		zm->rxd_header[n] = c;
 	}
@@ -1495,16 +1496,21 @@ int zmodem_get_zfin(zmodem_t* zm)
 			break;
 	}
 
+	lprintf(zm, LOG_DEBUG, "%s result: %s (attempts=%d)", __FUNCTION__, frame_desc(type), attempts);
+
 	/*
 	 * these Os are formally required; but they don't do a thing
 	 * unfortunately many programs require them to exit
 	 * (both programs already sent a ZFIN so why bother ?)
 	 */
 
-	if (type == ZFIN) {
-		zmodem_send_raw(zm, 'O');
-		zmodem_send_raw(zm, 'O');
+	for (int i = 0; type == ZFIN && i < 2; ++i) {
+		if (zmodem_send_raw(zm, 'O') == SEND_SUCCESS)
+			lprintf(zm, LOG_DEBUG, "%s sent 'O'", __FUNCTION__);
+		else
+			lprintf(zm, LOG_WARNING, "%s failed to send 'O'", __FUNCTION__);
 	}
+	zmodem_flush(zm);
 
 	return type;
 }
@@ -2035,13 +2041,13 @@ int zmodem_recv_files(zmodem_t* zm, const char* download_dir, uint64_t* bytes_re
 			if (fexist(fpath)) {
 				l = flength(fpath);
 				lprintf(zm, LOG_WARNING, "%s already exists (%" PRId64 " bytes)", fpath, l);
-				if (l >= (int32_t)bytes) {
+				if (l >= bytes) {
 					lprintf(zm, LOG_WARNING, "Local file size >= remote file size (%" PRId64 ")"
 					        , bytes);
 					if (zm->duplicate_filename == NULL)
 						break;
 					else {
-						if (l > (int32_t)bytes) {
+						if (l > bytes) {
 							if (zm->duplicate_filename(zm->cbdata, zm)) {
 								loop = TRUE;
 								continue;
@@ -2082,7 +2088,7 @@ int zmodem_recv_files(zmodem_t* zm, const char* download_dir, uint64_t* bytes_re
 					}
 					break;
 				}
-				if (l == (int32_t)bytes) {
+				if (l == bytes) {
 					lprintf(zm, LOG_INFO, "CRC, length, and filename match.");
 					break;
 				}
@@ -2397,7 +2403,7 @@ const char* zmodem_source(void)
 
 char* zmodem_ver(char *buf)
 {
-	return strcpy(buf, "2.0");
+	return strcpy(buf, "2.2");
 }
 
 void zmodem_init(zmodem_t* zm, void* cbdata

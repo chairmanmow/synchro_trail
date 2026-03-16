@@ -23,6 +23,10 @@
 #endif
 
 #include <stdarg.h>
+#ifdef _MSC_VER
+#undef __STDC_NO_ATOMICS__
+#endif
+#include <stdatomic.h>
 #include <stdlib.h>	/* alloca */
 #include <stdio.h>
 #if defined(_WIN32)
@@ -68,6 +72,7 @@ CIOLIBEXPORT cioapi_t	cio_api;
 
 static const int tabs[]={1,9,17,25,33,41,49,57,65,73,81,89,97,105,113,121,129,137,145};
 static int ungotch;
+static bool ungot;
 struct text_info cio_textinfo;
 uint32_t ciolib_fg;
 uint32_t ciolib_bg;
@@ -87,15 +92,20 @@ CIOLIBEXPORT const char *ciolib_initial_program_name = "CIOLIB";
 CIOLIBEXPORT const char *ciolib_initial_program_class = "CIOLIB";
 CIOLIBEXPORT bool ciolib_swap_mouse_butt45 = false;
 
-static int initialized=0;
+static _Atomic int initialized=0;
+static pthread_once_t init_initialized = PTHREAD_ONCE_INIT;
+static pthread_mutex_t init_mutex;
+static pthread_mutex_t unget_mutex;
 
 CIOLIBEXPORT int ciolib_movetext(int sx, int sy, int ex, int ey, int dx, int dy);
 CIOLIBEXPORT char * ciolib_cgets(char *str);
 CIOLIBEXPORT int ciolib_cscanf (char *format , ...);
 CIOLIBEXPORT int ciolib_kbhit(void);
+CIOLIBEXPORT int ciolib_kbwait(int);
 CIOLIBEXPORT int ciolib_getch(void);
 CIOLIBEXPORT int ciolib_getche(void);
 CIOLIBEXPORT int ciolib_ungetch(int ch);
+CIOLIBEXPORT int ciolib_ungetch_byte(int ch);
 CIOLIBEXPORT void ciolib_gettextinfo(struct text_info *info);
 CIOLIBEXPORT int ciolib_wherex(void);
 CIOLIBEXPORT int ciolib_wherey(void);
@@ -177,6 +187,7 @@ static int try_gdi_init(int mode)
 		cio_api.setvideoflags=bitmap_setvideoflags;
 
 		cio_api.kbhit=gdi_kbhit;
+		cio_api.kbwait=gdi_kbwait;
 		cio_api.getch=gdi_getch;
 		cio_api.textmode=gdi_textmode;
 		cio_api.seticon=gdi_seticon;
@@ -292,6 +303,7 @@ static int try_x_init(int mode)
 		cio_api.setvideoflags=bitmap_setvideoflags;
 
 		cio_api.kbhit=x_kbhit;
+		cio_api.kbwait=x_kbwait;
 		cio_api.getch=x_getch;
 		cio_api.textmode=x_textmode;
 		cio_api.setname=x_setname;
@@ -485,13 +497,24 @@ CIOLIBEXPORT void suspendciolib(void)
 	initialized=-1;
 }
 
+static void
+init_mutexes(void)
+{
+	assert_pthread_mutex_init(&init_mutex, NULL);
+	assert_pthread_mutex_init(&unget_mutex, NULL);
+}
+
 CIOLIBEXPORT int initciolib(int mode)
 {
-	switch(initialized) {
+	pthread_once(&init_initialized, init_mutexes);
+	assert_pthread_mutex_lock(&init_mutex);
+	switch((int)initialized) {
 		case 1:
+			assert_pthread_mutex_unlock(&init_mutex);
 			return(0);
 		case -1:
 			initialized=1;
+			assert_pthread_mutex_unlock(&init_mutex);
 			if(cio_api.resume != NULL)
 				cio_api.resume();
 			ciolib_clrscr();
@@ -500,8 +523,10 @@ CIOLIBEXPORT int initciolib(int mode)
 
 #ifdef WITH_RETRO
 	if (retro_set) {
-		if (!try_retro_init(mode))
+		if (!try_retro_init(mode)) {
+			assert_pthread_mutex_unlock(&init_mutex);
 			return -1;
+		}
 	}
 	else {
 #endif
@@ -564,6 +589,7 @@ CIOLIBEXPORT int initciolib(int mode)
 #endif
 	}
 	if(cio_api.mode==CIOLIB_MODE_AUTO) {
+		assert_pthread_mutex_unlock(&init_mutex);
 		fprintf(stderr,"CIOLIB initialization failed!\n");
 		return(-1);
 	}
@@ -594,6 +620,7 @@ CIOLIBEXPORT int initciolib(int mode)
 			cio_textinfo.normattr=LIGHTGRAY;
 			break;
 	}
+	assert_pthread_mutex_unlock(&init_mutex);
 	ciolib_seticon(ciolib_initial_icon, ciolib_initial_icon_width);
 	ciolib_textattr(cio_textinfo.normattr);
 
@@ -601,16 +628,37 @@ CIOLIBEXPORT int initciolib(int mode)
 	return(0);
 }
 
+/*
+ * Returns non-zero if a key is hit, attempts to wait for ms milliseconds
+ */
+CIOLIBEXPORT int ciolib_kbwait(int ms)
+{
+	CIOLIB_INIT();
+	if (ciolib_kbhit())
+		return(1);
+	if (cio_api.kbwait)
+		return cio_api.kbwait(ms);
+	for (int i = 0; i < ms; i++) {
+		if (ciolib_kbhit())
+			return(1);
+		ciolib_delay(1);
+	}
+	return 0;
+}
+
 /* **MUST** be implemented */
 /*
  * Returns non-zero if a key is hit
  */
-// TODO: A version that takes a timeout and blocks (ie: kbwait()?)
 CIOLIBEXPORT int ciolib_kbhit(void)
 {
 	CIOLIB_INIT();
-	if(ungotch)
+	assert_pthread_mutex_lock(&unget_mutex);
+	if(ungot) {
+		assert_pthread_mutex_unlock(&unget_mutex);
 		return(1);
+	}
+	assert_pthread_mutex_unlock(&unget_mutex);
 	return(cio_api.kbhit());
 }
 
@@ -621,11 +669,17 @@ CIOLIBEXPORT int ciolib_getch(void)
 
 	CIOLIB_INIT();
 
-	if(ungotch) {
-		ch=ungotch;
-		ungotch=0;
+	assert_pthread_mutex_lock(&unget_mutex);
+	if (ungot) {
+		ch = ungotch & 0xff;
+		if (ungotch > 0xff)
+			ungotch >>= 8;
+		else
+			ungot=false;
+		assert_pthread_mutex_unlock(&unget_mutex);
 		return(ch);
 	}
+	assert_pthread_mutex_unlock(&unget_mutex);
 	return(cio_api.getch());
 }
 
@@ -636,12 +690,25 @@ CIOLIBEXPORT int ciolib_getche(void)
 
 	CIOLIB_INIT();
 
-	if(ungotch) {
-		ch=ungotch;
-		ungotch=0;
-		ciolib_putch(ch);
-		return(ch);
+	assert_pthread_mutex_lock(&unget_mutex);
+	if (ungot) {
+		ch = ungotch;
+		ungot = 0;
+		assert_pthread_mutex_unlock(&unget_mutex);
+		if (ch == 0xe0 || ch == 0) {
+			ch |= (ciolib_getch() << 8);
+			/* Eat extended chars - except ESC which is an abort */
+			switch(ch) {
+				case CIO_KEY_LITERAL_E0:
+					ciolib_putch(ch);
+					return(ch);
+				case CIO_KEY_ABORTED:
+					return EOF;
+			}
+		}
 	}
+	else
+		assert_pthread_mutex_unlock(&unget_mutex);
 	if(cio_api.getche)
 		return(cio_api.getche());
 	else {
@@ -672,13 +739,39 @@ CIOLIBEXPORT int ciolib_ungetch(int ch)
 {
 	CIOLIB_INIT();
 
-	if(ungotch)
+	assert_pthread_mutex_lock(&unget_mutex);
+	if (ungot) {
+		assert_pthread_mutex_unlock(&unget_mutex);
 		return(EOF);
+	}
 	if (ch == 0xe0)
 		ch = CIO_KEY_LITERAL_E0;
-	if(cio_api.ungetch)
-		return(cio_api.ungetch(ch));
-	ungotch=ch;
+	if (cio_api.ungetch) {
+		int ret = cio_api.ungetch(ch);
+		assert_pthread_mutex_unlock(&unget_mutex);
+		return ret;
+	}
+	ungotch = ch;
+	ungot = true;
+	assert_pthread_mutex_unlock(&unget_mutex);
+	return(ch);
+}
+
+/*
+ * On success, returns ch, on error, returns EOF
+ */
+CIOLIBEXPORT int ciolib_ungetch_byte(int ch)
+{
+	CIOLIB_INIT();
+
+	assert_pthread_mutex_lock(&unget_mutex);
+	if (ungot) {
+		assert_pthread_mutex_unlock(&unget_mutex);
+		return(EOF);
+	}
+	ungotch = ch;
+	ungot = true;
+	assert_pthread_mutex_unlock(&unget_mutex);
 	return(ch);
 }
 
@@ -973,7 +1066,10 @@ CIOLIBEXPORT void ciolib_gotoxy(int x, int y)
 /* **MUST** be implemented */
 CIOLIBEXPORT void ciolib_textmode(int mode)
 {
-	CIOLIB_INIT();
+	if (initialized != 1) {
+		ciolib_initial_mode = mode;
+		initciolib(CIOLIB_MODE_AUTO);
+	}
 
 	if(mode==LASTMODE) {
 		cio_api.textmode(lastmode);
@@ -2096,8 +2192,8 @@ CIOLIBEXPORT enum ciolib_codepage ciolib_getcodepage(void)
 
 CIOLIBEXPORT enum ciolib_scaling ciolib_getscaling_type(void)
 {
-	if (cio_api.getscaling != NULL)
-		return cio_api.getscaling();
+	if (cio_api.getscaling_type != NULL)
+		return cio_api.getscaling_type();
 	return CIOLIB_SCALING_INTERNAL;
 }
 

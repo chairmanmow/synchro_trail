@@ -3,13 +3,14 @@
  * ctrl/modopts/modname.ini
  *
  * For ctrl/modopts.ini (and ctrl/modopts.d/*.ini): 
- *   Parses a single .ini section using the first argument to load() as the
+ *   Parses a single .ini section using the first argument to modopts.js as the
  *   section name and return an object containing the section keys as
  *   properties with Boolean, Number, or String values.
  *
  *   Or parses and return a single option/key value when a key name is
- *   specified in the fourth argument to load(). The default value of the
- *   option may be specified in the fifth argument to load() in this case.
+ *   specified in the second argument to modopts.js. The default value of the
+ *   option may be specified in the third argument to modopts.js in this case
+ *   (and a Date value type may be coerced this way).
  *
  *   If the section [module:lang=user-lang] exists in the modopts.ini file,
  *   that section (or key value from it) may be returned instead of the
@@ -27,8 +28,9 @@
  *   the returned object. Later sections/keys can override previous property
  *   values.
  *
- *   If an option/key name is passed to load(), returns just that one option
- *   value (String, Number, or Boolean, not an object).
+ *   If an option/key name is passed, returns just that one option value
+ *   (String, Number, or Boolean, not an object).  A Date type can be coerced
+ *   by passing a default_opt_value of type Date.
  *
  * Examples:
  *
@@ -44,7 +46,7 @@ function get_mod_options(modname, optname, default_optval)
 		throw new Error("Module name specified is wrong type: " + typeof modname);
 	if(!modname)
 		throw new Error("No module name specified");
-	var ini_file = new File(system.ctrl_dir + "modopts/" + modname.replace(":", "-") + ".ini");
+	var ini_file = new File(system.ctrl_dir + "modopts/" + modname.toLowerCase().replace(":", "-").replace(" ", "_") + ".ini");
 	if(ini_file.open("r")) {
 		var obj = ini_file.iniGetObject(/* lowercase */false, /* blanks: */true);
 		var sections = ini_file.iniGetSections();
@@ -57,7 +59,7 @@ function get_mod_options(modname, optname, default_optval)
 			}
 		}
 		ini_file.close();
-		if(optname)
+		if(typeof optname === 'string')
 			return (obj[optname] === undefined) ? default_optval : obj[optname];
 		return obj;
 	}
@@ -80,12 +82,12 @@ function get_mod_options(modname, optname, default_optval)
 	if(!section)
 		section = modname;
 	var val;
-	if(optname)	// Get a specific option value (optionally, with default value)
+	if(typeof optname === 'string')	// Get a specific option value (optionally, with default value)
 		val = ini_file.iniGetValue(section, optname, default_optval);
 	else // Get all options
 		val = ini_file.iniGetObject(section, /* lowercase */false, /* blanks: */true);
 	ini_file.close();
-	return val;
+	return val === null ? (typeof optname === 'object' ? optname : null) : val;
 }
 
 if(argv.length)

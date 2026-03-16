@@ -329,6 +329,20 @@ char* truncated_str(char* str, const char* set)
 }
 
 /****************************************************************************/
+/* Truncates the specified substring from the end of the string if it		*/
+/* exists.																	*/
+/****************************************************************************/
+void remove_end_substr(char* str, const char* substr)
+{
+	size_t str_len = strlen(str);
+	size_t sub_len = strlen(substr);
+	if (sub_len == 0 || str_len < sub_len)
+		return;
+	if (strcmp(str + (str_len - sub_len), substr) == 0)
+		*(str + (str_len - sub_len)) = '\0';
+}
+
+/****************************************************************************/
 /* rot13 encoder/decoder - courtesy of Mike Acar							*/
 /****************************************************************************/
 char* rot13(char* str)
@@ -384,19 +398,6 @@ int strsame(const char *str1, const char *str2)
 	return j;
 }
 
-
-/****************************************************************************/
-/* Returns string for 2 digit hex+ numbers up to 575						*/
-/****************************************************************************/
-char *hexplus(uint num, char *str)
-{
-	sprintf(str, "%03x", num);
-	str[0] = num / 0x100 ? 'f' + (num / 0x10) - 0xf : str[1];
-	str[1] = str[2];
-	str[2] = 0;
-	return str;
-}
-
 /****************************************************************************/
 /* Converts an ASCII Hex string into an ulong                               */
 /* by Steve Deppe (Ille Homine Albe)										*/
@@ -424,22 +425,6 @@ uint32_t ahtou32(const char *str)
 }
 
 /****************************************************************************/
-/* Converts hex-plus string to integer										*/
-/****************************************************************************/
-uint hptoi(const char *str)
-{
-	char tmp[128];
-	uint i;
-
-	if (!str[1] || toupper(str[0]) <= 'F')
-		return ahtoul(str);
-	SAFECOPY(tmp, str);
-	tmp[0] = 'F';
-	i = ahtoul(tmp) + ((toupper(str[0]) - 'F') * 0x10);
-	return i;
-}
-
-/****************************************************************************/
 /* Returns true if a is a valid ctrl-a "attribute" code, false if it isn't. */
 /****************************************************************************/
 bool valid_ctrl_a_attr(char a)
@@ -459,6 +444,8 @@ bool valid_ctrl_a_attr(char a)
 		case 'N':   /* normal       */
 		case 'R':   /* red      fg  */
 		case 'W':   /* white    fg  */
+		case 'U':   /* user theme */
+		case 'V':   /* mnemonics */
 		/* "Rainbow" attribute is not valid for messages (no ANSI equivalent)
 				case 'X':	// rainbow
 		*/
@@ -600,12 +587,25 @@ char* ascii_str(uchar* str)
 	return (char*)str;
 }
 
+/****************************************************************************/
+// Replaces named variables in the source string with their values from the
+// provided lists of named variables. The replaced string is returned in the
+// provided buffer.
+// strlist_list is a NULL-terminated list of named_string_t* lists, which are
+// searched in order for variable matches. string_list and int_list termniated
+// by a named item with a NULL name. If a variable is found in more than one list,
+// the first match is used (search order is strlist_list, then string_list, then
+// int_list).
+// If an escape sequence is provided, it is used to skip variable replacement
+// If case_sensitive is false, variable names are matched case-insensitively.
+/****************************************************************************/
 char* replace_named_values(const char* src
                            , char* buf
                            , size_t buflen /* includes '\0' terminator */
                            , const char* escape_seq
+                           , named_string_t** strlist_list
                            , named_string_t* string_list
-                           , named_int_t* int_list
+                           , named_long_t* int_list
                            , bool case_sensitive)
 {
 	char   val[32];
@@ -632,15 +632,35 @@ char* replace_named_values(const char* src
 			}
 			src += esc_len;  /* skip the escape seq */
 		}
+		if (strlist_list) {
+			for (i = 0; strlist_list[i] != NULL && strlist_list[i]->name != NULL /* terminator */; i++) {
+				name_len = strlen(strlist_list[i]->name);
+				if (cmp(src, strlist_list[i]->name, name_len) == 0) {
+					if (strlist_list[i]->value != NULL) {
+						value_len = strlen(strlist_list[i]->value);
+						if ((p - buf) + value_len > buflen - 1)  /* buffer overflow? */
+							value_len = (buflen - 1) - (p - buf); /* truncate value */
+						memcpy(p, strlist_list[i]->value, value_len);
+						p += value_len;
+					}
+					src += name_len;
+					break;
+				}
+			}
+			if (strlist_list[i] != NULL) /* variable match */
+				continue;
+		}
 		if (string_list) {
 			for (i = 0; string_list[i].name != NULL /* terminator */; i++) {
 				name_len = strlen(string_list[i].name);
 				if (cmp(src, string_list[i].name, name_len) == 0) {
-					value_len = strlen(string_list[i].value);
-					if ((p - buf) + value_len > buflen - 1)  /* buffer overflow? */
-						value_len = (buflen - 1) - (p - buf); /* truncate value */
-					memcpy(p, string_list[i].value, value_len);
-					p += value_len;
+					if (string_list[i].value != NULL) {
+						value_len = strlen(string_list[i].value);
+						if ((p - buf) + value_len > buflen - 1)  /* buffer overflow? */
+							value_len = (buflen - 1) - (p - buf); /* truncate value */
+						memcpy(p, string_list[i].value, value_len);
+						p += value_len;
+					}
 					src += name_len;
 					break;
 				}
@@ -652,7 +672,7 @@ char* replace_named_values(const char* src
 			for (i = 0; int_list[i].name != NULL /* terminator */; i++) {
 				name_len = strlen(int_list[i].name);
 				if (cmp(src, int_list[i].name, name_len) == 0) {
-					SAFEPRINTF(val, "%d", int_list[i].value);
+					SAFEPRINTF(val, "%ld", int_list[i].value);
 					value_len = strlen(val);
 					if ((p - buf) + value_len > buflen - 1)  /* buffer overflow? */
 						value_len = (buflen - 1) - (p - buf); /* truncate value */

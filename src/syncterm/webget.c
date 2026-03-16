@@ -156,7 +156,9 @@ recv_nbytes(struct http_session *sess, uint8_t *buf, const size_t chunk_size, bo
 	while (received < chunk_size) {
 		ssize_t rc;
 		if (sess->is_tls) {
-#ifndef WITHOUT_CRYPTLIB
+#ifdef WITHOUT_CRYPTLIB
+			goto error_return;
+#else
 			int copied = 0;
 			int status = cryptPopData(sess->tls, &buf[received], chunk_size - received, &copied);
 			if (status == CRYPT_ERROR_COMPLETE) {
@@ -292,7 +294,9 @@ send_request(struct http_session *sess)
 	sess->cache.request_time = time(NULL);
 	ssize_t sent;
 	if (sess->is_tls) {
-#ifndef WITHOUT_CRYPTLIB
+#ifdef WITHOUT_CRYPTLIB
+		return false;
+#else
 		int copied;
 		int ret = cryptPushData(sess->tls, reqstr, len, &copied);
 		if (cryptStatusError(ret)) {
@@ -398,13 +402,13 @@ recv_line(struct http_session *sess, int timeout, size_t *len)
 
 error_return:
 	if (len)
-		len = 0;
+		*len = 0;
 special_return:
 	free(ret);
 	return NULL;
 }
 
-const char *
+static const char *
 skipws(const char *val)
 {
 	while (*val == ' ' || *val == '\t')
@@ -763,6 +767,11 @@ parse_uri(struct http_session *sess)
 	}
 	p += 3;
 	sess->hostname = strdup(p);
+	if (sess->hostname == NULL) {
+		set_msg_locked(sess->req, "strdup() failure");
+		assert_pthread_mutex_unlock(&sess->req->mtx);
+		goto error_return;
+	}
 	size_t copied = strlcpy(sess->hacky_list_entry.name, sess->req->name, sizeof(sess->hacky_list_entry.name));
 	assert(copied <= LIST_NAME_MAX);
 	assert_pthread_mutex_unlock(&sess->req->mtx);
@@ -1151,7 +1160,8 @@ ret_return:
 	return ret;
 }
 
-double dmax(double d1, double d2)
+static double
+dmax(double d1, double d2)
 {
 	if (d1 > d2)
 		return d1;
@@ -1280,9 +1290,9 @@ destroy_webget_req(struct webget_request *req)
 	free((void *)req->uri);
 	req->uri = NULL;
 	free((void *)req->msg);
-	req->uri = NULL;
+	req->msg = NULL;
 	free((void *)req->state);
-	req->uri = NULL;
+	req->state = NULL;
 	pthread_mutex_destroy(&req->mtx);
 }
 

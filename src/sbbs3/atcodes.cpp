@@ -20,13 +20,15 @@
  ****************************************************************************/
 
 #include "sbbs.h"
+
 #include "cmdshell.h"
-#include "utf8.h"
-#include "unicode.h"
 #include "cp437defs.h"
-#include "ver.h"
-#include "petdefs.h"
 #include "filedat.h"
+#include "os_info.h"
+#include "petdefs.h"
+#include "unicode.h"
+#include "utf8.h"
+#include "ver.h"
 
 #if defined(_WINSOCKAPI_)
 extern WSADATA WSAData;
@@ -112,7 +114,7 @@ struct atcode_format {
 /****************************************************************************/
 /* Returns 0 if invalid @ code. Returns length of @ code if valid.          */
 /****************************************************************************/
-int sbbs_t::show_atcode(const char *instr, JSObject* obj)
+int sbbs_t::show_atcode(const char *instr, uint cols, JSObject* obj)
 {
 	char          str[128], str2[128], *tp, *sp, *p;
 	int           len;
@@ -133,6 +135,9 @@ int sbbs_t::show_atcode(const char *instr, JSObject* obj)
 		return 0;
 	if (strcspn(sp, " \t\r\n") != strlen(sp))  // white-space before terminating @
 		return 0;
+
+	if (cols == 0)
+		cols = term->cols;
 
 	if (*sp == '~' && *(sp + 1)) {   // Mouse hot-spot (hungry)
 		sp++;
@@ -173,7 +178,7 @@ int sbbs_t::show_atcode(const char *instr, JSObject* obj)
 
 	p = fmt.parse(sp);
 
-	cp = atcode(sp, str2, sizeof(str2), &pmode, fmt.align == fmt.center, obj);
+	cp = atcode(sp, str2, sizeof(str2), &pmode, fmt.align == fmt.center, cols, obj);
 	if (cp == NULL)
 		return 0;
 
@@ -195,11 +200,11 @@ int sbbs_t::show_atcode(const char *instr, JSObject* obj)
 		fmt.align = fmt.left;
 
 	if (fmt.truncated && strchr(cp, '\n') == NULL) {
-		if (term->column + fmt.disp_len > term->cols - 1) {
-			if (term->column >= term->cols - 1)
+		if (term->column + fmt.disp_len > cols - 1) {
+			if (term->column >= cols - 1)
 				fmt.disp_len = 0;
 			else
-				fmt.disp_len = (term->cols - 1) - term->column;
+				fmt.disp_len = (cols - 1) - term->column;
 		}
 	}
 	if (pmode & P_UTF8) {
@@ -242,9 +247,100 @@ static const char* getpath(scfg_t* cfg, const char* path)
 	return path;
 }
 
+// Support duration output formats, examples: 0           90m                100h
+#define DURATION_FULL_HHMMSS           'F' // 00:00:00    01:30:00           100:00:00
+#define DURATION_TRUNCATED_HHMMSS      '!' // 0:00:00     1:30:00            00:00:00
+#define DURATION_MINIMAL_HHMMSS        'A' // 0           1:30:00            100:00:00
+#define DURATION_FULL_HHMM             'T' // 00:00       01:30              100:00
+#define DURATION_MINIMAL_HHMM          'B' // 0           1:30               100:00
+#define DURATION_FULL_VERBAL           'V' // 0m          1h 30m             4d 4h 0m
+#define DURATION_MINIMAL_VERBAL        'C' // 0m          1.5h               4.2d
+#define DURATION_FULL_WORDS            'W' // 0 minutes   1 hour 30 minutes  4 days 4 hours 0 minutes
+#define DURATION_MINIMAL_WORDS         'D' // 0 minutes   1.5 hours          4.2 days
+#define DURATION_SECONDS               'S' // 0           5400               360000
+#define DURATION_MINUTES               'M' // 0           90                 6000
+
+static char* duration(uint seconds, char* str, size_t maxlen, char fmt, char deflt)
+{
+	switch(fmt) {
+		case DURATION_FULL_HHMMSS:
+			return sectostr(seconds, str);
+		case DURATION_TRUNCATED_HHMMSS:
+			return sectostr(seconds, str) + 1; // Legacy truncation when hours > 9
+		case DURATION_MINIMAL_HHMMSS:
+			return seconds_to_str(seconds, str);
+		case DURATION_FULL_HHMM:
+			return minutes_as_hhmm(seconds / 60, str, maxlen, /* verbose: */ true);
+		case DURATION_MINIMAL_HHMM:
+			return minutes_as_hhmm(seconds / 60, str, maxlen, /* verbose: */ false);
+		case DURATION_FULL_VERBAL:
+			return minutes_to_str(seconds / 60, str, maxlen, /* estimate: */ false, /* words: */ false);
+		case DURATION_MINIMAL_VERBAL:
+			return minutes_to_str(seconds / 60, str, maxlen, /* estimate: */ true, /* words: */ false);
+		case DURATION_FULL_WORDS:
+			return minutes_to_str(seconds / 60, str, maxlen, /* estimate: */ false, /* words: */ true);
+		case DURATION_MINIMAL_WORDS:
+			return minutes_to_str(seconds / 60, str, maxlen, /* estimate: */ true, /* words: */ true);
+		case DURATION_SECONDS:
+			snprintf(str, maxlen, "%u", seconds);
+			return str;
+		case DURATION_MINUTES:
+			snprintf(str, maxlen, "%u", seconds / 60);
+			return str;
+		default:
+			return duration(seconds, str, maxlen, deflt, 0);
+	}
+}
+
+static char* minutes(uint min, char* str, size_t maxlen, char fmt, char deflt)
+{
+	return duration(min * 60, str, maxlen, fmt, deflt);
+}
+
+#define BYTE_COUNT_BYTES		'B' // e.g. "1572864"
+#define BYTE_COUNT_KB			'K' // e.g. "1536"
+#define BYTE_COUNT_MB			'M' // e.g. "1.5"
+#define BYTE_COUNT_GB			'G' // e.g. "0.01"
+#define BYTE_COUNT_VERBAL		'V' // e.g. "1.5M"
+
+static char* byte_count(int64_t bytes, char* str, size_t maxlen, char fmt, char deflt)
+{
+	switch(fmt) {
+		case BYTE_COUNT_KB:
+			safe_snprintf(str, maxlen, "%" PRId64, bytes / 1024);
+			return str;
+		case BYTE_COUNT_MB:
+			safe_snprintf(str, maxlen, "%1.1f", bytes / (1024.0 * 1024.0));
+			return str;
+		case BYTE_COUNT_GB:
+			safe_snprintf(str, maxlen, "%1.2f", bytes / (1024.0 * 1024.0 * 1024.0));
+			return str;
+		case BYTE_COUNT_VERBAL:
+			return byte_estimate_to_str(bytes, str, maxlen, /* unit: */ 1, /* precision: */ 1);
+		case BYTE_COUNT_BYTES:
+			snprintf(str, maxlen, "%" PRId64, bytes);
+			return str;
+		default:
+			return byte_count(bytes, str, maxlen, deflt, 0);
+	}
+}
+
+static bool code_match(const char* str, const char* code, char* param)
+{
+	size_t len = strlen(code);
+	bool result = (strncmp(str, code, len) == 0 && (str[len] == '\0' || str[len] == ':'));
+	if (result && param != nullptr) {
+		if (str[len] == ':')
+			*param = *(str + len + 1);
+		else
+			*param = '\0';
+	}
+	return result;
+}
+
 const char* sbbs_t::formatted_atcode(const char* sp, char* str, size_t maxlen)
 {
-	char          tmp[128];
+	char          tmp[256];
 	char          buf[256];
 	atcode_format fmt;
 
@@ -294,7 +390,7 @@ const char* sbbs_t::formatted_atcode(const char* sp, char* str, size_t maxlen)
 	return str;
 }
 
-const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode, bool centered, JSObject* obj)
+const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode, bool centered, uint cols, JSObject* obj)
 {
 	char       tmp[128];
 	char*      tp = NULL;
@@ -302,9 +398,12 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	uint       ugrp;
 	uint       usub;
 	long       l;
-	stats_t    stats;
+	char       param;
 	node_t     node;
-	struct  tm tm;
+	struct  tm tm{};
+
+	if (cols == 0)
+		cols = term->cols;
 
 	str[0] = 0;
 
@@ -324,6 +423,17 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return nulstr;
 	}
 
+	bool yesno = strncmp(sp, "YESNO:", 6) == 0;
+	if (yesno || strncmp(sp, "ONOFF:", 6) == 0) {
+		bool result = false;
+		uchar* ar = arstr(NULL, sp + 6, &cfg, NULL);
+		if (ar != NULL) {
+			result = chk_ar(ar, &useron, &client);
+			free(ar);
+		}
+		return yesno ? text[result ? Yes : No] : text[result ? On : Off];
+	}
+
 	if (strcmp(sp, "HOT") == 0) { // Auto-mouse hot-spot attribute
 		hot_attr = curatr;
 		return nulstr;
@@ -341,7 +451,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		else if (stricmp(sp, "off") == 0)
 			hot_attr = 0;
 		else
-			hot_attr = strtoattr(sp, /* endptr: */ NULL);
+			hot_attr = strtoattr(&cfg, sp, /* endptr: */ NULL);
 		return nulstr;
 	}
 	if (strcmp(sp, "CLEAR_HOT") == 0) {
@@ -351,18 +461,42 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 
 	if (strncmp(sp, "MNE:", 4) == 0) {   // Mnemonic attribute control
 		sp += 4;
-		mneattr_low = strtoattr(sp, &tp);
+		mneattr_low = strtoattr(&cfg, sp, &tp);
 		mneattr_high = mneattr_low ^ HIGH;
 		if (tp != NULL && *tp != '\0')
-			mneattr_high = strtoattr(tp + 1, &tp);
+			mneattr_high = strtoattr(&cfg, tp + 1, &tp);
 		if (tp != NULL && *tp != '\0')
-			mneattr_cmd = strtoattr(tp + 1, NULL);
+			mneattr_cmd = strtoattr(&cfg, tp + 1, NULL);
+		return nulstr;
+	}
+
+	if (strcmp(sp, "RAINBOW") == 0) {
+		rainbow_index = 0;
+		rainbow_wrap = true;
 		return nulstr;
 	}
 
 	if (strncmp(sp, "RAINBOW:", 8) == 0) {
-		memset(rainbow, 0, sizeof rainbow);
-		parse_attr_str_list(rainbow, LEN_RAINBOW, sp + 8);
+		rainbow_wrap = true;
+		if (strcmp(sp + 8, "ON") == 0)
+			rainbow_index = 0;
+		else if (strcmp(sp + 8, "OFF") == 0)
+			rainbow_index = -1;
+		else if (strcmp(sp + 8, "RAND") == 0)
+			rainbow_index = sbbs_random(rainbow_len());
+		else if (strchr(sp + 8, ':') != NULL) {
+			memset(rainbow, 0, sizeof rainbow);
+			parse_attr_str_list(&cfg, rainbow, LEN_RAINBOW, sp + 8);
+		}
+		else if (IS_DIGIT(*(sp + 8))) {
+			int idx = atoi(sp + 8);
+			if (idx < 0)
+				rainbow_index = -1;
+			else if (idx >= rainbow_len())
+				rainbow_index = 0;
+			else
+				rainbow_index = idx;
+		}
 		return nulstr;
 	}
 
@@ -489,23 +623,8 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strcmp(sp, "BUILD_TIME") == 0)
 		return __TIME__;
 
-	if (!strcmp(sp, "UPTIME")) {
-		extern volatile time_t uptime;
-		time_t                 up = 0;
-		now = time(NULL);
-		if (uptime != 0 && now >= uptime)
-			up = now - uptime;
-		char                   days[64] = "";
-		if ((up / (24 * 60 * 60)) >= 2) {
-			snprintf(days, sizeof days, "%u days ", (uint)(up / (24L * 60L * 60L)));
-			up %= (24 * 60 * 60);
-		}
-		safe_snprintf(str, maxlen, "%s%u:%02u"
-		              , days
-		              , (uint)(up / (60L * 60L))
-		              , (uint)((up / 60L) % 60L)
-		              );
-		return str;
+	if (code_match(sp, "UPTIME", &param)) {
+		return duration((uint)(xp_fast_timer64() - uptime), str, maxlen, param, DURATION_MINIMAL_VERBAL);
 	}
 
 	if (!strcmp(sp, "SERVED")) {
@@ -731,15 +850,12 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		safe_snprintf(str, maxlen, "%c", useron.prot);
 		return str;
 	}
-	if (strcmp(sp, "PROTNAME") == 0)
+	if (strcmp(sp, "PROTNAME") == 0 || strcmp(sp, "PROTOCOL") == 0)
 		return protname(useron.prot);
 
-	if (strcmp(sp, "SEX") == 0) {
-		safe_snprintf(str, maxlen, "%c", useron.sex);
+	if (strcmp(sp, "SEX") == 0 || strcmp(sp, "GENDER") == 0) {
+		safe_snprintf(str, maxlen, "%c", useron.gender);
 		return str;
-	}
-	if (strcmp(sp, "GENDERS") == 0) {
-		return cfg.new_genders;
 	}
 
 	if (!strcmp(sp, "QWKID"))
@@ -747,20 +863,11 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 
 	if (!strcmp(sp, "TIME") || !strcmp(sp, "SYSTIME") || !strcmp(sp, "TIME_UTC")) {
 		now = time(NULL);
-		memset(&tm, 0, sizeof(tm));
 		if (strcmp(sp, "TIME_UTC") == 0)
 			gmtime_r(&now, &tm);
 		else
 			localtime_r(&now, &tm);
-		if (cfg.sys_misc & SM_MILITARY)
-			safe_snprintf(str, maxlen, "%02d:%02d:%02d"
-			              , tm.tm_hour, tm.tm_min, tm.tm_sec);
-		else
-			safe_snprintf(str, maxlen, "%02d:%02d %s"
-			              , tm.tm_hour == 0 ? 12
-			    : tm.tm_hour > 12 ? tm.tm_hour - 12
-			    : tm.tm_hour, tm.tm_min, tm.tm_hour > 11 ? "pm":"am");
-		return str;
+		return tm_as_hhmmss(&cfg, &tm, str, maxlen);
 	}
 
 	if (!strcmp(sp, "TIMEZONE"))
@@ -777,7 +884,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		SAFECOPY(tmp, sp + 5);
 		c_unescape_str(tmp);
 		now = time(NULL);
-		memset(&tm, 0, sizeof(tm));
 		localtime_r(&now, &tm);
 		strftime(str, maxlen, tmp, &tm);
 		return str;
@@ -787,7 +893,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		SAFECOPY(tmp, sp + 4);
 		c_unescape_str(tmp);
 		now = time(NULL);
-		memset(&tm, 0, sizeof(tm));
 		gmtime_r(&now, &tm);
 		strftime(str, maxlen, tmp, &tm);
 		return str;
@@ -813,17 +918,35 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return birthdate_format(&cfg, str, maxlen);
 	}
 
+	if (strcmp(sp, "CLOCK") == 0) {
+		snprintf(str, maxlen, "%" PRIu64, xp_timer64());
+		return str;
+	}
+
+	if (strcmp(sp, "TIMER") == 0) {
+		snprintf(str, maxlen, "%f", (double)xp_timer());
+		return str;
+	}
+
 	if (strcmp(sp, "GENDERS") == 0)
 		return cfg.new_genders;
 
+	int subnum = current_subnum();
+
 	if (strcmp(sp, "MSGS") == 0) {
-		uint msgs = usrgrps ? getposts(&cfg, usrsub[curgrp][cursub[curgrp]]) : 0;
-		snprintf(str, maxlen, "%u",  msgs);
+		snprintf(str, maxlen, "%u",  subnum_is_valid(subnum) ? getposts(&cfg, subnum) : 0);
 		return str;
 	}
 
 	if (strcmp(sp, "NEWMSGS") == 0) {
-		uint msgs = usrgrps ? getnewposts(&cfg, usrsub[curgrp][cursub[curgrp]], subscan[usrsub[curgrp][cursub[curgrp]]].ptr) : 0;
+		snprintf(str, maxlen, "%u",  subnum_is_valid(subnum) ? getnewposts(&cfg, subnum, subscan[subnum].ptr) : 0);
+		return str;
+	}
+
+	if (strcmp(sp, "MAXMSGS") == 0) {
+		uint msgs = subnum_is_valid(subnum) ? cfg.sub[subnum]->maxmsgs : 0;
+		if (usrgrps && msgs == 0)
+			return text[Unlimited];
 		snprintf(str, maxlen, "%u",  msgs);
 		return str;
 	}
@@ -860,6 +983,27 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
+	if (strcmp(sp, "MAXFILES") == 0) {  // Maximum number of files in current directory
+		uint maxfiles = usrlibs ? cfg.dir[usrdir[curlib][curdir[curlib]]]->maxfiles : 0;
+		if (maxfiles == 0)
+			return text[Unlimited];
+		snprintf(str, maxlen, "%u", maxfiles);
+		return str;
+	}
+
+	if (strcmp(sp, "FILETYPES") == 0) { // Allowed file types in current directory
+		if (usrlibs) {
+			const dir_t* dir = cfg.dir[usrdir[curlib][curdir[curlib]]];
+			if (dir->exts[0] == '\0')
+				return text[All];
+			else {
+				safe_snprintf(str, maxlen, "%s", dir->exts);
+				return str;
+			}
+		}
+		return text[None];
+	}
+
 	if (strcmp(sp, "NEWFILES") == 0) {  // Number of new files in current directory
 		safe_snprintf(str, maxlen, "%u", usrlibs ? getnewfiles(&cfg, usrdir[curlib][curdir[curlib]], ns_time) : 0);
 		return str;
@@ -867,17 +1011,14 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 
 	if (strncmp(sp, "FILESIZE:", 9) == 0) {
 		const char* path = getpath(&cfg, sp + 9);
-		byte_estimate_to_str(getfilesizetotal(path), str, maxlen, /* unit: */ 1, /* precision: */ 1);
-		return str;
+		return byte_estimate_to_str(getfilesizetotal(path), str, maxlen, /* unit: */ 1, /* precision: */ 1);
 	}
 
-	if (strcmp(sp, "FILESIZE") == 0) {
-		byte_estimate_to_str(usrlibs ? getfilesizetotal(cfg.dir[usrdir[curlib][curdir[curlib]]]->path) : 0
+	if (strcmp(sp, "FILESIZE") == 0)
+		return byte_estimate_to_str(usrlibs ? getfilesizetotal(cfg.dir[usrdir[curlib][curdir[curlib]]]->path) : 0
 		                     , str, maxlen, /* unit: */ 1, /* precision: */ 1);
-		return str;
-	}
 
-	if (strncmp(sp, "FILEBYTES:", 10) == 0) {    // Number of bytes in current file directory
+	if (strncmp(sp, "FILEBYTES:", 10) == 0) {    // Number of bytes in specified file directory
 		const char* path = getpath(&cfg, sp + 10);
 		safe_snprintf(str, maxlen, "%" PRIu64, getfilesizetotal(path));
 		return str;
@@ -889,7 +1030,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strncmp(sp, "FILEKB:", 7) == 0) {    // Number of kibibytes in current file directory
+	if (strncmp(sp, "FILEKB:", 7) == 0) {    // Number of kibibytes in specified file directory
 		const char* path = getpath(&cfg, sp + 7);
 		safe_snprintf(str, maxlen, "%1.1f", getfilesizetotal(path) / 1024.0);
 		return str;
@@ -925,8 +1066,22 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
+	// ----------------------------------------------------------------------
+	// Batch Download Queue
+	if (strcmp(sp, "FFILES") == 0 ) { // PCBoard "Displays the number of files flagged for download"
+		safe_snprintf(str, maxlen, "%u", static_cast<uint>(batdn_total())); // Example output: 58
+		return str;
+	}
+	if (code_match(sp, "FBYTES", &param)) // PCBoard "The number of total bytes flagged for download" Example output: 4892174
+		return byte_count(batdn_bytes(), str, maxlen, param, BYTE_COUNT_BYTES);
+	if (code_match(sp, "FCOST", &param))
+		return byte_count(batdn_cost(), str, maxlen, param, BYTE_COUNT_BYTES);
+	if (code_match(sp, "FTIME", &param))
+		return duration(batdn_time(), str, maxlen, param, DURATION_MINUTES);
+	// ----------------------------------------------------------------------
+
 	if (!strcmp(sp, "TCALLS") || !strcmp(sp, "NUMCALLS")) {
-		getstats(&cfg, 0, &stats);
+		getstats_cached(&cfg, 0, &stats);
 		safe_snprintf(str, maxlen, "%u", stats.logons);
 		return str;
 	}
@@ -934,6 +1089,17 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (!strcmp(sp, "PREVON") || !strcmp(sp, "LASTCALLERNODE")
 	    || !strcmp(sp, "LASTCALLERSYSTEM"))
 		return lastuseron;
+
+	if (strcmp(sp, "LASTCALL") == 0)  // Wildcat "Last call to this node Date/Time"
+		return timestr(laston_time);
+
+	if (strncmp(sp, "LASTCALL:", 9) == 0) {
+		SAFECOPY(tmp, sp + 9);
+		c_unescape_str(tmp);
+		localtime_r(&laston_time, &tm);
+		strftime(str, maxlen, tmp, &tm);
+		return str;
+	}
 
 	if (!strcmp(sp, "CLS") || !strcmp(sp, "CLEAR")) {
 		cls();
@@ -982,13 +1148,19 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return nulstr;
 	}
 
+	if (strcmp(sp, "PSTAT") == 0)
+		return pause_enabled() ? text[On] : text[Off];
+
+	if (strcmp(sp, "RAWIO") == 0)
+		return (console & CON_RAW_IN) ? text[On] : text[Off];
+
 	if (strncmp(sp, "FILL:", 5) == 0) {
 		SAFECOPY(tmp, sp + 5);
 		int margin = centered ? term->column : 1;
 		if (margin < 1)
 			margin = 1;
 		c_unescape_str(tmp);
-		while (*tmp && online && term->column < term->cols - margin)
+		while (*tmp && online && term->column < cols - margin)
 			bputs(tmp, P_TRUNCATE);
 		return nulstr;
 	}
@@ -1035,10 +1207,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 			return get_text(sp + 5);
 	}
 
-	/* NOSTOP */
-
-	/* STOP */
-
 	if (!strcmp(sp, "BELL") || !strcmp(sp, "BEEP"))
 		return "\a";
 
@@ -1047,8 +1215,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 			return "<none>";
 		return timestr(event_time);
 	}
-
-	/* LASTCALL */
 
 	if (strcmp(sp, "NODE_USER") == 0)
 		return thisnode.misc & NODE_ANON ? text[UNKNOWN_USER] : useron.alias;
@@ -1080,7 +1246,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (!strcmp(sp, "USERNUM")) {
+	if (strcmp(sp, "USERNUM") == 0 || strcmp(sp, "UN") == 0) {
 		safe_snprintf(str, maxlen, "%u", useron.number);
 		return str;
 	}
@@ -1092,7 +1258,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (!strcmp(sp, "ADDR1"))
 		return useron.address;
 
-	if (!strcmp(sp, "FROM"))
+	if (strcmp(sp, "FROM") == 0 || strcmp(sp, "ADDR2") == 0)
 		return useron.location;
 
 	if (!strcmp(sp, "CITY")) {
@@ -1117,7 +1283,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	}
 
 	if (!strcmp(sp, "CPU"))
-		return useron.comp;
+		return useron.host;
 
 	if (!strcmp(sp, "HOST"))
 		return client_name;
@@ -1131,7 +1297,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strncmp(sp, "BDATE:", 6) == 0 || strncmp(sp, "BIRTH:", 6) == 0) {
 		SAFECOPY(tmp, sp + 6);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		tm.tm_year = getbirthyear(&cfg, useron.birth) - 1900;
 		tm.tm_mon = getbirthmonth(&cfg, useron.birth) - 1;
 		tm.tm_mday = getbirthday(&cfg, useron.birth);
@@ -1162,7 +1327,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strncmp(sp, "PWDATE:", 7) == 0) {
 		SAFECOPY(tmp, sp + 7);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		time_t date = useron.pwmod;
 		localtime_r(&date, &tm);
 		strftime(str, maxlen, tmp, &tm);
@@ -1180,44 +1344,55 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strncmp(sp, "SINCE:", 6) == 0) {
 		SAFECOPY(tmp, sp + 6);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		time_t date = useron.firston;
 		localtime_r(&date, &tm);
 		strftime(str, maxlen, tmp, &tm);
 		return str;
 	}
 
-	if (!strcmp(sp, "TIMEON") || !strcmp(sp, "TIMEUSED")) {
-		now = time(NULL);
-		safe_snprintf(str, maxlen, "%u", (uint)(now - logontime) / 60);
+	// ----------------------------------------------------------------------
+	// Time "used" this call (doesn't count time earned uploading, etc.)
+	if (strcmp(sp, "TIMEUSED") == 0) { // PCBoard "Total number of minutes used during current call"
+		safe_snprintf(str, maxlen, "%u", timeused() / 60);
 		return str;
 	}
+	if (code_match(sp, "TUSED", &param))
+		return duration(timeused(), str, maxlen, param, DURATION_TRUNCATED_HHMMSS);
+	// ----------------------------------------------------------------------
 
-	if (!strcmp(sp, "TUSED")) {              /* Synchronet only */
-		now = time(NULL);
-		return sectostr((uint)(now - logontime), str) + 1;
-	}
+	// ----------------------------------------------------------------------
+	// Time "online" this call
+	if (code_match(sp, "TIMEON", &param)) // Wildcat! "Time on system this call"
+		return duration(timeon(), str, maxlen, param, DURATION_MINUTES);
+	// ----------------------------------------------------------------------
 
-	if (!strcmp(sp, "TLEFT")) {              /* Synchronet only */
-		gettimeleft();
-		return sectostr(timeleft, str) + 1;
-	}
-
-	if (!strcmp(sp, "TPERD"))                /* Synchronet only */
-		return sectostr(cfg.level_timeperday[useron.level], str) + 4;
-
-	if (!strcmp(sp, "TPERC"))                /* Synchronet only */
-		return sectostr(cfg.level_timepercall[useron.level], str) + 4;
-
-	if (strcmp(sp, "MPERC") == 0 || strcmp(sp, "TIMELIMIT") == 0) {
-		safe_snprintf(str, maxlen, "%u", cfg.level_timepercall[useron.level]);
+	// ----------------------------------------------------------------------
+	// Time "remaining" this call
+	if (!strcmp(sp, "MINLEFT") // PCBoard "Minutes left on system (includes download time estimates)."
+		|| !strcmp(sp, "LEFT") // Wildcat! "Time remaining this call"
+		|| !strcmp(sp, "TIMELEFT")) { // PCBoard "Minutes left on system (excludes download time estimates)."
+		safe_snprintf(str, maxlen, "%u", gettimeleft() / 60);
 		return str;
 	}
+	if (code_match(sp, "TLEFT", &param))
+		return duration(gettimeleft(), str, maxlen, param, DURATION_TRUNCATED_HHMMSS);
+	// ----------------------------------------------------------------------
 
-	if (strcmp(sp, "MPERD") == 0) {
-		safe_snprintf(str, maxlen, "%u", cfg.level_timeperday[useron.level]);
-		return str;
-	}
+	// ----------------------------------------------------------------------
+	// Time "allowed" per day/call
+	if (code_match(sp, "MPERC", &param)
+		|| code_match(sp, "TIMELIMIT", &param)) // PCBoard "The daily/session time limit of the caller." Example output: "30"
+		return minutes(cfg.level_timepercall[useron.level], str, maxlen, param, DURATION_MINUTES);
+
+	if (code_match(sp, "MPERD", &param))
+		return minutes(cfg.level_timeperday[useron.level], str, maxlen, param, DURATION_MINUTES);
+
+	if (code_match(sp, "TPERD", &param))
+		return minutes(cfg.level_timeperday[useron.level], str, maxlen, param, DURATION_FULL_HHMM);
+
+	if (code_match(sp, "TPERC", &param))
+		return minutes(cfg.level_timepercall[useron.level], str, maxlen, param, DURATION_FULL_HHMM);
+	// ----------------------------------------------------------------------
 
 	if (strcmp(sp, "MAXCALLS") == 0) {
 		safe_snprintf(str, maxlen, "%u", cfg.level_callsperday[useron.level]);
@@ -1239,41 +1414,23 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (!strcmp(sp, "MINLEFT") || !strcmp(sp, "LEFT") || !strcmp(sp, "TIMELEFT")) {
-		gettimeleft();
-		safe_snprintf(str, maxlen, "%u", timeleft / 60);
-		return str;
-	}
-
 	if (!strcmp(sp, "LASTON"))
 		return timestr(useron.laston);
 
-	if (!strcmp(sp, "LASTDATEON"))
+	if (!strcmp(sp, "LASTDATEON")) // PCBoard "Last date the caller called the system."
 		return datestr(useron.laston);
 
 	if (strncmp(sp, "LASTON:", 7) == 0) {
 		SAFECOPY(tmp, sp + 7);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		time_t date = useron.laston;
 		localtime_r(&date, &tm);
 		strftime(str, maxlen, tmp, &tm);
 		return str;
 	}
 
-	if (!strcmp(sp, "LASTTIMEON")) {
-		memset(&tm, 0, sizeof(tm));
-		localtime32(&useron.laston, &tm);
-		if (cfg.sys_misc & SM_MILITARY)
-			safe_snprintf(str, maxlen, "%02d:%02d:%02d"
-			              , tm.tm_hour, tm.tm_min, tm.tm_sec);
-		else
-			safe_snprintf(str, maxlen, "%02d:%02d %s"
-			              , tm.tm_hour == 0 ? 12
-			    : tm.tm_hour > 12 ? tm.tm_hour - 12
-			    : tm.tm_hour, tm.tm_min, tm.tm_hour > 11 ? "pm":"am");
-		return str;
-	}
+	if (!strcmp(sp, "LASTTIMEON")) // PCBoard "Last time the caller called the system."
+		return time_as_hhmmss(&cfg, useron.laston, str, maxlen);
 
 	if (!strcmp(sp, "FIRSTON"))
 		return timestr(useron.firston);
@@ -1284,26 +1441,14 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strncmp(sp, "FIRSTON:", 8) == 0) {
 		SAFECOPY(tmp, sp + 8);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		time_t date = useron.firston;
 		localtime_r(&date, &tm);
 		strftime(str, maxlen, tmp, &tm);
 		return str;
 	}
 
-	if (!strcmp(sp, "FIRSTTIMEON")) {
-		memset(&tm, 0, sizeof(tm));
-		localtime32(&useron.firston, &tm);
-		if (cfg.sys_misc & SM_MILITARY)
-			safe_snprintf(str, maxlen, "%02d:%02d:%02d"
-			              , tm.tm_hour, tm.tm_min, tm.tm_sec);
-		else
-			safe_snprintf(str, maxlen, "%02d:%02d %s"
-			              , tm.tm_hour == 0 ? 12
-			    : tm.tm_hour > 12 ? tm.tm_hour - 12
-			    : tm.tm_hour, tm.tm_min, tm.tm_hour > 11 ? "pm":"am");
-		return str;
-	}
+	if (!strcmp(sp, "FIRSTTIMEON"))
+		return time_as_hhmmss(&cfg, useron.firston, str, maxlen);
 
 	if (strcmp(sp, "EMAILS") == 0) {
 		safe_snprintf(str, maxlen, "%u", useron.emails);
@@ -1336,10 +1481,8 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strcmp(sp, "BTODAY") == 0) {
-		byte_estimate_to_str(useron.btoday, str, maxlen, /* unit: */ 1, /* precision: */ 1);
-		return str;
-	}
+	if (code_match(sp, "BTODAY", &param))
+		return byte_count(useron.btoday, str, maxlen, param, BYTE_COUNT_VERBAL);
 
 	if (strcmp(sp, "KTODAY") == 0) {
 		safe_snprintf(str, maxlen, "%" PRIu64, useron.btoday / 1024);
@@ -1351,42 +1494,47 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strcmp(sp, "MTODAY") == 0) {
-		safe_snprintf(str, maxlen, "%u", useron.ttoday);
-		return str;
-	}
+	// ----------------------------------------------------------------------
+	// Time "used" today (including current call)
+	if (code_match(sp, "MTODAY", &param) || code_match(sp, "TOTALTIME", &param)) // PCBoard TOTALTIME: "Total number of minutes used during current day."
+		return minutes(useron_minutes_today(), str, maxlen, param, DURATION_MINUTES);
 
-	if (strcmp(sp, "MTOTAL") == 0) {
-		safe_snprintf(str, maxlen, "%u", useron.timeon);
-		return str;
-	}
+	if (code_match(sp, "TTODAY", &param))
+		return minutes(useron_minutes_today(), str, maxlen, param, DURATION_FULL_HHMM);
+	// ----------------------------------------------------------------------
 
-	if (strcmp(sp, "TTODAY") == 0)
-		return sectostr(useron.ttoday, str) + 3;
+	// ----------------------------------------------------------------------
+	// Total time "used" (all time)
+	if (code_match(sp, "MTOTAL", &param))
+		return minutes(useron_minutes_total(), str, maxlen, param, DURATION_MINUTES);
 
-	if (strcmp(sp, "TTOTAL") == 0)
-		return sectostr(useron.timeon, str) + 3;
+	if (code_match(sp, "TTOTAL", &param))
+		return minutes(useron_minutes_total(), str, maxlen, param, DURATION_FULL_HHMM);
+	// ----------------------------------------------------------------------
 
-	if (strcmp(sp, "TLAST") == 0) {
-		safe_snprintf(str, maxlen, "%u", useron.tlast);
-		return str;
-	}
+	// ----------------------------------------------------------------------
+	// Time "last" session
+	if (code_match(sp, "TLAST", &param))
+		return minutes(useron.tlast, str, maxlen, param, DURATION_MINUTES);
+	// ----------------------------------------------------------------------
 
-	if (strcmp(sp, "MEXTRA") == 0) {
-		safe_snprintf(str, maxlen, "%u", useron.textra);
-		return str;
-	}
+	// ----------------------------------------------------------------------
+	// Extra time "available"
+	if (code_match(sp, "MEXTRA", &param))
+		return minutes(useron.textra, str, maxlen, param, DURATION_MINUTES);
 
-	if (strcmp(sp, "TEXTRA") == 0)
-		return sectostr(useron.textra, str) + 3;
+	if (code_match(sp, "TEXTRA", &param))
+		return minutes(useron.textra, str, maxlen, param, DURATION_FULL_HHMM);
+	// ----------------------------------------------------------------------
 
-	if (strcmp(sp, "MBANKED") == 0) {
-		safe_snprintf(str, maxlen, "%" PRIu32, useron.min);
-		return str;
-	}
+	// ----------------------------------------------------------------------
+	// Time "banked"
+	if (code_match(sp, "MBANKED", &param))
+		return minutes(useron.min, str, maxlen, param, DURATION_MINUTES);
 
-	if (strcmp(sp, "TBANKED") == 0)
-		return sectostr(useron.min, str) + 3;
+	if (code_match(sp, "TBANKED", &param))
+		return minutes(useron.min, str, maxlen, param, DURATION_FULL_HHMM);
+	// ----------------------------------------------------------------------
 
 	if (!strcmp(sp, "MSGLEFT") || !strcmp(sp, "MSGSLEFT")) {
 		safe_snprintf(str, maxlen, "%u", useron.posts);
@@ -1423,35 +1571,30 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strcmp(sp, "MINSPACE") == 0) {
-		byte_count_to_str(cfg.min_dspace, str, maxlen);
-		return str;
-	}
+	if (strcmp(sp, "MINSPACE") == 0)
+		return byte_count_to_str(cfg.min_dspace, str, maxlen);
 
-	if (strcmp(sp, "UPB") == 0) {
-		byte_estimate_to_str(useron.ulb, str, maxlen, /* unit: */ 1, /* precision: */ 1);
-		return str;
-	}
+	if (code_match(sp, "UPB", &param))
+		return byte_count(useron.ulb, str, maxlen, param, BYTE_COUNT_VERBAL);
 
-	if (!strcmp(sp, "UPBYTES")) {
+	if (!strcmp(sp, "UPBYTES")) { // PCBoard: "total number of bytes the user has uploaded" (Example output: 36,928,674)
 		safe_snprintf(str, maxlen, "%" PRIu64, useron.ulb);
 		return str;
 	}
 
-	if (!strcmp(sp, "UPK")) {
+	if (!strcmp(sp, "UPK")) { // Wildcat! "Total upload kilobytes"
 		safe_snprintf(str, maxlen, "%" PRIu64, useron.ulb / 1024L);
 		return str;
 	}
 
-	if (!strcmp(sp, "UPS") || !strcmp(sp, "UPFILES")) {
+	if (!strcmp(sp, "UPS") // Wildcat! "Total number of uploads"
+		|| !strcmp(sp, "UPFILES")) { // PCBoard "total number of files the user has uploaded"
 		safe_snprintf(str, maxlen, "%u", useron.uls);
 		return str;
 	}
 
-	if (strcmp(sp, "DLB") == 0) {
-		byte_estimate_to_str(useron.dlb, str, maxlen, /* unit: */ 1, /* precision: */ 1);
-		return str;
-	}
+	if (code_match(sp, "DLB", &param))
+		return byte_count(useron.dlb, str, maxlen, param, BYTE_COUNT_VERBAL);
 
 	if (!strcmp(sp, "DLBYTES")) {
 		safe_snprintf(str, maxlen, "%" PRIu64, useron.dlb);
@@ -1476,7 +1619,16 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strcmp(sp, "UDR") == 0 || strcmp(sp, "BYTERATIO") == 0) {
+#if 0
+	if (strcmp(sp, "BYTERATIO") == 0) { // PCBoard BYTERATIO Example Output: "5:1"
+		float f = 0;
+		if (useron.ulb)
+			f = (float)useron.dlb / useron.ulb;
+		safe_snprintf(str, maxlen, "%u", f ? (uint)(100 / f) : 0);
+		return str;
+	}
+#endif
+	if (strcmp(sp, "UDR") == 0) {
 		float f = 0;
 		if (useron.ulb)
 			f = (float)useron.dlb / useron.ulb;
@@ -1498,7 +1650,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strncmp(sp, "LASTNEW:", 8) == 0) {
 		SAFECOPY(tmp, sp + 8);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		time_t date = ns_time;
 		localtime_r(&date, &tm);
 		strftime(str, maxlen, tmp, &tm);
@@ -1531,6 +1682,12 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
+	if (code_match(sp, "CDTPERD", &param))
+		return byte_count(cfg.level_freecdtperday[useron.level], str, maxlen, param, BYTE_COUNT_VERBAL);
+
+	if (code_match(sp, "CDTUSED", &param))
+		return byte_count(cfg.level_freecdtperday[useron.level] - useron.freecdt, str, maxlen, param, BYTE_COUNT_VERBAL);
+
 	if (!strcmp(sp, "KBLEFT")) {
 		safe_snprintf(str, maxlen, "%" PRIu64, user_available_credits(&useron) / 1024UL);
 		return str;
@@ -1541,15 +1698,14 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strcmp(sp, "CREDITS") == 0) {
-		safe_snprintf(str, maxlen, "%" PRIu64, useron.cdt);
-		return str;
-	}
+	if (code_match(sp, "CDTLEFT", &param))
+		return byte_count(static_cast<int64_t>(user_available_credits(&useron)), str, maxlen, param, BYTE_COUNT_VERBAL);
 
-	if (strcmp(sp, "FREECDT") == 0) {
-		safe_snprintf(str, maxlen, "%" PRIu64, useron.freecdt);
-		return str;
-	}
+	if (code_match(sp, "CREDITS", &param))
+		return byte_count(useron.cdt, str, maxlen, param, BYTE_COUNT_BYTES);
+
+	if (code_match(sp, "FREECDT", &param))
+		return byte_count(useron.freecdt, str, maxlen, param, BYTE_COUNT_BYTES);
 
 	if (!strcmp(sp, "CONF")) {
 		safe_snprintf(str, maxlen, "%s %s"
@@ -1576,7 +1732,6 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 			return nulstr;
 		SAFECOPY(tmp, sp + 8);
 		c_unescape_str(tmp);
-		memset(&tm, 0, sizeof(tm));
 		time_t date = useron.expire;
 		localtime_r(&date, &tm);
 		strftime(str, maxlen, tmp, &tm);
@@ -1584,8 +1739,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	}
 
 	if (!strcmp(sp, "EXPDAYS")) {
-		now = time(NULL);
-		l = (uint)(useron.expire - now);
+		l = (uint)(useron.expire - time(&now));
 		if (l < 0)
 			l = 0;
 		safe_snprintf(str, maxlen, "%lu", l / (1440L * 60L));
@@ -1606,7 +1760,10 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return nulstr;
 	}
 
-	/* Synchronet Specific */
+	if (strcmp(sp, "LOGOFF") == 0) {
+		logoff();
+		return nulstr;
+	}
 
 	if (!strncmp(sp, "SETSTR:", 7)) {
 		strcpy(main_csi.str, sp + 7);
@@ -1631,6 +1788,39 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		jsval val;
 		if (JS_GetProperty(js_cx, obj == NULL ? js_glob : obj, sp + 3, &val))
 			JSVALUE_TO_STRBUF(js_cx, val, str, maxlen, NULL);
+		return str;
+	}
+
+	if (strcmp(sp, "OPTEXT") == 0)
+		return optext;
+
+	// User Property value
+	if (strncmp(sp, "PROP:", 5) == 0) {
+		sp += 5;
+		char* section = ROOT_SECTION;
+		char tmp[128];
+		if (*sp == '[') { // [section]key
+			SAFECOPY(tmp, sp + 1);
+			char* end = strchr(tmp, ']');
+			if (end != nullptr) {
+				*end = '\0';
+				section = tmp;
+				sp += (end - tmp) + 2;
+			}
+		}
+		else { // section:key
+			SAFECOPY(tmp, sp);
+			char* end = strchr(tmp, ':');
+			if (end != nullptr) {
+				*end = '\0';
+				section = tmp;
+				sp += (end - tmp) + 1;
+			}
+		}
+		char key[128];
+		SKIP_CHAR(sp, ':');
+		SAFECOPY(key, sp);
+		user_get_property(&cfg, useron.number, section, key, str, maxlen);
 		return str;
 	}
 
@@ -1666,7 +1856,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	}
 
 	if (!strncmp(sp, "INCLUDE:", 8)) {
-		printfile(cmdstr(sp + 8, nulstr, nulstr, str), P_NOCRLF | P_SAVEATR | P_MODS);
+		printfile(cmdstr(sp + 8, nulstr, nulstr, str), P_OPENCLOSE | P_NOCRLF | P_SAVEATR | P_MODS);
 		return nulstr;
 	}
 
@@ -1747,25 +1937,11 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return nulstr;
 	}
 
-	if (!strcmp(sp, "GRP")) {
-		if (SMB_IS_OPEN(&smb)) {
-			if (smb.subnum == INVALID_SUB)
-				return "Local";
-			if (subnum_is_valid(smb.subnum))
-				return cfg.grp[cfg.sub[smb.subnum]->grp]->sname;
-		}
-		return usrgrps ? cfg.grp[usrgrp[curgrp]]->sname : nulstr;
-	}
+	if (strcmp(sp, "GRP") == 0)
+		return subnum_is_valid(subnum) ? cfg.grp[cfg.sub[subnum]->grp]->sname : "Local";
 
-	if (!strcmp(sp, "GRPL")) {
-		if (SMB_IS_OPEN(&smb)) {
-			if (smb.subnum == INVALID_SUB)
-				return "Local";
-			if (subnum_is_valid(smb.subnum))
-				return cfg.grp[cfg.sub[smb.subnum]->grp]->lname;
-		}
-		return usrgrps ? cfg.grp[usrgrp[curgrp]]->lname : nulstr;
-	}
+	if (strcmp(sp, "GRPL") == 0)
+		return subnum_is_valid(subnum) ? cfg.grp[cfg.sub[subnum]->grp]->lname : "Local";
 
 	if (!strcmp(sp, "GN")) {
 		if (SMB_IS_OPEN(&smb))
@@ -1794,25 +1970,26 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (!strcmp(sp, "SUB")) {
-		if (SMB_IS_OPEN(&smb)) {
-			if (smb.subnum == INVALID_SUB)
-				return "Mail";
-			else if (subnum_is_valid(smb.subnum))
-				return cfg.sub[smb.subnum]->sname;
-		}
-		return usrgrps ? cfg.sub[usrsub[curgrp][cursub[curgrp]]]->sname : nulstr;
-	}
+	if (strcmp(sp, "SUB") == 0)
+		return subnum_is_valid(subnum) ? cfg.sub[subnum]->sname : "Mail";
 
-	if (!strcmp(sp, "SUBL")) {
-		if (SMB_IS_OPEN(&smb)) {
-			if (smb.subnum == INVALID_SUB)
-				return "Mail";
-			else if (subnum_is_valid(smb.subnum))
-				return cfg.sub[smb.subnum]->lname;
-		}
-		return usrgrps  ? cfg.sub[usrsub[curgrp][cursub[curgrp]]]->lname : nulstr;
-	}
+	if (strcmp(sp, "SUBL") == 0)
+		return subnum_is_valid(subnum) ? cfg.sub[subnum]->lname : "Mail";
+
+	if (strcmp(sp, "QWKNAME") == 0)
+		return subnum_is_valid(subnum) ? cfg.sub[subnum]->qwkname : "Mail";
+
+	if (strcmp(sp, "QWKTAG") == 0)
+		return subnum_is_valid(subnum) ? cfg.sub[subnum]->tagline : "Mail";
+
+	if (strcmp(sp, "FIDOORIGIN") == 0)
+		return subnum_is_valid(subnum) ? cfg.sub[subnum]->origline : nulstr;
+
+	if (strcmp(sp, "FIDOAREA") == 0)
+		return subnum_is_valid(subnum) ? sub_area_tag(&cfg, cfg.sub[subnum], str, maxlen) : nulstr;
+
+	if (strcmp(sp, "NEWSGROUP") == 0)
+		return subnum_is_valid(subnum) ? sub_newsgroup_name(&cfg, cfg.sub[subnum], str, maxlen) : nulstr;
 
 	if (!strcmp(sp, "SN")) {
 		if (SMB_IS_OPEN(&smb))
@@ -1864,6 +2041,16 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 
 	if (!strcmp(sp, "DIR"))
 		return usrlibs ? cfg.dir[usrdir[curlib][curdir[curlib]]]->sname :nulstr;
+
+	if (strcmp(sp, "DIRV") == 0)
+		return usrlibs ? cfg.dir[usrdir[curlib][curdir[curlib]]]->vdir :nulstr;
+
+	if (strcmp(sp, "DIRVPATH") == 0) {
+		if (usrlibs < 1)
+			return nulstr;
+		snprintf(str, maxlen, "/%s/", dir_vpath(&cfg, cfg.dir[usrdir[curlib][curdir[curlib]]], tmp, sizeof tmp));
+		return str;
+	}
 
 	if (!strcmp(sp, "DIRL"))
 		return usrlibs ? cfg.dir[usrdir[curlib][curdir[curlib]]]->lname : nulstr;
@@ -1930,27 +2117,27 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	}
 
 	if (!strcmp(sp, "MAILR")) {
-		safe_snprintf(str, maxlen, "%u", getmail(&cfg, useron.number, /* Sent: */ FALSE, /* attr: */ MSG_READ));
+		safe_snprintf(str, maxlen, "%u", mail_read.get());
 		return str;
 	}
 
 	if (!strcmp(sp, "MAILU")) {
-		safe_snprintf(str, maxlen, "%u", getmail(&cfg, useron.number, /* Sent: */ FALSE, /* attr: */ ~MSG_READ));
+		safe_snprintf(str, maxlen, "%u", mail_unread.get());
 		return str;
 	}
 
 	if (!strcmp(sp, "MAILW")) {
-		safe_snprintf(str, maxlen, "%u", getmail(&cfg, useron.number, /* Sent: */ FALSE, /* attr: */ 0));
+		safe_snprintf(str, maxlen, "%u", mail_waiting.get());
 		return str;
 	}
 
 	if (!strcmp(sp, "MAILP")) {
-		safe_snprintf(str, maxlen, "%u", getmail(&cfg, useron.number, /* Sent: */ TRUE, /* attr: */ 0));
+		safe_snprintf(str, maxlen, "%u", mail_pending.get());
 		return str;
 	}
 
 	if (!strcmp(sp, "SPAMW")) {
-		safe_snprintf(str, maxlen, "%u", getmail(&cfg, useron.number, /* Sent: */ FALSE, /* attr: */ MSG_SPAM));
+		safe_snprintf(str, maxlen, "%u", spam_waiting.get());
 		return str;
 	}
 
@@ -1990,24 +2177,24 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	}
 
 	if (!strncmp(sp, "STATS.", 6)) {
-		getstats(&cfg, 0, &stats);
+		getstats_cached(&cfg, 0, &stats);
 		sp += 6;
 		if (!strcmp(sp, "LOGONS"))
 			safe_snprintf(str, maxlen, "%u", stats.logons);
 		else if (!strcmp(sp, "LTODAY"))
 			safe_snprintf(str, maxlen, "%u", stats.ltoday);
-		else if (!strcmp(sp, "TIMEON"))
-			safe_snprintf(str, maxlen, "%u", stats.timeon);
-		else if (!strcmp(sp, "TTODAY"))
-			safe_snprintf(str, maxlen, "%u", stats.ttoday);
+		else if (code_match(sp, "TIMEON", &param))
+			return minutes(stats.timeon, str, maxlen, param, DURATION_MINUTES);
+		else if (code_match(sp, "TTODAY", &param))
+			return minutes(stats.ttoday, str, maxlen, param, DURATION_MINUTES);
 		else if (!strcmp(sp, "ULS"))
 			safe_snprintf(str, maxlen, "%u", stats.uls);
-		else if (!strcmp(sp, "ULB"))
-			safe_snprintf(str, maxlen, "%" PRIu64, stats.ulb);
+		else if (code_match(sp, "ULB", &param))
+			return byte_count(stats.ulb, str, maxlen, param, BYTE_COUNT_BYTES);
 		else if (!strcmp(sp, "DLS"))
 			safe_snprintf(str, maxlen, "%u", stats.dls);
-		else if (!strcmp(sp, "DLB"))
-			safe_snprintf(str, maxlen, "%" PRIu64, stats.dlb);
+		else if (code_match(sp, "DLB", &param))
+			return byte_count(stats.dlb, str, maxlen, param, BYTE_COUNT_BYTES);
 		else if (!strcmp(sp, "PTODAY"))
 			safe_snprintf(str, maxlen, "%u", stats.ptoday);
 		else if (!strcmp(sp, "ETODAY"))
@@ -2382,16 +2569,12 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		if (strcmp(sp, "FILE_UPLOADER") == 0)
 			return (current_file->hdr.attr & MSG_ANONYMOUS) ? text[UNKNOWN_USER]
 			    : (current_file->from == nullptr ? nulstr : current_file->from);
-		if (strcmp(sp, "FILE_BYTES") == 0) {
-			safe_snprintf(str, maxlen, "%" PRIi64, getfilesize(&cfg, current_file));
-			return str;
-		}
+		if (code_match(sp, "FILE_BYTES", &param))
+			return byte_count(getfilesize(&cfg, current_file), str, maxlen, param, BYTE_COUNT_BYTES);
 		if (strcmp(sp, "FILE_SIZE") == 0)
 			return byte_estimate_to_str(getfilesize(&cfg, current_file), str, maxlen, /* units: */ 1024, /* precision: */ 1);
-		if (strcmp(sp, "FILE_CREDITS") == 0) {
-			safe_snprintf(str, maxlen, "%" PRIu64, current_file->cost);
-			return str;
-		}
+		if (code_match(sp, "FILE_CREDITS", &param))
+			return byte_count(current_file->cost, str, maxlen, param, BYTE_COUNT_BYTES);
 		if (strcmp(sp, "FILE_CRC32") == 0) {
 			if ((current_file->file_idx.hash.flags & SMB_HASH_CRC32)
 			    && getfilesize(&cfg, current_file) > 0
@@ -2437,10 +2620,8 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 			safe_snprintf(str, maxlen, "%lu", (ulong)current_file->hdr.times_downloaded);
 			return str;
 		}
-		if (strcmp(sp, "FILE_TIME_TO_DL") == 0) {
-			safe_snprintf(str, maxlen, "%s", sectostr(gettimetodl(&cfg, current_file, cur_cps), tmp));
-			return str;
-		}
+		if (code_match(sp, "FILE_TIME_TO_DL", &param))
+			return duration(gettimetodl(&cfg, current_file, cur_cps), str, maxlen, param, DURATION_FULL_HHMMSS);
 	}
 
 	return get_text(sp);

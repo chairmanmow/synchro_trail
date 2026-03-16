@@ -109,6 +109,8 @@ set(PATCHES
 	cl-size-doesnt-mean-copied.patch
 	cl-add-psk-flag.patch
 	cl-winapi-needed.patch
+	cl-enable-chacha20.patch
+	cl-no-session-cache.patch
 )
 
 set(SOURCE

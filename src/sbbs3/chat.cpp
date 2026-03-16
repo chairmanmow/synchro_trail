@@ -590,7 +590,7 @@ bool sbbs_t::guru_page(void)
 /****************************************************************************/
 void sbbs_t::chatsection()
 {
-	exec_bin(cfg.chatsec_mod, &main_csi);
+	exec_mod("chat section", cfg.chatsec_mod);
 }
 
 /****************************************************************************/
@@ -736,9 +736,8 @@ void sbbs_t::privchat(bool forced, int node_num)
 				         , cfg.node_num, thisnode.misc & NODE_ANON
 				        ? text[UNKNOWN_USER] : useron.alias);
 				putnmsg(n, str);
-				snprintf(str, sizeof str, "paged %s on node %d to private chat"
+				llprintf("C", "paged %s on node %d to private chat"
 				         , username(&cfg, node.useron, tmp), n);
-				logline("C", str);
 			}
 		}
 
@@ -1295,8 +1294,7 @@ void sbbs_t::nodemsg()
 	if (nodemsg_inside > 1)    /* nested once only */
 		return;
 	nodemsg_inside++;
-	if (cfg.privatemsg_mod[0] != '\0') {
-		exec_bin(cfg.privatemsg_mod, &main_csi);
+	if (exec_mod("private message", cfg.privatemsg_mod) == 0) {
 		nodemsg_inside--;
 		return;
 	}
@@ -1384,9 +1382,8 @@ void sbbs_t::nodemsg()
 					break;
 				}
 				putsmsg(usernumber, buf);
-				snprintf(str, sizeof str, "sent telegram to %s #%u"
+				llprintf("C", "sent telegram to %s #%u"
 				         , username(&cfg, usernumber, tmp), usernumber);
-				logline("C", str);
 				logline(nulstr, logbuf);
 				bprintf(text[MsgSentToUser], "Telegram"
 				        , username(&cfg, usernumber, tmp), usernumber);
@@ -1417,9 +1414,8 @@ void sbbs_t::nodemsg()
 						if (!(node.misc & NODE_ANON))
 							bprintf(text[MsgSentToUser], "Message"
 							        , username(&cfg, usernumber, tmp), usernumber);
-						snprintf(str, sizeof str, "sent message to %s on node %d:"
+						llprintf("C", "sent message to %s on node %d:"
 						         , username(&cfg, usernumber, tmp), i);
-						logline("C", str);
 						logline(nulstr, line);
 					}
 				}
@@ -1439,8 +1435,7 @@ void sbbs_t::nodemsg()
 						    && (useron_is_sysop() || !(node.misc & NODE_POFF)))
 							putnmsg(i, buf);
 					}
-					SAFECOPY(str, "sent message to all nodes");
-					logline("C", str);
+					logline("C", "sent message to all nodes");
 					logline(nulstr, line);
 				}
 				break;
@@ -1596,7 +1591,7 @@ void sbbs_t::guruchat(char* line, char* gurubuf, int gurunum, char* last_answer)
 							break;
 						case 'C':
 							if (sys_status & SS_USERON) {
-								SAFECAT(theanswer, useron.comp);
+								SAFECAT(theanswer, useron.host);
 							} else {
 								SAFECAT(theanswer, "PC Jr.");
 							}
@@ -1926,7 +1921,7 @@ void sbbs_t::localguru(char *gurubuf, int gurunum)
 	if (sys_status & SS_GURUCHAT || !cfg.total_gurus)
 		return;
 	sys_status |= SS_GURUCHAT;
-	console &= ~(CON_L_ECHOX | CON_R_ECHOX);    /* turn off X's */
+	console &= ~CON_PASSWORD;
 	if (action == NODE_CHAT) { /* only page if from chat section */
 		bprintf(text[PagingGuru], cfg.guru[gurunum]->name);
 		ch = sbbs_random(25) + 25;

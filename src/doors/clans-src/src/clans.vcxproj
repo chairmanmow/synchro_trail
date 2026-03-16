@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{53FD16D9-126D-4A5E-BCF3-19E870CD569D}</ProjectGuid>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="clans.props" />
+  <Import Project="clanslib.props" />
+  <Import Project="..\..\..\odoors\odoors.props" />
+  <ItemDefinitionGroup>
+    <Link>
+      <AdditionalDependencies>ODoorW.lib;$(OutDir)clanslib.$(Platform).$(Configuration).lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
+      <SubSystem>Windows</SubSystem>
+    </Link>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="alliancem.c" />
+    <ClCompile Include="clans.c" />
+    <ClCompile Include="clansini.c" />
+    <ClCompile Include="class.c" />
+    <ClCompile Include="door.c" />
+    <ClCompile Include="empire.c" />
+    <ClCompile Include="fight.c" />
+    <ClCompile Include="game.c" />
+    <ClCompile Include="help.c" />
+    <ClCompile Include="ibbs.c" />
+    <ClCompile Include="input.c" />
+    <ClCompile Include="items.c" />
+    <ClCompile Include="language.c" />
+    <ClCompile Include="mail.c" />
+    <ClCompile Include="maint.c" />
+    <ClCompile Include="menus.c" />
+    <ClCompile Include="menus2.c" />
+    <ClCompile Include="misc.c" />
+    <ClCompile Include="myibbs.c" />
+    <ClCompile Include="news.c" />
+    <ClCompile Include="npc.c" />
+    <ClCompile Include="pawn.c" />
+    <ClCompile Include="quests.c" />
+    <ClCompile Include="reg.c" />
+    <ClCompile Include="scores.c" />
+    <ClCompile Include="semfile.c" />
+    <ClCompile Include="spells.c" />
+    <ClCompile Include="system.c" />
+    <ClCompile Include="trades.c" />
+    <ClCompile Include="user.c" />
+    <ClCompile Include="village.c" />
+    <ClCompile Include="voting.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="alliance.h" />
+    <ClInclude Include="alliancem.h" />
+    <ClInclude Include="clans.h" />
+    <ClInclude Include="clansini.h" />
+    <ClInclude Include="class.h" />
+    <ClInclude Include="defines.h" />
+    <ClInclude Include="deserialize.h" />
+    <ClInclude Include="door.h" />
+    <ClInclude Include="empire.h" />
+    <ClInclude Include="fight.h" />
+    <ClInclude Include="game.h" />
+    <ClInclude Include="help.h" />
+    <ClInclude Include="ibbs.h" />
+    <ClInclude Include="init.h" />
+    <ClInclude Include="input.h" />
+    <ClInclude Include="interbbs.h" />
+    <ClInclude Include="items.h" />
+    <ClInclude Include="k_clansi.h" />
+    <ClInclude Include="k_comman.h" />
+    <ClInclude Include="k_config.h" />
+    <ClInclude Include="k_ibbs.h" />
+    <ClInclude Include="k_quests.h" />
+    <ClInclude Include="language.h" />
+    <ClInclude Include="mail.h" />
+    <ClInclude Include="maint.h" />
+    <ClInclude Include="menus.h" />
+    <ClInclude Include="menus2.h" />
+    <ClInclude Include="misc.h" />
+    <ClInclude Include="mstrings.h" />
+    <ClInclude Include="myibbs.h" />
+    <ClInclude Include="myopen.h" />
+    <ClInclude Include="new.h" />
+    <ClInclude Include="npc.h" />
+    <ClInclude Include="OpenDoor.h" />
+    <ClInclude Include="packet.h" />
+    <ClInclude Include="parsing.h" />
+    <ClInclude Include="pawn.h" />
+    <ClInclude Include="quests.h" />
+    <ClInclude Include="random.h" />
+    <ClInclude Include="readcfg.h" />
+    <ClInclude Include="reg.h" />
+    <ClInclude Include="scores.h" />
+    <ClInclude Include="semfile.h" />
+    <ClInclude Include="serialize.h" />
+    <ClInclude Include="snipfile.h" />
+    <ClInclude Include="spells.h" />
+    <ClInclude Include="structs.h" />
+    <ClInclude Include="system.h" />
+    <ClInclude Include="systemf.h" />
+    <ClInclude Include="tasker.h" />
+    <ClInclude Include="trades.h" />
+    <ClInclude Include="user.h" />
+    <ClInclude Include="video.h" />
+    <ClInclude Include="village.h" />
+    <ClInclude Include="voting.h" />
+    <ClInclude Include="win_wrappers.h" />
+  </ItemGroup>
+</Project>

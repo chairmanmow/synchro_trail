@@ -11,7 +11,6 @@
 //      load("termdesc.js".type(true)
 //      load("termdesc.js".type(true, User(4))
 
-require("text.js", "TerminalAutoDetect");
 require("userdefs.js", "USER_PETSCII");
 
 "use strict";
@@ -36,7 +35,7 @@ function rows(verbose, usr)
 	var rows = usr.screen_rows || console.screen_rows;
 	if(verbose !== true)
 		return String(rows);
-	return format("%s%d %s", usr.screen_rows ? "":bbs.text(TerminalAutoDetect), rows, bbs.text(TerminalRows));
+	return format("%s%d %s", usr.screen_rows ? "":bbs.text(bbs.text.TerminalAutoDetect), rows, bbs.text(bbs.text.TerminalRows));
 }
 
 function columns(verbose, usr)
@@ -46,7 +45,7 @@ function columns(verbose, usr)
 	var cols = usr.screen_columns || console.screen_columns;
 	if(verbose !== true)
 		return String(cols);
-	return format("%s%d %s", usr.screen_columns ? "":bbs.text(TerminalAutoDetect), cols, bbs.text(TerminalColumns));
+	return format("%s%d %s", usr.screen_columns ? "":bbs.text(bbs.text.TerminalAutoDetect), cols, bbs.text(bbs.text.TerminalColumns));
 }
 
 function type(verbose, usr)
@@ -66,19 +65,21 @@ function type(verbose, usr)
 		type = "RIP";
 	if(term & USER_ANSI)
 		type = "ANSI";
-	if(verbose !== true)
+	if(!verbose)
 		return type;
 
 	// Verbose
 	if(term & USER_PETSCII)
-		return ((usr.settings & USER_AUTOTERM) ? bbs.text(TerminalAutoDetect) : "") + "CBM/PETSCII";
-	return format("%s%s / %s %s%s%s"
-		,(usr.settings & USER_AUTOTERM) ? bbs.text(TerminalAutoDetect) : ""
-		,this.charset(term)
-		,type
-		,(term & USER_COLOR) ? (term & USER_ICE_COLOR ? bbs.text(TerminalIceColor) : bbs.text(TerminalColor)) : bbs.text(TerminalMonochrome)
-		,(term & USER_MOUSE) ? bbs.text(TerminalMouse) : ""
-		,(term & USER_SWAP_DELETE) ? "DEL=BS" : "").trimRight();
+		return ((usr.settings & USER_AUTOTERM) ? bbs.text(bbs.text.TerminalAutoDetect) : "") + "CBM/PETSCII";
+	var result = format("%s%s / %s"
+		,(usr.settings & USER_AUTOTERM) ? bbs.text(bbs.text.TerminalAutoDetect) : "", this.charset(term), type);
+	if (verbose > 1)
+		result += format(" %s%s%s"
+			,(term & USER_COLOR) ? (term & USER_ICE_COLOR ? bbs.text(bbs.text.TerminalIceColor) : bbs.text(bbs.text.TerminalColor)) : bbs.text(bbs.text.TerminalMonochrome)
+			,(term & USER_MOUSE) ? bbs.text(bbs.text.TerminalMouse) : ""
+			,(term & USER_SWAP_DELETE) ? "DEL=BS" : "");
+
+	return result.trimRight();
 }
 
 this;

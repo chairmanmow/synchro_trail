@@ -15,7 +15,6 @@
 
 "use strict";
 
-require("text.js", 'AutoMsg');
 require("userdefs.js", 'UFLAG_W');
 require("sbbsdefs.js", 'P_NOABORT');
 
@@ -26,7 +25,9 @@ if(!options.max_line_len)
 	options.max_line_len = 76;
 if(options.backup_level === undefined)
 	options.backup_level = 10;
-if(options.mem !== false) {
+if(options.meme === undefined)
+	options.meme = true;
+if(options.meme) {
 	options.max_line_len = 39;
 	options.line_fmt = "%s ";
 }
@@ -39,16 +40,16 @@ function automsg()
 		bbs.nodesync();
 		if(user.is_sysop)
 			console.mnemonics(options.sysop_prompt
-				|| "\r\nAuto Message - ~Read, ~Write, ~Delete or ~Quit: ");
+				|| "\r\nAuto Message - ~Read, ~Write, ~Delete or \x01\\~Quit: ");
 		else
-			console.mnemonics(options.prompt || bbs.text(AutoMsg));
+			console.mnemonics(options.prompt || bbs.text(bbs.text.AutoMsg));
 		switch(console.getkeys("RWQD",0)) {
 			case 'R':
 				console.printfile(automsg,P_NOABORT|P_NOATCODES|P_WORDWRAP|P_NOERROR);
 				break;
 			case 'W':
 				if(user.security.restrictions&UFLAG_W) {
-					console.print(bbs.text(R_AutoMsg));
+					console.print(bbs.text(bbs.text.R_AutoMsg));
 					break;
 				}
 				bbs.node_action=NODE_AMSG;
@@ -70,10 +71,10 @@ function automsg()
 					buf = load("meme_chooser.js", buf, options);
 				if(!buf)
 					break;
-				if(console.yesno(bbs.text(OK))) {
+				if(console.yesno(bbs.text(bbs.text.OK))) {
 					var anon = false;
 					if(user.security.exemptions&UFLAG_A) {
-						if(!console.noyes(bbs.text(AnonymousQ)))
+						if(!console.noyes(bbs.text(bbs.text.AnonymousQ)))
 							anon = true;
 					}
 					if(typeof options.backup_level == "number")
@@ -85,15 +86,15 @@ function automsg()
 					}
 					var tmp = format(options.user_fmt || "%s #%d", user.alias, user.number);
 					if(anon)
-						tmp = bbs.text(Anonymous);
-					str = format(options.header_fmt || bbs.text(AutoMsgBy), tmp, system.timestr());
+						tmp = bbs.text(bbs.text.Anonymous);
+					str = format(options.header_fmt || bbs.text(bbs.text.AutoMsgBy), tmp, system.timestr());
 					file.write(str);
 					file.write(buf);
 					file.close();
 				}
 				break;
 			case 'D':
-				if(user.is_sysop && !console.noyes(format(bbs.text(DeleteTextFileQ), automsg)))
+				if(user.is_sysop && !console.noyes(format(bbs.text(bbs.text.DeleteTextFileQ), automsg)))
 					file_remove(automsg);
 				break;
 			case 'Q':

@@ -1,0 +1,20 @@
+#ifndef THE_CLANS__K_CLASSES___H
+#define THE_CLANS__K_CLASSES___H
+
+#define MAX_PCLASS_WORDS    11
+
+const char *const papszPClassKeyWords[MAX_PCLASS_WORDS] = {
+        "Name",
+        "Agility",
+        "Dexterity",
+        "Strength",
+        "Wisdom",
+        "ArmorStr",
+        "Charisma",
+        "MaxHP",
+        "Gold",
+        "MaxMP",
+        "Spell"
+};
+
+#endif

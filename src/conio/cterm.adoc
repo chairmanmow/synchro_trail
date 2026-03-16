@@ -1095,7 +1095,8 @@ supported:
 | 
 
 |2
-|Dim intensity
+|Dim intensity (clears the bright attribute; equivalent to SGR 22
+in PC text mode since there is no distinct dim state)
 | 
 |√
 | 
@@ -1502,10 +1503,10 @@ TF indicates that the Tru Colour foreground is changed.
 TB indicates that the Tru Colour background is changed.
 
 NOTE: For 90-97, there is no effect unless bright foreground colours
-are enabled.
+are enabled (i.e., DECSET mode 32 is not set, which is the default).
 
 NOTE: For 100-107, there is no effect unless bright background colours
-are enabled.
+are enabled via DECSET mode 33.
 
 NOTE: For 38 and 48, two additional formats are supported, a palette
 selection and a direct colour selection.
@@ -1548,7 +1549,10 @@ CTerm will always reply with CSI 0 n indicating
 
 CTerm will reply with CSI y ; x R where y is the current line
 and x is
-the current row.
+the current row.  When origin mode (`CSI ? 6 h`) is enabled,
+the reported position is relative to the scroll region, not
+the screen.  When the Last Column Flag is set, the reported
+column is the last column (not last column + 1).
 
 |255
 |NON-STANDARD EXTENSION (BCDSR)
@@ -1634,13 +1638,40 @@ Where xxxx is the hex checksum.
 
 SOURCE: <<VT420>>
 
+=== `CSI Ps SP q` Set Cursor Style (`DECSCUSR`)
+Defaults: `Ps` = 1
+Sets the cursor style
+
+[%autowidth]
+|===
+|Ps|Result
+
+|0
+|Blinking block
+
+|1
+|Blinking block
+
+|2
+|Steady block
+
+|3
+|Blinking underline
+
+|4
+|Steady underline
+
+|===
+
+SOURCE: <<VT520>>
+
 === `CSI Pn1 ; Pn2 r` Set Top and Bottom Margins (`DECSTBM`)
 Defaults: `Pn1` = 1  `Pn2` = last line on screen +
 Selects top and bottom margins, defining the scrolling region. `Pn1` is
 the line number of the first line in the scrolling region. `Pn2` is the
 line number of the bottom line.
 
-SOURCE: <<XTerm>>
+SOURCE: <<VT100>>
 
 === `CSI Ps1 ; Ps2 * r` Select Communication Speed (`DECSCS`)
 Set the output emulation speed.
@@ -1918,7 +1949,10 @@ characters.
 .Currently supported values of pt:
 [%autowidth]
 |===
-|`pt` |Request SGR parameters
+|`pt` |Description
+
+|m
+|Request SGR parameters
 
 |r
 |Request top and bottom margins
@@ -1951,8 +1985,10 @@ macro is set.  If the macro is zero length, only the delete action is
 stored, you can't store a zero-length macro.
 
 If `p3` is zero, the macro is defined using ASCII characters
-(0x20 - 0x7e and 0xa0 - 0xff only) if `p3` is one, the macro
-is defined using hex pairs.
+(0x20 - 0x7e and 0xa0 - 0xff only).  Note that since ESC (0x1b)
+is not in this range, ASCII-mode macros cannot contain escape
+sequences; use hex-mode (`p3` = 1) instead.
+If `p3` is one, the macro is defined using hex pairs.
 
 When the macro is defined using hex pairs, a repeat
 sequence may be included in the format of `! Pn ; D..D ;`
@@ -1984,10 +2020,31 @@ is "104" (ie: no `Ps` present), resets all colours.  Otherwise, only each index
 separated by a semicolon is reset.
 SOURCE: <<XTerm>>
 
+=== `OSC 10 ; ? ST` Query Default Foreground Color (`OSC 10`)
+Queries the default foreground color. +
+CTerm responds with `OSC 10;rgb:RR/GG/BB ST` where `RR`, `GG`, and `BB`
+are two hex digit color values.
+
+SOURCE: <<XTerm>>
+
+=== `OSC 11 ; ? ST` Query Default Background Color (`OSC 11`)
+Queries the default background color. +
+CTerm responds with `OSC 11;rgb:RR/GG/BB ST` where `RR`, `GG`, and `BB`
+are two hex digit color values.
+
+SOURCE: <<XTerm>>
+
 == Application Program Commands
 
-An Operating System Command Begins with an `APC` and ends with a `ST`
+An Application Program Command begins with an `APC` and ends with a `ST`
 SyncTERM implements the following APC commands:
+
+=== `APC SyncTERM:VER ST` Get SyncTERM Version (`CTSV`)
+SyncTERM responds with
+an `APC` string of the form `APC SyncTERM:VER;version ST` where
+`version` is the full version string of SyncTERM, either
+`SyncTERM 1.7rc1` for release builds or `SyncTERM 1.7b Debug (Sep 27 2025)`
+for debug builds
 
 === `APC SyncTERM:C;S Ps1 Ps2 ST` Store file (`CTSFI`)
 Where `Ps1` is a filename and `Ps2` is the base64 encoded
@@ -2164,8 +2221,9 @@ Loads a JPEG XL to a buffer.  Ps0 is the filename
 Loads a PBM to a buffer.  Ps0 is the filename
 
 === `APC SyncTERM:P;Copy Ps... ST` Copy Screen into Buffer (`CTCSIB`)
-Copies a portion of the screen into an internal buffer for use with the
-Paste function.  Defaults to copying the entire screen.
+Copies a portion of the screen into an internal pixel buffer for use with the
+Paste function.  Defaults to copying the entire screen.  All coordinates
+and dimensions are in pixels.
 
 .Currently Supported Ps Arguments:
 [%autowidth]
@@ -2187,9 +2245,10 @@ Paste function.  Defaults to copying the entire screen.
 |Sets the height to copy. Default = Screen height - X.
 |===
 
-=== `APC SyncTERM:P,Paste Ps... ST` Paste Buffer to Screen (`CTPBTS`)
-Pastes from the copied buffer.  Supports the same options as the Cache
+=== `APC SyncTERM:P;Paste Ps... ST` Paste Buffer to Screen (`CTPBTS`)
+Pastes from the copied pixel buffer.  Supports the same options as the Cache
 DrawPPM command except for the filename, and adds the B= option.
+All coordinates and dimensions are in pixels.
 
 .Currently Supported Ps Arguments:
 [%autowidth]
@@ -2426,8 +2485,11 @@ for people who want to maintain compatibility.
 |Select
 |"\033[K" (Same as End due to termcap weirdness)
 
+|Backspace
+|"\b" when DECBKM is set (default), "\x7f" when reset
+
 |Delete
-|"\x7f"
+|"\x7f" when DECBKM is set (default), "\033[3~" when reset
 
 |Page Down
 |"\033[U"
@@ -2600,3 +2662,5 @@ for people who want to maintain compatibility.
 * [[VT420]]https://vt100.net/docs/vt420-uu/[[VT420\]] Digital. Installing and Using the VT420 Video Terminal. June 1990.
 * [[ANSISYS]]https://en.wikipedia.org/wiki/ANSI.SYS[[ANSISYS\]] Wikipedia. ANSI.SYS.
 * [[ECMA-35]]https://ecma-international.org/wp-content/uploads/ECMA-35_6th_edition_december_1994.pdf[[ECMA-35\]] ECMA. Character Code Structure and Extension Techniques. December 1994
+* [[VT520]]https://vt100.net/dec/ek-vt520-rm.pdf[[VT520\]] Digital. VT520/VT525 Video Terminal Programmer Information. July 1994.
+* [[VT100]]https://vt100.net/docs/vt100-ug/contents.html[[VT100\]] Digital. User Guide VT100. 1981.

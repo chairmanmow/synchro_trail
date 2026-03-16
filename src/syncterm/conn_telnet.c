@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: conn_telnet.c,v 1.18 2020/05/03 20:12:42 deuce Exp $ */
-
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -19,6 +17,8 @@
 extern int telnet_log_level;
 bool telnet_deferred = false;
 bool telnet_no_binary = false;
+static bool last_was_lf = false;
+char term_name[sizeof(((struct bbslist *)NULL)->term_name)];
 
 /*****************************************************************************/
 
@@ -32,7 +32,6 @@ bool telnet_no_binary = false;
 static size_t
 st_telnet_expand(const uchar *inbuf, size_t inlen, uchar *outbuf, size_t outlen, bool expand_cr, uchar **result)
 {
-	static bool last_was_lf = false;
 	BYTE       *first_iac = (BYTE *)memchr(inbuf, TELNET_IAC, inlen);
 	BYTE       *first_cr = NULL;
 
@@ -167,11 +166,13 @@ telnet_connect(struct bbslist *bbs)
 
 	memset(telnet_local_option, 0, sizeof(telnet_local_option));
 	memset(telnet_remote_option, 0, sizeof(telnet_remote_option));
+	last_was_lf = false;
 	conn_api.rx_parse_cb = telnet_rx_parse_cb;
 	conn_api.tx_parse_cb = telnet_tx_parse_cb;
 
 	telnet_deferred =  bbs->defer_telnet_negotiation;
 	telnet_no_binary =  bbs->telnet_no_binary;
+	strlcpy(term_name, get_emulation_str(bbs), sizeof(term_name));
 	_beginthread(rlogin_output_thread, 0, NULL);
 	_beginthread(rlogin_input_thread, 0, bbs);
 

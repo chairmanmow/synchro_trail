@@ -21,7 +21,7 @@ load('fidocfg.js');
 load('binkp.js');
 load('freqit_common.js');
 
-var REVISION = 2.41;
+var REVISION = 2.42;
 var version_notice = "BinkIT/" + REVISION;
 var semaphores = [];
 // data/binkstats.ini
@@ -458,6 +458,14 @@ function rx_callback(fname, bp)
 		if (semaphores.indexOf(semname) == -1)
 			semaphores.push(semname);
 	}
+
+	Object.keys(bp.cb_data.binkitcfg.semfile).forEach(function(wc) {
+		var semname = bp.cb_data.binkitcfg.semfile[wc];
+		if (wildmatch(file_getname(fname), wc)) {
+			if (semaphores.indexOf(semname) == -1)
+				semaphores.push(semname);
+		}
+	});
 
 	if (fname.search(/\.req$/i) !== -1) {
 		handle_freq(fname, bp);

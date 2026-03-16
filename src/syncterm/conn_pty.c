@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: conn_pty.c,v 1.41 2020/05/02 22:52:53 deuce Exp $ */
-
 #ifdef __unix__
 
 #include <signal.h>   // kill()
@@ -439,9 +437,6 @@ pty_connect(struct bbslist *bbs)
 #ifdef VEOL
 	ts.c_cc[VEOL] = CEOL;
 #endif
-#ifdef VEOL2
-	ts.c_cc[VEOL] = CEOL;
-#endif
 #ifdef VERASE
 	ts.c_cc[VERASE] = CTRL('h');
 #endif
@@ -501,7 +496,7 @@ pty_connect(struct bbslist *bbs)
 		case -1:
 			return -1;
 		case 0: /* Child */
-			setenv("TERM", settings.TERM, 1);
+			setenv("TERM", bbs->term_name[0] ? bbs->term_name : settings.TERM, 1);
 			termcap = xp_asprintf("syncterm|SyncTERM"
 			        ":co#%d:li#%d"
 			        ":ND:am:da:ut:it#8"

@@ -22,6 +22,7 @@
 /* Platform-specific headers */
 #ifdef _WIN32
 	#include <io.h>         /* open/close */
+	#define WIN32_LEAN_AND_MEAN
 	#include <windows.h>
 #endif
 
@@ -540,20 +541,32 @@ int main(int argc, char **argv)
 	}
 
 	for (i = 1; i < argc; i++) {
-		if (isdigit(argv[i][0]))
+		if (isdigit(argv[i][0])) {
+			if (mode < 0) {
+				puts("An action must be specified before node numbers");
+				usage();
+			}
 			node_num = atoi(argv[i]);
+		}
 		else {
 			node_num = onoff = value = 0;
-			if (!stricmp(argv[i], "-DEBUG"))
+			if (!stricmp(argv[i], "-DEBUG")) {
 				debug = 1;
-			else if (!stricmp(argv[i], "-LOOP"))
+				continue;
+			}
+			else if (!stricmp(argv[i], "-LOOP")) {
 				loop = 1;
-			else if (!stricmp(argv[i], "-PAUSE"))
+				continue;
+			}
+			else if (!stricmp(argv[i], "-PAUSE")) {
 				pause = 1;
+				continue;
+			}
 			else if (strncmp(argv[i], "-v", 2) == 0) {
 				verbose = true;
 				if (argv[i][2])
 					strListPush(&key_list, argv[i] + 2);
+				continue;
 			}
 			else if (!stricmp(argv[i], "LIST"))
 				mode = MODE_LIST;
@@ -609,11 +622,18 @@ int main(int argc, char **argv)
 				mode = MODE_EXTAUX;
 				value = strtoul(argv[i] + 7, NULL, 0);
 			}
-			else
+			else {
+				if (argv[i][0] == '-')
+					printf("Unhandled option \"%s\"\n", argv[i]);
+				else
+					printf("Unhandled action \"%s\"\n", argv[i]);
 				usage();
+			}
 		}
-		if (mode < 0)
+		if (mode < 0) {
+			puts("No action specified");
 			usage();
+		}
 		if (mode != MODE_LIST)
 			modify = 1;
 
@@ -735,6 +755,10 @@ int main(int argc, char **argv)
 			} /* while(1) */
 
 	} /* for i<argc */
+	if (mode < 0) {
+		puts("No action specified");
+		usage();
+	}
 
 	close(nodefile);
 	return 0;

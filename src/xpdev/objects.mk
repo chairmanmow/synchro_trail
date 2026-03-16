@@ -18,9 +18,11 @@ OBJS	= \
 	$(OBJODIR)$(DIRSEP)multisock$(OFILE) \
 	$(OBJODIR)$(DIRSEP)named_str_list$(OFILE) \
 	$(OBJODIR)$(DIRSEP)netwrap$(OFILE) \
+	$(OBJODIR)$(DIRSEP)os_info$(OFILE) \
 	$(OBJODIR)$(DIRSEP)sockwrap$(OFILE) \
 	$(OBJODIR)$(DIRSEP)semfile$(OFILE) \
 	$(OBJODIR)$(DIRSEP)str_list$(OFILE) \
+	$(OBJODIR)$(DIRSEP)stbuf$(OFILE) \
 	$(OBJODIR)$(DIRSEP)strwrap$(OFILE) \
 	$(OBJODIR)$(DIRSEP)unicode$(OFILE) \
 	$(OBJODIR)$(DIRSEP)xp_dl$(OFILE) \
@@ -42,12 +44,14 @@ MTOBJS	= \
 	$(MTOBJODIR)$(DIRSEP)msg_queue$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)multisock$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)named_str_list$(OFILE) \
+	$(MTOBJODIR)$(DIRSEP)os_info$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)rwlockwrap$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)semwrap$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)netwrap$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)sockwrap$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)semfile$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)str_list$(OFILE) \
+	$(MTOBJODIR)$(DIRSEP)stbuf$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)strwrap$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)threadwrap$(OFILE) \
 	$(MTOBJODIR)$(DIRSEP)unicode$(OFILE) \

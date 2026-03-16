@@ -212,60 +212,86 @@ static void client_add(void* p, bool add)
     	clients--;
 }
 
-static void client_on(void* p, bool on, int sock, client_t* client, bool update)
+static void client_change(bool on, int sock, client_t* client, bool update)
 {
     char    str[128];
     int     i,j;
     time_t  t;
     TListItem*  Item;
 	
-    WaitForSingleObject(ClientForm->ListMutex,INFINITE);
-
-    /* Search for existing entry for this socket */
-    for(i=0;i<ClientForm->ListView->Items->Count;i++) {
-        if(ClientForm->ListView->Items->Item[i]->Caption.ToIntDef(0)==sock)
-            break;
-    }
-    if(i>=ClientForm->ListView->Items->Count) {
-		if(update)	{ /* Can't update a non-existing entry */
-			ReleaseMutex(ClientForm->ListMutex);
-			return;
-		}
-        i=-1;
+    if(WaitForSingleObject(ClientForm->ListMutex,INFINITE) != WAIT_OBJECT_0) {
+		Application->MessageBox(AnsiString("ERROR " + IntToStr(GetLastError()) +
+            " acquiring ListMutex").c_str()
+            ,"ERROR"
+            ,MB_OK|MB_ICONEXCLAMATION);
+		return;
 	}
-
-    if(on) {
-	    if(!update)
-	        client_add(NULL, TRUE);
-    } else { // Off
-        client_add(NULL, FALSE);
-        if(i>=0)
-            ClientForm->ListView->Items->Delete(i);
-        ReleaseMutex(ClientForm->ListMutex);
-        return;
-    }
 	try {
-		if(client!=NULL && client->size==sizeof(client_t)) {
-			t=time(NULL);
-			if(i>=0) {
-				Item=ClientForm->ListView->Items->Item[i];
-			} else {
-				Item=ClientForm->ListView->Items->Add();
-				Item->Data=(void*)t;
-				Item->Caption=sock;
+
+		/* Search for existing entry for this socket */
+		for(i=0;i<ClientForm->ListView->Items->Count;i++) {
+			if(ClientForm->ListView->Items->Item[i]->Caption.ToIntDef(0)==sock)
+				break;
+		}
+		if(i>=ClientForm->ListView->Items->Count) {
+			if(update)	{ /* Can't update a non-existing entry */
+				ReleaseMutex(ClientForm->ListMutex);
+				return;
 			}
-			Item->SubItems->Clear();
-			Item->SubItems->Add(client->protocol);
-			Item->SubItems->Add(client->user);
-			Item->SubItems->Add(client->addr);
-			Item->SubItems->Add(client->host);
-			Item->SubItems->Add(client->port);
-			t-=(time_t)Item->Data;
-			sprintf(str,"%d:%02d",t/60,t%60);
-			Item->SubItems->Add(str);
+			i=-1;
+		}
+
+		if(!on) {
+			client_add(NULL, FALSE);
+			if(i>=0)
+				ClientForm->ListView->Items->Delete(i);
+		}
+		else {
+			if(!update)
+				client_add(NULL, TRUE);
+			if(client!=NULL && client->size==sizeof(client_t)) {
+				t=time(NULL);
+				if(i>=0) {
+					Item=ClientForm->ListView->Items->Item[i];
+				} else {
+					Item=ClientForm->ListView->Items->Add();
+					Item->Data=(void*)t;
+					Item->Caption=sock;
+				}
+				Item->SubItems->Clear();
+				Item->SubItems->Add(client->protocol);
+				Item->SubItems->Add(client->user);
+				Item->SubItems->Add(client->addr);
+				Item->SubItems->Add(client->host);
+				Item->SubItems->Add(client->port);
+				t-=(time_t)Item->Data;
+				sprintf(str,"%d:%02d",t/60,t%60);
+				Item->SubItems->Add(str);
+			}
 		}
 	} catch(...) {}
     ReleaseMutex(ClientForm->ListMutex);
+}
+
+link_list_t client_change_list;
+
+struct client_change {
+	int sock;
+	bool on;
+	bool update;
+	client_t client;
+};
+
+static void client_on(void* p, bool on, int sock, client_t* client, bool update)
+{
+	struct client_change cc = {};
+
+	cc.on = on;
+	cc.sock = sock;
+	if (client != NULL)
+		cc.client = *client;
+	cc.update = update;
+	listAddNodeData(&client_change_list, &cc, sizeof cc, sock, LAST_NODE);
 }
 
 static int lputs(void* p, int level, const char *str)
@@ -333,26 +359,33 @@ static const char* server_state_str(enum server_state state)
 	}
 }
 
+bool server_stopped_or_stopping(enum server_state state)
+{
+	return state == SERVER_STOPPED || state == SERVER_STOPPING;
+}
+
+enum server_state bbs_state;
+enum server_state ftp_state;
+enum server_state mail_state;
+enum server_state web_state;
+enum server_state services_state;
+
 static void bbs_set_state(void* p, enum server_state state)
+{
+	bbs_state = state;
+}
+
+static void bbs_set_controls(enum server_state state)
 {
 	TelnetForm->Status->Caption = server_state_str(state);
 	
-	switch(state) {
-		case SERVER_STOPPED:
-			MainForm->TelnetStart->Enabled=true;
-			MainForm->TelnetStop->Enabled=false;
-			MainForm->TelnetRecycle->Enabled=false;
-			MainForm->TelnetPause->Enabled=false;
-			MainForm->TelnetPause->Checked=false;
-			break;
-		case SERVER_READY:
-			MainForm->TelnetStart->Enabled=false;
-			MainForm->TelnetStop->Enabled=true;
-			MainForm->TelnetRecycle->Enabled=true;
-			MainForm->TelnetPause->Enabled=true;
-			MainForm->TelnetPause->Checked=false;
-			break;
-	}
+	MainForm->TelnetStart->Enabled = (state == SERVER_STOPPED);
+	MainForm->TelnetStop->Enabled = (state == SERVER_READY);
+	MainForm->TelnetRecycle->Enabled = (state == SERVER_READY);
+	MainForm->TelnetPause->Enabled = (state == SERVER_READY);
+
+	if (state == SERVER_STOPPED)
+		MainForm->TelnetPause->Checked=false;
 }
 
 static void bbs_clients(void* p, int clients)
@@ -377,7 +410,7 @@ static void bbs_clients(void* p, int clients)
 static void bbs_start(void)
 {
     FILE* fp=fopen(MainForm->ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,&MainForm->bbs_startup
         ,NULL   ,NULL
@@ -388,7 +421,13 @@ static void bbs_start(void)
     if(fp!=NULL)
         fclose(fp);
 
-	_beginthread((void(*)(void*))bbs_thread,0,&MainForm->bbs_startup);
+	if(result)
+		_beginthread((void(*)(void*))bbs_thread,0,&MainForm->bbs_startup);
+	else {
+		char err[MAX_PATH*2];
+		SAFEPRINTF(err,"FAILED to read: %s", MainForm->ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+	}
     Application->ProcessMessages();
 }
 
@@ -413,24 +452,20 @@ static void services_log_msg(log_msg_t* msg)
 
 static void services_set_state(void* p, enum server_state state)
 {
+	services_state = state;
+}
+
+static void services_set_controls(enum server_state state)
+{
 	ServicesForm->Status->Caption = server_state_str(state);
 	
-	switch(state) {
-		case SERVER_STOPPED:
-			MainForm->ServicesStart->Enabled=true;
-			MainForm->ServicesStop->Enabled=false;
-			MainForm->ServicesRecycle->Enabled=false;
-			MainForm->ServicesPause->Enabled=false;
-			MainForm->ServicesPause->Checked=false;
-			break;
-		case SERVER_READY:
-			MainForm->ServicesStart->Enabled=false;
-			MainForm->ServicesStop->Enabled=true;
-			MainForm->ServicesRecycle->Enabled=true;
-			MainForm->ServicesPause->Enabled=true;
-			MainForm->ServicesPause->Checked=false;
-			break;
-	}
+	MainForm->ServicesStart->Enabled = (state == SERVER_STOPPED);
+	MainForm->ServicesStop->Enabled = (state == SERVER_READY);
+	MainForm->ServicesRecycle->Enabled = (state == SERVER_READY);
+	MainForm->ServicesPause->Enabled = (state == SERVER_READY);
+
+	if (state == SERVER_STOPPED)
+		MainForm->ServicesPause->Checked=false;
 }
 
 static void services_clients(void* p, int clients)
@@ -479,24 +514,20 @@ static void mail_log_msg(log_msg_t* msg)
 
 static void mail_set_state(void* p, enum server_state state)
 {
+	mail_state = state;
+}
+
+static void mail_set_controls(enum server_state state)
+{
 	MailForm->Status->Caption = server_state_str(state);
 	
-	switch(state) {
-		case SERVER_STOPPED:
-			MainForm->MailStart->Enabled=true;
-			MainForm->MailStop->Enabled=false;
-			MainForm->MailRecycle->Enabled=false;
-			MainForm->MailPause->Enabled=false;
-			MainForm->MailPause->Checked=false;
-			break;
-		case SERVER_READY:
-			MainForm->MailStart->Enabled=false;
-			MainForm->MailStop->Enabled=true;
-			MainForm->MailRecycle->Enabled=true;
-			MainForm->MailPause->Enabled=true;
-			MainForm->MailPause->Checked=false;
-			break;
-	}
+	MainForm->MailStart->Enabled = (state == SERVER_STOPPED);
+	MainForm->MailStop->Enabled = (state == SERVER_READY);
+	MainForm->MailRecycle->Enabled = (state == SERVER_READY);
+	MainForm->MailPause->Enabled = (state == SERVER_READY);
+
+	if (state == SERVER_STOPPED)
+		MainForm->MailPause->Checked=false;
 }
 
 static void mail_clients(void* p, int clients)
@@ -516,7 +547,7 @@ static void mail_clients(void* p, int clients)
 static void mail_start(void)
 {
     FILE* fp=fopen(MainForm->ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,NULL
         ,NULL   ,NULL
@@ -527,7 +558,13 @@ static void mail_start(void)
     if(fp!=NULL)
         fclose(fp);
 
-	_beginthread((void(*)(void*))mail_server,0,&MainForm->mail_startup);
+	if(result)
+		_beginthread((void(*)(void*))mail_server,0,&MainForm->mail_startup);
+	else {
+		char err[MAX_PATH*2];
+		SAFEPRINTF(err,"FAILED to read: %s", MainForm->ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+	}
     Application->ProcessMessages();
 }
 
@@ -574,24 +611,20 @@ static void ftp_log_msg(log_msg_t* msg)
 
 static void ftp_set_state(void* p, enum server_state state)
 {
+	ftp_state = state;
+}
+
+static void ftp_set_controls(enum server_state state)
+{
 	FtpForm->Status->Caption = server_state_str(state);
 	
-	switch(state) {
-		case SERVER_STOPPED:
-			MainForm->FtpStart->Enabled=true;
-			MainForm->FtpStop->Enabled=false;
-			MainForm->FtpRecycle->Enabled=false;
-			MainForm->FtpPause->Enabled=false;
-			MainForm->FtpPause->Checked=false;
-			break;
-		case SERVER_READY:
-			MainForm->FtpStart->Enabled=false;
-			MainForm->FtpStop->Enabled=true;
-			MainForm->FtpRecycle->Enabled=true;
-			MainForm->FtpPause->Enabled=true;
-			MainForm->FtpPause->Checked=false;
-			break;
-	}
+	MainForm->FtpStart->Enabled = (state == SERVER_STOPPED);
+	MainForm->FtpStop->Enabled = (state == SERVER_READY);
+	MainForm->FtpRecycle->Enabled = (state == SERVER_READY);
+	MainForm->FtpPause->Enabled = (state == SERVER_READY);
+
+	if (state == SERVER_STOPPED)
+		MainForm->FtpPause->Checked=false;
 }
 
 static void ftp_clients(void* p, int clients)
@@ -611,7 +644,7 @@ static void ftp_clients(void* p, int clients)
 static void ftp_start(void)
 {
     FILE* fp=fopen(MainForm->ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,NULL
         ,NULL   ,&MainForm->ftp_startup
@@ -622,7 +655,13 @@ static void ftp_start(void)
     if(fp!=NULL)
         fclose(fp);
 
-	_beginthread((void(*)(void*))ftp_server,0,&MainForm->ftp_startup);
+	if(result)
+		_beginthread((void(*)(void*))ftp_server,0,&MainForm->ftp_startup);
+	else {
+		char err[MAX_PATH*2];
+		SAFEPRINTF(err,"FAILED to read: %s", MainForm->ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+	}
     Application->ProcessMessages();
 }
 //---------------------------------------------------------------------------
@@ -642,24 +681,20 @@ static void web_log_msg(log_msg_t* msg)
 
 static void web_set_state(void* p, enum server_state state)
 {
+	web_state = state;
+}
+
+static void web_set_controls(enum server_state state)
+{
 	WebForm->Status->Caption = server_state_str(state);
 	
-	switch(state) {
-		case SERVER_STOPPED:
-			MainForm->WebStart->Enabled=true;
-			MainForm->WebStop->Enabled=false;
-			MainForm->WebRecycle->Enabled=false;
-			MainForm->WebPause->Enabled=false;
-			MainForm->WebPause->Checked=false;
-			break;
-		case SERVER_READY:
-			MainForm->WebStart->Enabled=false;
-			MainForm->WebStop->Enabled=true;
-			MainForm->WebRecycle->Enabled=true;
-			MainForm->WebPause->Enabled=true;
-			MainForm->WebPause->Checked=false;
-			break;
-	}
+	MainForm->WebStart->Enabled = (state == SERVER_STOPPED);
+	MainForm->WebStop->Enabled = (state == SERVER_READY);
+	MainForm->WebRecycle->Enabled = (state == SERVER_READY);
+	MainForm->WebPause->Enabled = (state == SERVER_READY);
+
+	if (state == SERVER_STOPPED)
+		MainForm->WebPause->Checked=false;
 }
 
 static void web_clients(void* p, int clients)
@@ -679,7 +714,7 @@ static void web_clients(void* p, int clients)
 static void web_start(void)
 {
     FILE* fp=fopen(MainForm->ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,NULL
         ,NULL   ,NULL
@@ -690,7 +725,13 @@ static void web_start(void)
     if(fp!=NULL)
         fclose(fp);
 
-	_beginthread((void(*)(void*))web_server,0,&MainForm->web_startup);
+	if(result)
+		_beginthread((void(*)(void*))web_server,0,&MainForm->web_startup);
+	else {
+		char err[MAX_PATH*2];
+		SAFEPRINTF(err,"FAILED to read: %s", MainForm->ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+	}
     Application->ProcessMessages();
 }
 //---------------------------------------------------------------------------
@@ -724,7 +765,7 @@ static void recycle(void* cbdata)
     }
 
     fp=fopen(MainForm->ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,bbs
         ,NULL   ,ftp
@@ -734,6 +775,11 @@ static void recycle(void* cbdata)
         );
     if(fp!=NULL)
         fclose(fp);
+	if(!result) {
+		char err[MAX_PATH*2];
+		SAFEPRINTF(err,"FAILED to read: %s", MainForm->ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+	}
 	MainForm->SetControls();
 }
 //---------------------------------------------------------------------------
@@ -742,6 +788,7 @@ __fastcall TMainForm::TMainForm(TComponent* Owner)
 {
     /* Defaults */
     memset(&global,0,sizeof(global));
+	global.size = sizeof global;
     SAFECOPY(global.ctrl_dir,"c:\\sbbs\\ctrl\\");
     global.js.max_bytes=JAVASCRIPT_MAX_BYTES;
     global.js.time_limit=JAVASCRIPT_TIME_LIMIT;
@@ -922,6 +969,7 @@ __fastcall TMainForm::TMainForm(TComponent* Owner)
     listInit(&web_log_list, LINK_LIST_MUTEX);
     listInit(&mail_log_list, LINK_LIST_MUTEX);
     listInit(&services_log_list, LINK_LIST_MUTEX);
+	listInit(&client_change_list, LINK_LIST_MUTEX);
 
     TelnetPause->DisableIfNoHandler=false;
     MailPause->DisableIfNoHandler=false;
@@ -1041,14 +1089,25 @@ void __fastcall TMainForm::FormClose(TObject *Sender, TCloseAction &Action)
 
 	StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Terminating servers...";
     time_t start=time(NULL);
-	while( (TelnetStop->Enabled     && !bbsServiceEnabled())
-        || (MailStop->Enabled       && !mailServiceEnabled())
-        || (FtpStop->Enabled        && !ftpServiceEnabled())
-        || (WebStop->Enabled        && !webServiceEnabled())
-    	|| (ServicesStop->Enabled   && !servicesServiceEnabled())) {
-        if(time(NULL)-start>30) {
-			if(Application->MessageBox("Abort wait for servers to terminate?"
-				,"Synchronet Server Still Running", MB_OKCANCEL) == IDOK)
+	str_list_t servers = strListInit();
+	while(1) {
+		strListFreeStrings(servers);
+		if(bbs_state != SERVER_STOPPED      && !bbsServiceEnabled())      strListPush(&servers, "Terminal");
+		if(mail_state != SERVER_STOPPED     && !mailServiceEnabled())     strListPush(&servers, "Mail");
+		if(ftp_state != SERVER_STOPPED      && !ftpServiceEnabled())      strListPush(&servers, "FTP");
+		if(web_state != SERVER_STOPPED      && !webServiceEnabled())      strListPush(&servers, "Web");
+		if(services_state != SERVER_STOPPED && !servicesServiceEnabled()) strListPush(&servers, "Services");
+		int count = strListCount(servers);
+		if(count < 1)
+			break;
+        if(time(NULL)-start > 60) {
+			char tmp[256];
+			AnsiString Servers = AnsiString(" Server") + (count > 1 ? "s" : "");
+			if(Application->MessageBox(
+				 (AnsiString("Abort wait for ") + strListCombine(servers, tmp, sizeof tmp, ", ")
+					+ Servers + " to gracefully terminate?").c_str()
+				,(AnsiString(count) + " Synchronet" + Servers + " Still Running").c_str()
+				, MB_YESNO|MB_ICONSTOP) == IDYES)
 				break;
 			start = time(NULL);
 		}
@@ -1064,12 +1123,13 @@ void __fastcall TMainForm::FormClose(TObject *Sender, TCloseAction &Action)
 	NodeForm->Timer->Enabled=false;
 	ClientForm->Timer->Enabled=false;
 }
+
 //---------------------------------------------------------------------------
 void __fastcall TMainForm::FormCloseQuery(TObject *Sender, bool &CanClose)
 {
 	CanClose=false;
 
-    if(TelnetStop->Enabled && !bbsServiceEnabled()) {
+    if(!server_stopped_or_stopping(bbs_state) && !bbsServiceEnabled()) {
      	if(!terminating && TelnetForm->ProgressBar->Position
 	        && Application->MessageBox("Shut down the Terminal Server?"
         	,"Synchronet Terminal Server In Use", MB_OKCANCEL)!=IDOK)
@@ -1077,7 +1137,7 @@ void __fastcall TMainForm::FormCloseQuery(TObject *Sender, bool &CanClose)
         TelnetStopExecute(Sender);
 	}
 
-    if(MailStop->Enabled && !mailServiceEnabled()) {
+    if(!server_stopped_or_stopping(mail_state) && !mailServiceEnabled()) {
     	if(!terminating && MailForm->ProgressBar->Position
     		&& Application->MessageBox("Shut down the Mail Server?"
         	,"Synchronet Mail Server In Use", MB_OKCANCEL)!=IDOK)
@@ -1085,7 +1145,7 @@ void __fastcall TMainForm::FormCloseQuery(TObject *Sender, bool &CanClose)
         MailStopExecute(Sender);
     }
 
-    if(FtpStop->Enabled && !ftpServiceEnabled()) {
+    if(!server_stopped_or_stopping(ftp_state) && !ftpServiceEnabled()) {
     	if(!terminating && FtpForm->ProgressBar->Position
     		&& Application->MessageBox("Shut down the FTP Server?"
 	       	,"Synchronet FTP Server In Use", MB_OKCANCEL)!=IDOK)
@@ -1093,7 +1153,7 @@ void __fastcall TMainForm::FormCloseQuery(TObject *Sender, bool &CanClose)
         FtpStopExecute(Sender);
     }
 
-    if(WebStop->Enabled && !webServiceEnabled()) {
+    if(!server_stopped_or_stopping(web_state) && !webServiceEnabled()) {
     	if(!terminating && WebForm->ProgressBar->Position
     		&& Application->MessageBox("Shut down the Web Server?"
 	       	,"Synchronet Web Server In Use", MB_OKCANCEL)!=IDOK)
@@ -1101,7 +1161,7 @@ void __fastcall TMainForm::FormCloseQuery(TObject *Sender, bool &CanClose)
         WebStopExecute(Sender);
     }
 
-    if(ServicesStop->Enabled && !servicesServiceEnabled())
+    if(!server_stopped_or_stopping(services_state) && !servicesServiceEnabled())
 	    ServicesStopExecute(Sender);
 
     CanClose=true;
@@ -1142,7 +1202,7 @@ void __fastcall TMainForm::ServicesStartExecute(TObject *Sender)
     	return;
 
     FILE* fp=fopen(ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,NULL
         ,NULL   ,NULL
@@ -1153,7 +1213,13 @@ void __fastcall TMainForm::ServicesStartExecute(TObject *Sender)
     if(fp!=NULL)
         fclose(fp);
 
-	_beginthread((void(*)(void*))services_thread,0,&services_startup);
+	if(result)
+		_beginthread((void(*)(void*))services_thread,0,&services_startup);
+	else {
+		char err[MAX_PATH*2];
+		SAFEPRINTF(err,"FAILED to read: %s", MainForm->ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+	}
     Application->ProcessMessages();
 }
 
@@ -1426,8 +1492,8 @@ void __fastcall TMainForm::StatsTimerTick(TObject *Sender)
 
 	StatsForm->TotalLogons->Caption=AnsiString(stats.logons);
     StatsForm->LogonsToday->Caption=AnsiString(stats.ltoday);
-    StatsForm->TotalTimeOn->Caption=AnsiString(minutes_to_str(stats.timeon, str, sizeof(str)));
-    StatsForm->TimeToday->Caption=AnsiString(stats.ttoday);
+    StatsForm->TotalTimeOn->Caption=AnsiString(minutes_to_str(stats.timeon, str, sizeof str, /* estimate */false, /* verbose */false));
+    StatsForm->TimeToday->Caption=AnsiString(minutes_to_str(stats.ttoday, str, sizeof str, /* estimate */true, /* verbose */false));
     StatsForm->TotalEMail->Caption=AnsiString(getmail(&cfg,0,0,0));
 	StatsForm->EMailToday->Caption=AnsiString(stats.etoday);
 	StatsForm->TotalFeedback->Caption=AnsiString(getmail(&cfg,1,0,0));
@@ -1828,8 +1894,6 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
     	UseFileAssociations=Registry->ReadBool("UseFileAssociations");
 	if(Registry->ValueExists("NodeDisplayInterval"))
     	NodeForm->Timer->Interval=Registry->ReadInteger("NodeDisplayInterval")*1000;
-	if(Registry->ValueExists("StatsDisplayInterval"))
-		StatsTimer->Interval=Registry->ReadInteger("StatsDisplayInterval")*1000;
 	if(Registry->ValueExists("ClientDisplayInterval"))
     	ClientForm->Timer->Interval=Registry->ReadInteger("ClientDisplayInterval")*1000;
     if(Registry->ValueExists("ErrorSoundFile"))
@@ -1845,6 +1909,25 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
     else
 		FtpLogFile=true;
 
+	if(Registry->ValueExists("TelnetFormVisible"))
+		ViewTelnet->Checked = Registry->ReadBool("TelnetFormVisible");
+	if(Registry->ValueExists("EventsFormVisible"))
+		ViewEvents->Checked = Registry->ReadBool("EventsFormVisible");
+	if(Registry->ValueExists("ServicesFormVisible"))
+		ViewServices->Checked = Registry->ReadBool("ServicesFormVisible");
+	if(Registry->ValueExists("NodeFormVisible"))
+		ViewNodes->Checked = Registry->ReadBool("NodeFormVisible");
+	if(Registry->ValueExists("StatsFormVisible"))
+		ViewStats->Checked = Registry->ReadBool("StatsFormVisible");
+	if(Registry->ValueExists("ClientFormVisible"))
+		ViewClients->Checked = Registry->ReadBool("ClientFormVisible");
+	if(Registry->ValueExists("FtpFormVisible"))
+		ViewFtpServer->Checked = Registry->ReadBool("FtpFormVisible");
+	if(Registry->ValueExists("WebFormVisible"))
+		ViewWebServer->Checked = Registry->ReadBool("WebFormVisible");
+	if(Registry->ValueExists("MailFormVisible"))
+		ViewMailServer->Checked = Registry->ReadBool("MailFormVisible");
+
 	Registry->CloseKey();
     delete Registry;
 
@@ -1856,7 +1939,7 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
         Application->Terminate();
         return;
     }
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&global
         ,&SysAutoStart   		,&bbs_startup
         ,&FtpAutoStart 			,&ftp_startup
@@ -1864,8 +1947,15 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
         ,&MailAutoStart 	    ,&mail_startup
         ,&ServicesAutoStart     ,&services_startup
         );
-    StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Read " + AnsiString(ini_file);
     fclose(fp);
+	if(!result) {
+		char err[MAX_PATH * 2];
+		sprintf(err,"Failed to read %s",ini_file);
+		Application->MessageBox(err,"ERROR",MB_OK|MB_ICONEXCLAMATION);
+		Application->Terminate();
+        return;
+    }
+	StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Read " + AnsiString(ini_file);
 
     AnsiString CtrlDirectory = AnsiString(global.ctrl_dir);
     if(!FileExists(CtrlDirectory + "main.ini")) {
@@ -1888,7 +1978,7 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
 	SAFECOPY(error,UNKNOWN_LOAD_ERROR);
 
    	StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Loading configuration...";
-	if(!load_cfg(&cfg, text, /* prep: */TRUE, /* node: */FALSE, error, sizeof(error))) {
+	if(!load_cfg(&cfg, text, TOTAL_TEXT, /* prep: */TRUE, /* node: */FALSE, error, sizeof(error))) {
     	Application->MessageBox(error,"ERROR Loading Configuration"
 	        ,MB_OK|MB_ICONEXCLAMATION);
         Application->Terminate();
@@ -1922,6 +2012,10 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
 	shutdown_semfiles=semfile_list_init(cfg.ctrl_dir,"shutdown","ctrl");
 	semfile_list_check(&initialized,shutdown_semfiles);
 
+	if(cfg.stats_interval < 1)
+		cfg.stats_interval = 1;
+	StatsTimer->Interval = cfg.stats_interval * 1000;
+
     if(cfg.new_install) {
 		Application->BringToFront();
 		StartupTimer->Interval = 2500;	// Let 'em see the logo for a bit
@@ -1944,15 +2038,24 @@ void __fastcall TMainForm::DisplayMainPanels(TObject* Sender)
 	else
 		ChatToggle->Checked=false;
 
-    NodeForm->Show();
-    ClientForm->Show();
-    StatsForm->Show();
-    TelnetForm->Show();
-    EventsForm->Show();
-    FtpForm->Show();
-    WebForm->Show();
-    MailForm->Show();
-    ServicesForm->Show();
+	if(ViewNodes->Checked)
+		NodeForm->Show();
+	if(ViewClients->Checked)
+		ClientForm->Show();
+	if(ViewStats->Checked)
+		StatsForm->Show();
+	if(ViewTelnet->Checked)
+		TelnetForm->Show();
+	if(ViewEvents->Checked)
+		EventsForm->Show();
+	if(ViewFtpServer->Checked)
+		FtpForm->Show();
+	if(ViewWebServer->Checked)
+		WebForm->Show();
+	if(ViewMailServer->Checked)
+		MailForm->Show();
+	if(ViewServices->Checked)
+		ServicesForm->Show();
 
 	UpperLeftPageControl->Visible=true;
 	UpperRightPageControl->Visible=true;
@@ -1961,25 +2064,6 @@ void __fastcall TMainForm::DisplayMainPanels(TObject* Sender)
 	TopPanel->Visible=true;
 	HorizontalSplitter->Visible=true;
 	BottomPanel->Visible=true;
-
-    // Work-around for CB5 PageControl anomaly
-    int i;
-
-    for(i=1;i<UpperLeftPageControl->PageCount;i++)
-        UpperLeftPageControl->ActivePageIndex=i;
-    UpperLeftPageControl->ActivePageIndex=0;
-
-    for(i=1;i<UpperRightPageControl->PageCount;i++)
-        UpperRightPageControl->ActivePageIndex=i;
-    UpperRightPageControl->ActivePageIndex=0;
-
-    for(i=1;i<LowerRightPageControl->PageCount;i++)
-        LowerRightPageControl->ActivePageIndex=i;
-    LowerRightPageControl->ActivePageIndex=0;
-
-    for(i=1;i<LowerLeftPageControl->PageCount;i++)
-        LowerLeftPageControl->ActivePageIndex=i;
-    LowerLeftPageControl->ActivePageIndex=0;
 
     /* Open Log Mailslots */
     LogTimerTick(Sender);
@@ -2602,9 +2686,9 @@ void __fastcall TMainForm::DataMenuItemClick(TObject *Sender)
 void __fastcall TMainForm::UpTimerTick(TObject *Sender)
 {
 	char    str[128];
-    char    days[64];
-    static  time_t start;
-    ulong   up;
+    char    tmp[64];
+    static  int64_t start = xp_fast_timer64();
+    int64_t up = xp_fast_timer64() - start;
     static  bool sysop_available;
 	static	bool sound_muted;
 
@@ -2623,16 +2707,6 @@ void __fastcall TMainForm::UpTimerTick(TObject *Sender)
 		clearLoginAttemptList = false;
 	}
 
-    if(!start)
-        start=time(NULL);
-    up=time(NULL)-start;
-
-    days[0]=0;
-    if((up/(24*60*60))>=2) {
-        sprintf(days,"%u days ",up/(24*60*60));
-        up%=(24*60*60);
-    }
-		
 	for(int i = 0; i <= STATUSBAR_LAST_PANEL; i++) {
 		switch(i) {
 			case 0:
@@ -2654,11 +2728,8 @@ void __fastcall TMainForm::UpTimerTick(TObject *Sender)
 				sprintf(str,"Errors: %u",errors);
 				break;
 			default:
-				sprintf(str,"Up: %s%u:%02u"
-					,days
-					,up/(60*60)
-					,(up/60)%60
-					);
+				sprintf(str,"Up: %s"
+					, minutes_to_str(up / 60, tmp, sizeof tmp, /* estimate */true, /* words */true));
 		}
 		TStatusPanel* panel = MainForm->StatusBar->Panels->Items[i];	
 		
@@ -3041,13 +3112,13 @@ void __fastcall TMainForm::reload_config(void)
 	char error[256];
 	SAFECOPY(error,UNKNOWN_LOAD_ERROR);
    	StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Reloading configuration...";
-	if(!load_cfg(&cfg, text, /* prep: */TRUE, /* node: */FALSE, error, sizeof(error))) {
+	if(!load_cfg(&cfg, text, TOTAL_TEXT, /* prep: */TRUE, /* node: */FALSE, error, sizeof(error))) {
     	Application->MessageBox(error,"ERROR Re-loading Configuration"
 	        ,MB_OK|MB_ICONEXCLAMATION);
         Application->Terminate();
     }
     FILE* fp=fopen(MainForm->ini_file,"r");
-    sbbs_read_ini(fp, MainForm->ini_file
+    bool result = sbbs_read_ini(fp, MainForm->ini_file
         ,&MainForm->global
         ,NULL   ,&MainForm->bbs_startup
         ,NULL   ,NULL
@@ -3057,8 +3128,11 @@ void __fastcall TMainForm::reload_config(void)
         );
     if(fp!=NULL)
         fclose(fp);
-   	StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Configuration reloaded";
-   	semfile_list_check(&initialized,recycle_semfiles);
+	if(result) {
+		StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="Configuration reloaded";
+		semfile_list_check(&initialized,recycle_semfiles);
+	} else
+		StatusBar->Panels->Items[STATUSBAR_LAST_PANEL]->Text="FAILED to reload config";
 
     if(sysop_available(&cfg))
     	ChatToggle->Checked=true;
@@ -3395,6 +3469,18 @@ void __fastcall TMainForm::LogTimerTick(TObject *Sender)
 		if(count)
 			logged_msgs(ServicesForm->Log);
     }
+
+	bbs_set_controls(bbs_state);
+	ftp_set_controls(ftp_state);
+	web_set_controls(web_state);
+	mail_set_controls(mail_state);
+	services_set_controls(services_state);
+
+	struct client_change* cc;
+	while((cc = (struct client_change*)listShiftNode(&client_change_list)) != NULL) {
+		client_change(cc->on, cc->sock, &cc->client, cc->update);
+		free(cc);
+	}
 }
 //---------------------------------------------------------------------------
 void CheckServiceStatus(

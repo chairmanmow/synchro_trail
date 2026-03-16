@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="Globals">
+    <ProjectGuid>{665EC4C1-9676-4C46-99AA-0CFD2008BEAD}</ProjectGuid>
+  </PropertyGroup>
+  <Import Project="clans.props" />
+  <Import Project="clanslib.props" />
+  <ItemGroup>
+    <ClCompile Include="langcomp.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="defines.h" />
+    <ClInclude Include="deserialize.h" />
+    <ClInclude Include="interbbs.h" />
+    <ClInclude Include="myopen.h" />
+    <ClInclude Include="quests.h" />
+    <ClInclude Include="serialize.h" />
+    <ClInclude Include="structs.h" />
+    <ClInclude Include="unix_wrappers.h" />
+    <ClInclude Include="win_wrappers.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <UpToDateCheckInput Include="..\data\strings.txt" />
+    <UpToDateCheckOutput Include="mstrings.h" />
+    <UpToDateCheckOutput Include="..\data\strings.xl" />
+  </ItemGroup>
+  <Target Name="GenerateMstrings" AfterTargets="Build"
+          Inputs="$(TargetPath);..\data\strings.txt"
+          Outputs="mstrings.h;..\data\strings.xl">
+    <Message Text="Generating mstrings.h from strings.txt" Importance="High" />
+    <Exec Command="&quot;$(TargetPath)&quot; &quot;..\data\strings.txt&quot; &quot;..\data\strings.xl&quot; mstrings.h" />
+  </Target>
+</Project>

@@ -53,6 +53,7 @@ struct sort_order_info {
 
 #define SORT_ORDER_REVERSED (1 << 0)
 #define SORT_ORDER_STRING (1 << 1)
+#define DEFAULT_SORT_ORDER_VALUE (0)
 
 static struct sort_order_info sort_order[] = {
 	{
@@ -61,7 +62,7 @@ static struct sort_order_info sort_order[] = {
 		0,
 		0
 	},
-	{
+	{ // 1
 		"Entry Name",
 		SORT_ORDER_STRING,
 		offsetof(struct bbslist, name),
@@ -85,7 +86,7 @@ static struct sort_order_info sort_order[] = {
 		offsetof(struct bbslist, calls),
 		sizeof(((struct bbslist *)NULL)->calls)
 	},
-	{
+	{ // 5
 		"Dialing List",
 		0,
 		offsetof(struct bbslist, type),
@@ -115,7 +116,7 @@ static struct sort_order_info sort_order[] = {
 		offsetof(struct bbslist, password),
 		sizeof(((struct bbslist *)NULL)->password)
 	},
-	{
+	{ // 10
 		"System Password",
 		SORT_ORDER_STRING,
 		offsetof(struct bbslist, syspass),
@@ -175,7 +176,7 @@ static struct sort_order_info sort_order[] = {
 		offsetof(struct bbslist, music),
 		sizeof(((struct bbslist *)NULL)->music)
 	},
-	{
+	{ // 20
 		"Address Family",
 		0,
 		offsetof(struct bbslist, address_family),
@@ -222,6 +223,18 @@ static struct sort_order_info sort_order[] = {
 		0,
 		offsetof(struct bbslist, yellow_is_yellow),
 		sizeof(((struct bbslist *)NULL)->yellow_is_yellow)
+	},
+	{
+		"Terminal Type",
+		0,
+		offsetof(struct bbslist, term_name),
+		sizeof(((struct bbslist *)NULL)->term_name)
+	},
+	{ // 29
+		"Explicit Sort Order",
+		0,
+		offsetof(struct bbslist, sort_order),
+		sizeof(((struct bbslist *)NULL)->sort_order)
 	},
 	{
 		NULL,
@@ -332,6 +345,10 @@ ini_style_t ini_style = {
 	/* bit_separator */ NULL
 };
 
+char list_password[1024] = "";
+enum iniCryptAlgo list_algo = INI_CRYPT_ALGO_NONE;
+int list_keysize = 0;
+
 static int
 fc_to_enum(int fc)
 {
@@ -362,7 +379,7 @@ fc_from_enum(int fc_enum)
 	}
 }
 
-void
+static void
 viewofflinescroll(void)
 {
 	int top;
@@ -379,6 +396,7 @@ viewofflinescroll(void)
 	gettextinfo(&txtinfo);
 
 	textmode(scrollback_mode);
+	set_default_cursor();
 	switch (ciolib_to_screen(scrollback_mode)) {
 		case SCREEN_MODE_C64:
 			setfont(33, true, 1);
@@ -504,6 +522,7 @@ viewofflinescroll(void)
 	}
 
 	textmode(txtinfo.currmode);
+	set_default_cursor();
 	init_uifc(true, true);
 	return;
 }
@@ -518,19 +537,7 @@ get_rate_num(int rate)
 	return i;
 }
 
-int
-get_next_rate(int curr_rate)
-{
-	int i;
-
-	if (curr_rate == 0)
-		i = 0;
-	else
-		i = get_rate_num(curr_rate) + 1;
-	return rates[i];
-}
-
-int
+static int
 is_sorting(int chk)
 {
 	int i;
@@ -543,25 +550,31 @@ is_sorting(int chk)
 	return 0;
 }
 
-int
+static int
 intbufcmp(const void *a, const void *b, size_t size)
 {
-#ifdef __BIG_ENDIAN__
-	return memcmp(a, b, size);
-#else
 	int i;
 	const unsigned char *ac = (const unsigned char *)a;
 	const unsigned char *bc = (const unsigned char *)b;
 
+#ifdef __BIG_ENDIAN__
+	for (i = 0; i < size; i++) {
+		bool last = i == 0;
+#else
 	for (i = size - 1; i >= 0; i--) {
-		if (ac[i] != bc[i])
+		bool last = i == size - 1;
+#endif
+		if (ac[i] != bc[i]) {
+			if (last) {
+				return ((signed char)ac[i] - (signed char)bc[i]);
+			}
 			return ac[i] - bc[i];
+		}
 	}
 	return 0;
-#endif
 }
 
-int
+static int
 listcmp(const void *aptr, const void *bptr)
 {
 	const char *a = *(void **)(aptr);
@@ -595,7 +608,7 @@ listcmp(const void *aptr, const void *bptr)
 	return 0;
 }
 
-void
+static void
 sort_list(struct bbslist **list, int *listcount, int *cur, int *bar, char *current)
 {
 	int i;
@@ -613,7 +626,7 @@ sort_list(struct bbslist **list, int *listcount, int *cur, int *bar, char *curre
 	}
 }
 
-void
+static void
 write_sortorder(void)
 {
 	char inipath[MAX_PATH + 1];
@@ -646,7 +659,7 @@ write_sortorder(void)
 	strListFree(&inicontents);
 }
 
-void
+static void
 edit_sorting(struct bbslist **list, int *listcount, int *ocur, int *obar, char *current)
 {
 	char opt[sizeof(sort_order) / sizeof(struct sort_order_info)][80];
@@ -757,16 +770,21 @@ free_list(struct bbslist **list, int listcount)
 }
 
 void
-read_item(str_list_t listfile, struct bbslist *entry, char *bbsname, int id, int type)
+read_item(ini_fp_list_t *listfile, struct bbslist *entry, ini_lv_string_t *bbsname, int id, int type)
 {
 	char home[MAX_PATH + 1];
 	str_list_t section;
 	bool sys = (type == SYSTEM_BBSLIST);
 
 	get_syncterm_filename(home, sizeof(home), SYNCTERM_DEFAULT_TRANSFER_PATH, false);
-	if (bbsname != NULL)
-		SAFECOPY(entry->name, bbsname);
-	section = iniGetSection(listfile, bbsname);
+	if (bbsname != NULL) {
+		size_t cpylen = bbsname->len;
+		if (cpylen > LIST_NAME_MAX)
+			cpylen = LIST_NAME_MAX;
+		memcpy(entry->name, bbsname->str, cpylen);
+		entry->name[cpylen] = 0;
+	}
+	section = iniGetFastParsedSectionLV(listfile, bbsname, true);
 	iniGetSString(section, NULL, "Address", "", entry->addr, sizeof(entry->addr));
 	entry->conn_type = iniGetEnum(section, NULL, "ConnectionType", conn_types_enum, CONN_TYPE_SSH);
 	entry->flow_control = fc_from_enum(iniGetEnum(section, NULL, "FlowControl", fc_enum, 0));
@@ -785,6 +803,7 @@ read_item(str_list_t listfile, struct bbslist *entry, char *bbsname, int id, int
 	entry->rip = iniGetEnum(section, NULL, "RIP", rip_versions, RIP_VERSION_NONE);
 	entry->force_lcf = iniGetBool(section, NULL, "ForceLCF", false);
 	entry->yellow_is_yellow = iniGetBool(section, NULL, "YellowIsYellow", false);
+	iniGetSString(section, NULL, "TerminalType", "", entry->term_name, sizeof(entry->term_name));
 	if (iniKeyExists(section, NULL, "SSHFingerprint")) {
 		char fp[41];
 		int i;
@@ -835,21 +854,65 @@ read_item(str_list_t listfile, struct bbslist *entry, char *bbsname, int id, int
 
 	entry->bpsrate = iniGetInteger(section, NULL, "BPSRate", 0);
 	entry->music = iniGetInteger(section, NULL, "ANSIMusic", CTERM_MUSIC_BANSI);
+	if (entry->music < CTERM_MUSIC_SYNCTERM || entry->music > CTERM_MUSIC_ENABLED)
+		entry->music = CTERM_MUSIC_BANSI;
 	entry->address_family = iniGetEnum(section, NULL, "AddressFamily", address_families, ADDRESS_FAMILY_UNSPEC);
 	iniGetSString(section, NULL, "Font", "Codepage 437 English", entry->font, sizeof(entry->font));
 	iniGetSString(section, NULL, "Comment", "", entry->comment, sizeof(entry->comment));
 	entry->type = type;
 	entry->id = id;
 
-	strListFree(&section);
+	/* Random junk */
+	entry->sort_order = iniGetInt32(section, NULL, "SortOrder", DEFAULT_SORT_ORDER_VALUE);
 }
 
-bool
+static bool
 is_reserved_bbs_name(const char *name)
 {
 	if (stricmp(name, "syncterm-system-cache") == 0)
 		return true;
 	return false;
+}
+
+static bool
+prompt_password(void *cb_data, char *keybuf, size_t *sz)
+{
+	size_t newSz = sizeof(list_password);
+
+	if (sz && *sz < newSz)
+		newSz = *sz;
+	if (list_password[0] == 0) {
+		uifc.helpbuf = "`Encrypted List`\n\n"
+		            "The BBS list is encrypted. Enter the password it was encrypted with.";
+		int olen = uifc.input(WIN_SAV | WIN_MID, 0, 0, "Password", list_password, sizeof(list_password) - 1, K_PASSWORD);
+		if (olen < 1)
+			return false;
+	}
+	if (list_password[0]) {
+		if (keybuf && sz) {
+			*sz = strlcpy(keybuf, list_password, *sz);
+		}
+		return true;
+	}
+	return false;
+}
+
+str_list_t
+iniReadBBSList(FILE *fp, bool userList)
+{
+	enum iniCryptAlgo algo = INI_CRYPT_ALGO_NONE;
+	int ks;
+	str_list_t inifile = iniReadEncryptedFile(fp, prompt_password, settings.keyDerivationIterations, &algo, &ks, NULL, NULL, NULL);
+	if (inifile == NULL || (algo != INI_CRYPT_ALGO_NONE && !iniGetBool(inifile, NULL, "DecryptionCheck", false))) {
+		uifc.msg("Failed to decrypt BBS list, exiting");
+		exit(EXIT_FAILURE);
+	}
+	if (userList) {
+		list_algo = algo;
+		list_keysize = ks;
+	}
+
+	return inifile;
 }
 
 /*
@@ -858,7 +921,7 @@ is_reserved_bbs_name(const char *name)
  * optionally only if the entry is a user list
  * entry
  */
-int
+static int
 list_name_check(struct bbslist **list, char *bbsname, int *pos, int useronly)
 {
 	int i;
@@ -867,15 +930,16 @@ list_name_check(struct bbslist **list, char *bbsname, int *pos, int useronly)
 		FILE *listfile;
 		str_list_t inifile;
 
-		if ((listfile = fopen(settings.list_path, "r")) != NULL) {
-			inifile = iniReadFile(listfile);
+		if ((listfile = fopen(settings.list_path, "rb")) != NULL) {
+			inifile = iniReadBBSList(listfile, true);
+			fclose(listfile);
 			i = iniSectionExists(inifile, bbsname);
 			strListFree(&inifile);
-			fclose(listfile);
 			return i;
 		}
 		return 0;
 	}
+
 	for (i = 0; list[i] != NULL; i++) {
 		if (useronly && (list[i]->type != USER_BBSLIST))
 			continue;
@@ -888,6 +952,45 @@ list_name_check(struct bbslist **list, char *bbsname, int *pos, int useronly)
 	return 0;
 }
 
+static const struct bbslist **fip_last_visited;
+static int fip_last_ret;
+
+static int
+fip_bsearch_cmp(const void *key_ptr, const void *elem_ptr)
+{
+	const struct bbslist **elem = (const struct bbslist**)elem_ptr;
+	const ini_lv_string_t *key = key_ptr;
+
+	fip_last_visited = elem;
+	fip_last_ret = key->len == 0 ? 0 : strnicmp(key->str, elem[0]->name, key->len);
+	if (fip_last_ret == 0) {
+		if (elem[0]->name[key->len])
+			fip_last_ret = 1;
+	}
+	return fip_last_ret;
+}
+
+static size_t
+find_insert_point(struct bbslist **list, ini_lv_string_t *bbsname, int sz)
+{
+	fip_last_visited = NULL;
+	fip_last_ret = 0;
+	const struct bbslist **clist = (const struct bbslist**)list;
+
+	void *item = bsearch(bbsname, list, sz, sizeof(*list), fip_bsearch_cmp);
+	size_t ret = 0;
+	if (item == NULL) {
+		if (fip_last_visited) {
+			ret = fip_last_visited - clist;
+			if (fip_last_ret > 0)
+				ret++;
+		}
+	}
+	else
+		ret = SIZE_MAX;
+	return ret;
+}
+
 /*
  * Reads in a BBS list from listpath using *i as the counter into bbslist
  * first BBS read goes into list[i]
@@ -896,28 +999,39 @@ void
 read_list(char *listpath, struct bbslist **list, struct bbslist *defaults, int *i, int type)
 {
 	FILE *listfile;
-	char *bbsname;
-	str_list_t bbses;
+	ini_lv_string_t **bbses;
+	size_t bbs_cnt;
+	size_t j;
 	str_list_t inilines;
+	ini_fp_list_t *nlines;
 
-	if ((listfile = fopen(listpath, "r")) != NULL) {
-		inilines = iniReadFile(listfile);
+	if ((listfile = fopen(listpath, "rb")) != NULL) {
+		inilines = iniReadBBSList(listfile, type == USER_BBSLIST);
 		fclose(listfile);
+		nlines = iniFastParseSections(inilines, false);
 		if ((defaults != NULL) && (type == USER_BBSLIST))
-			read_item(inilines, defaults, NULL, -1, type);
-		bbses = iniGetSectionList(inilines, NULL);
-		while ((bbsname = strListRemove(&bbses, 0)) != NULL) {
-			if ((!list_name_check(list, bbsname, NULL, false)) && (!is_reserved_bbs_name(bbsname))) {
-				if ((list[*i] = (struct bbslist *)malloc(sizeof(struct bbslist))) == NULL) {
-					free(bbsname);
+			read_item(nlines, defaults, NULL, -1, type);
+		bbses = iniGetFastParsedSectionList(nlines, NULL, &bbs_cnt);
+		for (j = 0; j < bbs_cnt; j++) {
+			size_t ip = find_insert_point(list, bbses[j], *i);
+			if (ip < SIZE_MAX) {
+				if (ip < *i) {
+					memmove(&list[ip + 1], &list[ip], (*i - ip) * sizeof(*list));
+				}
+				if ((list[ip] = (struct bbslist *)malloc(sizeof(struct bbslist))) == NULL) {
+					fputs("Out of memory at in read_list()\r\n", stderr);
 					break;
 				}
-				read_item(inilines, list[*i], bbsname, *i, type);
+				read_item(nlines, list[ip], bbses[j], *i, type);
 				(*i)++;
 			}
-			free(bbsname);
+			if (*i == MAX_OPTS - 1) {
+				fprintf(stderr, "Reading too many entries (more than %d)!\r\n", MAX_OPTS);
+				break;
+			}
 		}
-		strListFree(&bbses);
+		iniFastParsedSectionListFree(bbses);
+		iniFreeFastParse(nlines);
 		strListFree(&inilines);
 	}
 	else {
@@ -943,7 +1057,7 @@ fc_str(char *str, int fc)
  * Terminates a path with "..." if it's too long.
  * Format must contain only a single '%s'.
  */
-void
+static void
 printf_trunc(char *dst, size_t dstsz, char *fmt, char *path)
 {
 	char *mangled;
@@ -952,6 +1066,10 @@ printf_trunc(char *dst, size_t dstsz, char *fmt, char *path)
 	size_t full_len = fmt_len + strlen(path);
 
 	if (full_len >= dstsz) {
+		if (remain_len < 5) {
+			sprintf(dst, fmt, "...");
+			return;
+		}
 		mangled = strdup(path);
 		if (mangled) {
 			mangled[remain_len - 1] = '\0';
@@ -968,7 +1086,7 @@ printf_trunc(char *dst, size_t dstsz, char *fmt, char *path)
 		sprintf(dst, fmt, path);
 }
 
-void
+static void
 configure_log(struct bbslist *item, const char *itemname, str_list_t inifile, int *changed)
 {
 	char opt[4][69];
@@ -1183,9 +1301,11 @@ enum {
 	BBSLIST_FIELD_PARITY,
 	BBSLIST_FIELD_TELNET_NO_BINARY,
 	BBSLIST_FIELD_TELNET_DEFERRED_NEGOTIATION,
+	BBSLIST_FIELD_PALETTE,
+	BBSLIST_FIELD_TERMINAL_TYPE,
 };
 
-void
+static void
 build_edit_list(struct bbslist *item, char opt[][69], int *optmap, char **opts, int isdefault, char *itemname)
 {
 	int i = 0;
@@ -1201,17 +1321,17 @@ build_edit_list(struct bbslist *item, char opt[][69], int *optmap, char **opts, 
 		optmap[i] = BBSLIST_FIELD_ADDR;
 		switch (item->conn_type) {
 			case CONN_TYPE_MODEM:
-				sprintf(opt[i++], "Phone Number      %s", item->addr);
+				snprintf(opt[i++], sizeof(opt[0]), "Phone Number      %s", item->addr);
 				break;
 			case CONN_TYPE_SERIAL:
 			case CONN_TYPE_SERIAL_NORTS:
-				sprintf(opt[i++], "Device Name       %s", item->addr);
+				snprintf(opt[i++], sizeof(opt[0]), "Device Name       %s", item->addr);
 				break;
 			case CONN_TYPE_SHELL:
-				sprintf(opt[i++], "Command           %s", item->addr);
+				snprintf(opt[i++], sizeof(opt[0]), "Command           %s", item->addr);
 				break;
 			default:
-				sprintf(opt[i++], "Address           %s", item->addr);
+				snprintf(opt[i++], sizeof(opt[0]), "Address           %s", item->addr);
 				break;
 		}
 	}
@@ -1246,7 +1366,7 @@ build_edit_list(struct bbslist *item, char opt[][69], int *optmap, char **opts, 
 		printf_trunc(opt[i], sizeof(opt[i]), "Username          %s", item->user);
 		i++;
 		optmap[i] = BBSLIST_FIELD_PASSWORD;
-		sprintf(opt[i++], "GHost Program     %s", item->password);
+		snprintf(opt[i++], sizeof(opt[0]), "GHost Program     %s", item->password);
 		optmap[i] = BBSLIST_FIELD_SYSPASS;
 		sprintf(opt[i++], "System Password   %s", item->syspass[0] ? "********" : "<none>");
 	}
@@ -1255,7 +1375,7 @@ build_edit_list(struct bbslist *item, char opt[][69], int *optmap, char **opts, 
 		printf_trunc(opt[i], sizeof(opt[i]), "SSH Username      %s", item->user);
 		i++;
 		optmap[i] = BBSLIST_FIELD_PASSWORD;
-		sprintf(opt[i++], "BBS Username      %s", item->password);
+		snprintf(opt[i++], sizeof(opt[0]), "BBS Username      %s", item->password);
 		optmap[i] = BBSLIST_FIELD_SYSPASS;
 		sprintf(opt[i++], "BBS Password      %s", item->syspass[0] ? "********" : "<none>");
 	}
@@ -1282,8 +1402,15 @@ build_edit_list(struct bbslist *item, char opt[][69], int *optmap, char **opts, 
 	}
 	optmap[i] = BBSLIST_FIELD_SCREEN_MODE;
 	sprintf(opt[i++], "Screen Mode       %s", screen_modes[item->screen_mode]);
+	if (item->conn_type == CONN_TYPE_SSH || item->conn_type == CONN_TYPE_SSHNA
+	    || item->conn_type == CONN_TYPE_TELNET || item->conn_type == CONN_TYPE_TELNETS
+	    || item->conn_type == CONN_TYPE_RLOGIN || item->conn_type == CONN_TYPE_RLOGIN_REVERSED
+	    || item->conn_type == CONN_TYPE_SHELL) {
+		optmap[i] = BBSLIST_FIELD_TERMINAL_TYPE;
+		sprintf(opt[i++], "Terminal Type     %s", item->term_name[0] ? item->term_name : "<Automatic>");
+	}
 	optmap[i] = BBSLIST_FIELD_FONT;
-	sprintf(opt[i++], "Font              %s", item->font);
+	snprintf(opt[i++], sizeof(opt[0]), "Font              %s", item->font);
 	if (get_emulation(item) != CTERM_EMULATION_ANSI_BBS)
 		is_ansi = false;
 	if (is_ansi) {
@@ -1318,10 +1445,12 @@ build_edit_list(struct bbslist *item, char opt[][69], int *optmap, char **opts, 
 	}
 	optmap[i] = BBSLIST_FIELD_HIDEPOPUPS;
 	sprintf(opt[i++], "Hide Popups       %s", item->hidepopups ? "Yes" : "No");
+	optmap[i] = BBSLIST_FIELD_PALETTE;
+	strcpy(opt[i++], "Edit Palette");
 	opt[i][0] = 0;
 }
 
-void
+static void
 build_edit_help(struct bbslist *item, int isdefault, char *helpbuf, size_t hbsz)
 {
 	size_t hblen = 0;
@@ -1339,7 +1468,7 @@ build_edit_help(struct bbslist *item, int isdefault, char *helpbuf, size_t hbsz)
 	if (isdefault)
 		hblen = strlcpy(helpbuf, "`Edit Default Connection`\n\n", hbsz);
 	else
-		hblen = strlcpy(helpbuf, "`Edit Directory Entry`\n\n", hbsz);
+		hblen = strlcpy(helpbuf, "`Edit Directory Entry`\n\n~ CTRL-S ~ To Edit Explicit Sort Index\n\n", hbsz);
 
 	hblen += strlcat(helpbuf + hblen, "Select item to edit.\n\n", hbsz - hblen);
 
@@ -1430,6 +1559,14 @@ build_edit_help(struct bbslist *item, int isdefault, char *helpbuf, size_t hbsz)
 	}
 	hblen += strlcat(helpbuf + hblen, "~ Screen Mode ~\n"
 	                                  "        Display mode to use\n\n", hbsz - hblen);
+	if (item->conn_type == CONN_TYPE_SSH || item->conn_type == CONN_TYPE_SSHNA
+	    || item->conn_type == CONN_TYPE_TELNET || item->conn_type == CONN_TYPE_TELNETS
+	    || item->conn_type == CONN_TYPE_RLOGIN || item->conn_type == CONN_TYPE_RLOGIN_REVERSED
+	    || item->conn_type == CONN_TYPE_SHELL) {
+		hblen += strlcat(helpbuf + hblen, "~Terminal Type~\n"
+		                                 "        Type of terminal to advertise to remote\n\n", hbsz - hblen);
+	}
+
 	hblen += strlcat(helpbuf + hblen, "~ Font ~\n"
 	                                  "        Select font to use for the entry\n\n"
 	                                  "~ Hide Popups ~\n"
@@ -1458,14 +1595,345 @@ build_edit_help(struct bbslist *item, int isdefault, char *helpbuf, size_t hbsz)
 		hblen += strlcat(helpbuf + hblen, "~ Fake Comm Rate ~\n"
 		                                  "        Display speed\n\n", hbsz - hblen);
 	}
+	hblen += strlcat(helpbuf + hblen, "~ Palette ~\n"
+	                                  "        Edit colour palette for this entry\n\n", hbsz - hblen);
+}
+
+static uint32_t
+get_default_palette_value(int palette, size_t entry)
+{
+	uint32_t pe = palettes[palette][entry];
+	return (uint32_t)dac_default[pe].red << 16 | (uint32_t)dac_default[pe].green << 8 | (uint32_t)dac_default[pe].blue;
+}
+
+static void
+bl_kbwait(void)
+{
+	kbwait(1000);
+}
+
+#define COLORBOX_WIDTH  15
+#define COLORBOX_HEIGHT  5
+static void
+update_colourbox(uint32_t colour, uint32_t fg_colour, struct vmem_cell *new)
+{
+	char nattr = uifc.hclr | (uifc.bclr << 4);
+	char iattr = uifc.lclr | (uifc.cclr << 4);
+	char str[COLORBOX_WIDTH + 1];
+	struct vmem_cell *ptr = new;
+	size_t i;
+
+	uint8_t attr = RED | GREEN << 4;
+	if (cio_api.options & CONIO_OPT_PALETTE_SETTING) {
+		setpalette(1, (fg_colour >> 16 & 0xff) | (fg_colour >> 8 & 0xff00)
+		    , (fg_colour >> 8 & 0xff) | (fg_colour & 0xff00)
+		    , (fg_colour & 0xff) | (fg_colour << 8 & 0xff00));
+		setpalette(2, (colour >> 16 & 0xff) | (colour >> 8 & 0xff00)
+		    , (colour >> 8 & 0xff) | (colour & 0xff00)
+		    , (colour & 0xff) | (colour << 8 & 0xff00));
+		strlcpy(str, "   Color   ", sizeof(str));
+	}
+	else {
+		attr = nattr;
+		snprintf(str, sizeof(str), "  #%06" PRIx32 "   ", colour);
+	}
+	const char *p;
+	for (p = str, ptr = &new[COLORBOX_WIDTH * 1 + 2]; *p; p++, ptr++)
+		set_vmem(ptr, *p, attr, 0);
+
+	snprintf(str, sizeof(str), "%-3d %-3d %-3d", colour >> 16 & 0xff, colour >> 8 & 0xff, colour & 0xff);
+	for (i = 0, ptr = &new[COLORBOX_WIDTH * 2 + 2]; str[i]; i++, ptr++)
+		set_vmem(ptr, str[i], i % 4 == 3 ? nattr : iattr, 0);
+
+	const char *bline = "Red Grn Blu";
+	for (p = bline, ptr = &new[COLORBOX_WIDTH * (COLORBOX_HEIGHT - 2) + 2]; *p; p++, ptr++)
+		ptr->ch = *p;
+}
+
+static uint32_t
+edit_colour(uint32_t colour, uint32_t reset_value, uint32_t palette[16])
+{
+	struct vmem_cell old[COLORBOX_WIDTH * COLORBOX_HEIGHT]; // MSVC doesn't allow VLAs
+	struct vmem_cell new[COLORBOX_WIDTH * COLORBOX_HEIGHT]; // MSVC doesn't allow VLAs
+	int left, top;
+	int x, y;
+	struct text_info ti;
+	char nattr = uifc.hclr | (uifc.bclr << 4);
+	uint32_t fg_attr = 7;
+	int field = 0;
+
+	gettextinfo(&ti);
+	left = (ti.screenwidth - COLORBOX_WIDTH) / 2;
+	top = (ti.screenheight - COLORBOX_HEIGHT) / 2;
+	vmem_gettext(left, top, left + COLORBOX_WIDTH - 1, top + COLORBOX_HEIGHT - 1, old);
+
+	for (y = 0; y < COLORBOX_HEIGHT; y++) {
+		for (x = 0; x < COLORBOX_WIDTH; x++) {
+			set_vmem(&new[y * COLORBOX_WIDTH + x], 0, nattr, 0);
+		}
+	}
+
+	struct vmem_cell *tptr = new;
+	struct vmem_cell *bptr = &new[(COLORBOX_HEIGHT - 1) * COLORBOX_WIDTH];
+	(tptr++)->ch = uifc.chars->input_top_left;
+	(bptr++)->ch = uifc.chars->input_bottom_left;
+	for (size_t i = 0; i < COLORBOX_WIDTH - 2; i++) {
+		if (uifc.mode & UIFC_MOUSE) {
+			switch (i) {
+				case 0:
+					(tptr++)->ch = uifc.chars->button_left;
+					break;
+				case 1:
+					set_vmem(tptr++, uifc.chars->close_char, uifc.lclr | (uifc.bclr << 4), 0);
+					break;
+				case 2:
+					(tptr++)->ch = uifc.chars->button_right;
+					break;
+				case 3:
+					(tptr++)->ch = uifc.chars->button_left;
+					break;
+				case 4:
+					set_vmem(tptr++, uifc.chars->help_char, uifc.lclr | (uifc.bclr << 4), 0);
+					break;
+				case 5:
+					(tptr++)->ch = uifc.chars->button_right;
+					break;
+				default:
+					(tptr++)->ch = uifc.chars->input_top;
+					break;
+			}
+		}
+		else
+			(tptr++)->ch = uifc.chars->input_top;
+		(bptr++)->ch = uifc.chars->input_bottom;
+	}
+	tptr->ch = uifc.chars->input_top_right;
+	bptr->ch = uifc.chars->input_bottom_right;
+	for (size_t i = 1; i < (COLORBOX_HEIGHT - 1); i++) {
+		new[COLORBOX_WIDTH * i].ch = uifc.chars->input_left;
+		new[COLORBOX_WIDTH * (i + 1) - 1].ch = uifc.chars->input_right;
+	}
+
+	uifc.helpbuf = "`Edit Palette Entry`\n\n"
+		       "~TAB/Backtab~ switches between Red, Green, and Blue.\n"
+		       "~CR~          saves the current colour component.\n"
+		       "~UP/DOWN~     changes the example foreground colour\n"
+		       "~%~           resets to default value\n"
+		       "Each value should be a number between 0 and 255, indicating the\n"
+		       "relative brightness of the named colour channel\n"
+		       "(Red, Green, and Blue).";
+	for (;;) {
+		char nstr[4];
+		int last;
+		uint8_t cval;
+		update_colourbox(colour, palette[fg_attr], new);
+		vmem_puttext(left, top, left + COLORBOX_WIDTH - 1, top + COLORBOX_HEIGHT - 1, new);
+		if (field < 0 || field > 2)
+			field = 0;
+		switch (field) {
+			case 0:
+				cval = colour >> 16 & 0xff;
+				break;
+			case 1:
+				cval = colour >> 8 & 0xff;
+				break;
+			case 2:
+				cval = colour & 0xff;
+				break;
+		}
+		snprintf(nstr, sizeof(nstr), "%d", cval);
+		uifc.exitstart = left + 1;
+		uifc.exitend = left + 3;
+		uifc.helpstart = left + 4;
+		uifc.helpend = left + 6;
+		uifc.buttony = top;
+		uifc.getstrxy(left + 2 + field * 4, top + 2, 3, nstr, 3, K_SCANNING | K_NUMBER | K_EDIT | K_NOCRLF | K_DEUCEEXIT | K_TABEXIT, &last);
+		switch (last) {
+			uint32_t nval;
+			case ESC:
+				goto done;
+			case CIO_KEY_UP:
+				if (fg_attr)
+					fg_attr--;
+				else
+					fg_attr = 15;
+				break;
+			case CIO_KEY_DOWN:
+				if (fg_attr == 15)
+					fg_attr = 0;
+				else
+					fg_attr++;
+				break;
+			case '%':
+				if ((reset_value & 0xFF000000) == 0)
+					colour = reset_value;
+				break;
+			case '\r':
+				nval = strtoul(nstr, NULL, 10);
+				switch (field) {
+					case 0:
+						colour &= 0xffff;
+						colour |= nval << 16;
+						break;
+					case 1:
+						colour &= 0xff00ff;
+						colour |= nval << 8;
+						break;
+					case 2:
+						colour &= 0xffff00;
+						colour |= nval;
+						break;
+				}
+				// Fallthrough
+			case '\t':
+				field++;
+				if (field == 3)
+					field = 0;
+				break;
+			case 3840: // Backtab
+				if (field)
+					field--;
+				else
+					field = 2;
+				break;
+			default:
+				fprintf(stderr, "Char: %d\n", last);
+				break;
+		}
+
+		if (last == ESC)
+			break;
+	}
+
+done:
+	setpalette(1,
+		   dac_default[4].red << 8 | dac_default[1].red,
+		   dac_default[4].green << 8 | dac_default[1].green,
+		   dac_default[4].blue << 8 | dac_default[1].blue);
+	setpalette(2,
+		   dac_default[2].red << 8 | dac_default[2].red,
+		   dac_default[2].green << 8 | dac_default[2].green,
+		   dac_default[2].blue << 8 | dac_default[2].blue);
+	vmem_puttext(left, top, left + COLORBOX_WIDTH - 1, top + COLORBOX_HEIGHT - 1, old);
+	return colour;
+}
+
+static bool
+edit_palette(struct bbslist *item)
+{
+	char opt[17][69];
+	char *opts[(sizeof(opt) / sizeof(opt[0])) + 1];
+	int dflt = 0;
+	int bar = 0;
+	int vmode;
+	int tmode;
+	int palette;
+	uint32_t oldp[16];
+	unsigned old_size = item->palette_size;
+	unsigned min_palette_sz = 16;
+
+	memcpy(oldp, item->palette, sizeof(oldp));
+	tmode = screen_to_ciolib(item->screen_mode);
+	vmode = find_vmode(tmode);
+	if (vmode == -1) {
+		char errstr[128];
+		snprintf(errstr, sizeof(errstr), "Failed to map text mode %d to video mode", tmode);
+		uifcmsg(errstr, NULL);
+		return false;
+	}
+	palette = vparams[vmode].palette;
+
+	for (size_t i = 0; i < sizeof(opt) / sizeof(opt[0]); i++)
+		opts[i] = opt[i];
+	switch(palette) {
+		case PRESTEL_PALETTE:
+			min_palette_sz = 8;
+			break;
+		case ATARI_PALETTE_4:
+			min_palette_sz = 4;
+			break;
+		case ATARI_PALETTE_2:
+			min_palette_sz = 2;
+			break;
+		default:
+			min_palette_sz = 16;
+			break;
+	}
+	for (;item->palette_size < min_palette_sz; item->palette_size++) {
+		item->palette[item->palette_size] = get_default_palette_value(palette, item->palette_size);
+	}
+	for (;;) {
+		opts[0] = 0;
+		for (size_t i = 0; i < item->palette_size; i++) {
+			snprintf(opt[i], sizeof(opt[i]), "Colour %2zd (#%06x)", i, item->palette[i]);
+			opts[i] = opt[i];
+			opts[i + 1] = 0;
+		}
+		uifc_winmode_t mode = WIN_SAV | WIN_ACT | WIN_INSACT| WIN_DELACT | WIN_EDIT;
+		if (item->palette_size > min_palette_sz)
+			mode |= WIN_DEL;
+		if (item->palette_size < 16)
+			mode |= WIN_INS | WIN_XTR;
+		uifc.helpbuf = "`Edit Palette`\n\n"
+		               "If there are fewer than sixteen entries in the palette, they will be\n"
+		               "repeated to fill when whole palette.";
+		int status = uifc.list(mode, 0, 0, 0, &dflt, &bar, "Edit Palette Entries", opts);
+		if (status == -1)
+			break;
+		if ((status & MSK_ON) == MSK_EDIT)
+			status &= MSK_OFF;
+		if ((status & MSK_ON) == MSK_INS && item->palette_size < 16) {
+			item->palette[item->palette_size] = get_default_palette_value(palette, item->palette_size);
+			item->palette_size++;
+		}
+		else if ((status & MSK_ON) == MSK_DEL && item->palette_size > 1) {
+			item->palette_size--;
+		}
+		else if (status == (status & MSK_OFF)) {
+			item->palette[status] = edit_colour(item->palette[status], get_default_palette_value(palette, status), item->palette);
+		}
+	}
+	if (item->palette_size == min_palette_sz) {
+		unsigned i;
+		for (i = 0; i < min_palette_sz; i++) {
+			if (item->palette[i] != get_default_palette_value(palette, i))
+				break;
+		}
+		if (i == min_palette_sz)
+			item->palette_size = 0;
+	}
+	if (item->palette_size != old_size || memcmp(oldp, item->palette, sizeof(oldp)))
+		return true;
+	return false;
+}
+
+bool
+edit_sort_order(str_list_t inifile, char *itemname, struct bbslist *item)
+{
+	char val[12];
+
+	uifc.helpbuf = "`Explicit Sort Value`\n\n"
+		       "This number is to allow manual overriding of sort order, it is not used\n"
+		       "for any other purpose. The default value is 0.\n";
+
+	// NOTE: No way to enter negative values
+	snprintf(val, sizeof(val), "%" PRId32, item->sort_order);
+	int32_t old_order = item->sort_order;
+	if (uifc.input(WIN_MID, 0, 0, "Explicit Sort Value", val, 11, K_NUMBER | K_NEGATIVE | K_EDIT) >= 0) {
+		item->sort_order = atoi(val);
+		iniSetInt32(&inifile, itemname, "SortOrder", item->sort_order, &ini_style);
+	}
+	return old_order != item->sort_order;
 }
 
 int
 edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdefault)
 {
-	char opt[26][69]; /* 21=Holds number of menu items, 80=Number of columns */
+#define EDIT_LIST_MAX 41
+	char opt[EDIT_LIST_MAX + 1][69]; /* EDIT_LIST_MAX=Holds number of menu items, 69=Number of columns */
 	char optname[69];
-	int optmap[26];
+	int optmap[EDIT_LIST_MAX + 1];
+#undef EDIT_LIST_MAX
 	char *opts[(sizeof(opt) / sizeof(opt[0])) + 1];
 	int changed = 0;
 	int copt = 0, i, j;
@@ -1491,8 +1959,8 @@ edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdef
 		item->type = USER_BBSLIST;
 		add_bbs(listpath, item, true);
 	}
-	if ((listfile = fopen(listpath, "r")) != NULL) {
-		inifile = iniReadFile(listfile);
+	if ((listfile = fopen(listpath, "rb")) != NULL) {
+		inifile = iniReadBBSList(listfile, true);
 		fclose(listfile);
 	}
 	else
@@ -1508,9 +1976,13 @@ edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdef
 		build_edit_list(item, opt, optmap, opts, isdefault, itemname);
 		uifc.changes = 0;
 		uifc.helpbuf = helpbuf;
-		i = uifc.list(WIN_MID | WIN_SAV | WIN_ACT, 0, 0, 0, &copt, &bar,
+		i = uifc.list(WIN_EXTKEYS | WIN_MID | WIN_SAV | WIN_ACT, 0, 0, 0, &copt, &bar,
 		              isdefault ? "Edit Default Connection" : "Edit Directory Entry",
 		              opts);
+		if (i == -2 - CTRL_S && !isdefault) {
+			if (edit_sort_order(inifile, itemname, item))
+				changed = 1;
+		}
 		if (i < -1)
 			continue;
 		// Remember, i gets converted to (unsigned) size_t in comparison
@@ -1550,8 +2022,8 @@ edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdef
 					return 0;
 				}
 				if (!safe_mode) {
-					if ((listfile = fopen(listpath, "w")) != NULL) {
-						iniWriteFile(listfile, inifile);
+					if ((listfile = fopen(listpath, "wb")) != NULL) {
+						iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
 						fclose(listfile);
 					}
 				}
@@ -2009,6 +2481,30 @@ edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdef
 				changed = 1;
 				iniSetBool(&inifile, itemname, "TelnetDeferNegotiate", item->defer_telnet_negotiation, &ini_style);
 				break;
+			case BBSLIST_FIELD_PALETTE:
+				if (edit_palette(item)) {
+					if (item->palette_size == 0)
+						iniRemoveKey(&inifile, itemname, "Palette");
+					else
+						iniSetIntList(&inifile, itemname, "Palette", ",", (int*)item->palette, item->palette_size, &ini_style);
+					changed = 1;
+				}
+				break;
+			case BBSLIST_FIELD_TERMINAL_TYPE:
+				uifc.helpbuf = "`Terminal Type`\n\n"
+					       "Sent to the remote to allow them to know what type of emulation is\n"
+					       "supported.\n\n"
+					       "Leave blank to use the correct value based on the screen mode.";
+				uifc.input(WIN_MID | WIN_SAV,
+				           0,
+				           0,
+				           optname,
+				           item->term_name,
+				           sizeof(item->term_name) - 1,
+				           K_EDIT);
+				check_exit(false);
+				iniSetString(&inifile, itemname, "TerminalType", item->term_name, &ini_style);
+				break;
 		}
 		if (uifc.changes)
 			changed = 1;
@@ -2025,8 +2521,8 @@ add_bbs(char *listpath, struct bbslist *bbs, bool new_entry)
 
 	if (safe_mode)
 		return;
-	if ((listfile = fopen(listpath, "r")) != NULL) {
-		inifile = iniReadFile(listfile);
+	if ((listfile = fopen(listpath, "rb")) != NULL) {
+		inifile = iniReadBBSList(listfile, true);
 		fclose(listfile);
 	}
 	else
@@ -2067,6 +2563,9 @@ add_bbs(char *listpath, struct bbslist *bbs, bool new_entry)
 	iniSetString(&inifile, bbs->name, "Comment", bbs->comment, &ini_style);
 	iniSetBool(&inifile, bbs->name, "ForceLCF", bbs->force_lcf, &ini_style);
 	iniSetBool(&inifile, bbs->name, "YellowIsYellow", bbs->yellow_is_yellow, &ini_style);
+	if (bbs->term_name[0]) {
+		iniSetString(&inifile, bbs->name, "TerminalType", bbs->term_name, &ini_style);
+	}
 	iniSetBool(&inifile, bbs->name, "TelnetBrokenTextmode", bbs->telnet_no_binary, &ini_style);
 	iniSetBool(&inifile, bbs->name, "TelnetDeferNegotiate", bbs->defer_telnet_negotiation, &ini_style);
 	if (bbs->has_fingerprint) {
@@ -2084,14 +2583,17 @@ add_bbs(char *listpath, struct bbslist *bbs, bool new_entry)
 	static_assert(sizeof(int) == sizeof(uint32_t), "int must be four bytes");
 	if (bbs->palette_size > 0)
 		iniSetIntList(&inifile, bbs->name, "Palette", ",", (int*)bbs->palette, bbs->palette_size, &ini_style);
-	if ((listfile = fopen(listpath, "w")) != NULL) {
-		iniWriteFile(listfile, inifile);
+	if (bbs->sort_order != DEFAULT_SORT_ORDER_VALUE)
+		iniSetInt32(&inifile, bbs->name, "SortOrder", bbs->sort_order, &ini_style);
+
+	if ((listfile = fopen(listpath, "wb")) != NULL) {
+		iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
 		fclose(listfile);
 	}
 	strListFree(&inifile);
 }
 
-void
+static void
 del_bbs(char *listpath, struct bbslist *bbs)
 {
 	FILE *listfile;
@@ -2099,14 +2601,11 @@ del_bbs(char *listpath, struct bbslist *bbs)
 
 	if (safe_mode)
 		return;
-	if ((listfile = fopen(listpath, "r")) != NULL) {
-		inifile = iniReadFile(listfile);
-		fclose(listfile);
+	if ((listfile = fopen(listpath, "r+b")) != NULL) {
+		inifile = iniReadBBSList(listfile, bbs->type == USER_BBSLIST);
 		iniRemoveSection(&inifile, bbs->name);
-		if ((listfile = fopen(listpath, "w")) != NULL) {
-			iniWriteFile(listfile, inifile);
-			fclose(listfile);
-		}
+		iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
+		fclose(listfile);
 		strListFree(&inifile);
 	}
 }
@@ -2161,6 +2660,7 @@ custom_mode_adjusted(int *cur, char **opt)
 
 	uifcbail();
 	textmode(0);
+	set_default_cursor();
 	cvmode = find_vmode(CIOLIB_MODE_CUSTOM);
 	if (cvmode >= 0) {
 		vparams[cvmode].cols = settings.custom_cols;
@@ -2169,6 +2669,7 @@ custom_mode_adjusted(int *cur, char **opt)
 		vparams[cvmode].aspect_width = settings.custom_aw;
 		vparams[cvmode].aspect_height = settings.custom_ah;
 		textmode(ti.currmode);
+		set_default_cursor();
 	}
 	init_uifc(true, true);
 
@@ -2245,19 +2746,128 @@ edit_audio_mode(str_list_t *inicontents)
 	}
 }
 
-void
+static int
+pick_colour(int cur, const char *name, bool bg)
+{
+	return uifc.list(WIN_SAV | WIN_RHT | WIN_BOT, 0, 0, 0, &cur, NULL, name, (char**)(bg ? bg_colour_names : colour_names));
+}
+
+/*
+ * TODO: This function is gross and I feel bad for writing it.
+ */
+static void
+edit_uifc_colours(str_list_t *inicontents)
+{
+	char opts[6][64] = {0};
+	char *opt[7] = {
+		opts[0],
+		opts[1],
+		opts[2],
+		opts[3],
+		opts[4],
+		opts[5],
+		NULL
+	};
+	const char *const key[6] = {
+		"FrameColour",
+		"TextColour",
+		"BackgroundColour",
+		"InverseColour",
+		"LightbarColour",
+		"LightbarBackgroundColour",
+	};
+	unsigned *set[6] = {
+		&settings.uifc_hclr,
+		&settings.uifc_lclr,
+		&settings.uifc_bclr,
+		&settings.uifc_cclr,
+		&settings.uifc_lbclr,
+		&settings.uifc_lbbclr
+	};
+	unsigned char *uifcp[5] = {
+		&uifc.hclr,
+		&uifc.lclr,
+		&uifc.bclr,
+		&uifc.cclr,
+		&uifc.lbclr
+	};
+	unsigned char dflts[6] = {
+		YELLOW,
+		WHITE,
+		BLUE,
+		CYAN,
+		BLUE,
+		LIGHTGRAY,
+	};
+	int i = 0;
+	int j = 0;
+	int ret;
+
+	uifc.helpbuf = "`UIFC Colours`\n\n"
+		       "        Change UIFC Colours\n";
+
+	while (i != -1) {
+		bool bg;
+		sprintf(opts[0], "Frame Colour               %s", colour_names[settings.uifc_hclr]);
+		sprintf(opts[1], "Text Colour                %s", colour_names[settings.uifc_lclr]);
+		sprintf(opts[2], "Background Colour          %s", bg_colour_names[settings.uifc_bclr]);
+		sprintf(opts[3], "Inverse Colour             %s", bg_colour_names[settings.uifc_cclr]);
+		sprintf(opts[4], "Lightbar Colour            %s", colour_names[settings.uifc_lbclr]);
+		sprintf(opts[5], "Lightbar Background Colour %s", bg_colour_names[settings.uifc_lbbclr]);
+
+		switch (i = uifc.list(WIN_SAV | WIN_ACT, 0, 0, 0, &j, NULL, "UIFC Colours", (char**)opt)) {
+			case -1:
+				check_exit(false);
+				continue;
+			default:
+				bg = (i == 2 || i == 3 || i == 5);
+				ret = pick_colour(*set[i], opt[i], bg);
+				if (ret != -1) {
+					uifc.changes = 1;
+					unsigned v = ret;
+					if (bg) {
+						if (ret == 8)
+							v = dflts[i];
+					}
+					else {
+						if (ret == 16)
+							v = dflts[i];
+					}
+					iniSetEnum(inicontents, "UIFC", key[i], (char **)(bg ? bg_colour_enum : colour_enum), ret, &ini_style);
+					switch(i) {
+						default:
+							*set[i] = ret;
+							*uifcp[i] = v;
+							break;
+						case 4: // Lightbar
+							*set[i] = ret;
+							*uifcp[i] = (*uifcp[i] & 0x70) | (v);
+							break;
+						case 5: // Lightbar background
+							*set[i] = ret;
+							*uifcp[i - 1] = (*uifcp[i - 1] & 0x0f) | (v << 4);
+							break;
+					}
+				}
+				break;
+		}
+	}
+}
+
+static void
 change_settings(int connected)
 {
 	char inipath[MAX_PATH + 1];
 	FILE *inifile;
 	str_list_t inicontents;
-	char opts[15][1049];
-	char *opt[16];
+	char opts[18][1049];
+	char *opt[19];
 	char *subopts[10];
 	char audio_opts[1024];
 	int i, j, k, l;
 	char str[64];
 	int cur = 0;
+	int bar = 0;
 
 	get_syncterm_filename(inipath, sizeof(inipath), SYNCTERM_PATH_INI, false);
 	if ((inifile = fopen(inipath, "r")) != NULL) {
@@ -2266,8 +2876,8 @@ change_settings(int connected)
 	}
 	else
 		inicontents = strListInit();
-
-	for (i = 0; i < 15; i++)
+	const size_t opt_size = sizeof(opts) / sizeof(opts[0]);
+	for (i = 0; i < opt_size; i++)
 		opt[i] = opts[i];
 	opt[i] = NULL;
 
@@ -2281,6 +2891,8 @@ change_settings(int connected)
 		               "        Set the initial screen screen mode/size.\n\n"
 		               "~ Video Output Mode ~\n"
 		               "        Set video output mode (used during startup).\n\n"
+		               "~ Default Cursor Style ~\n"
+		               "        Set the default cursor style\n\n"
 		               "~ Audio Output Mode ~\n"
 		               "        Set audio output modes attempted.\n\n"
 		               "~ Scrollback Buffer Lines ~\n"
@@ -2299,12 +2911,17 @@ change_settings(int connected)
 		               "        The value to set the TERM envirnonment variable to goes here.\n\n"
 		               "~ Scaling ~\n"
 		               "        Cycle scaling type.\n\n"
+		               "~ Key Derivation Iterations ~\n"
+		               "        Change the number of iterations in the Key Derivation Function.\n\n"
+		               "~ UIFC Colours ~\n"
+		               "        Configure the colours used by the UIFC interface.\n\n"
 		               "~ Custom Screen Mode ~\n"
 		               "        Configure the Custom screen mode.\n\n";
 		SAFEPRINTF(opts[0], "Confirm Program Exit    %s", settings.confirm_close ? "Yes" : "No");
 		SAFEPRINTF(opts[1], "Prompt to Save          %s", settings.prompt_save ? "Yes" : "No");
 		SAFEPRINTF(opts[2], "Startup Screen Mode     %s", screen_modes[settings.startup_mode]);
 		SAFEPRINTF(opts[3], "Video Output Mode       %s", output_descrs[settings.output_mode]);
+		SAFEPRINTF(opts[4], "Default Cursor Style    %s", cursor_descrs[settings.defaultCursor]);
 		audio_opts[0] = 0;
 		for (j = 0; audio_output_types[j].name != NULL; j++) {
 			if (xpbeep_sound_devices_enabled & audio_output_types[j].bit) {
@@ -2315,25 +2932,30 @@ change_settings(int connected)
 		}
 		if (!audio_opts[0])
 			strcpy(audio_opts, "<None>");
-		SAFEPRINTF(opts[4], "Audio Output Mode       %s", audio_opts);
-		SAFEPRINTF(opts[5], "Scrollback Buffer Lines %d", settings.backlines);
-		SAFEPRINTF(opts[6], "Modem/Comm Device       %s", settings.mdm.device_name);
+		SAFEPRINTF(opts[5], "Audio Output Mode       %s", audio_opts);
+		SAFEPRINTF(opts[6], "Scrollback Buffer Lines %d", settings.backlines);
+		SAFEPRINTF(opts[7], "Modem/Comm Device       %s", settings.mdm.device_name);
 		if (settings.mdm.com_rate)
 			sprintf(str, "%lubps", settings.mdm.com_rate);
 		else
 			strcpy(str, "Current");
-		SAFEPRINTF(opts[7], "Modem/Comm Rate         %s", str);
-		SAFEPRINTF(opts[8], "Modem Init String       %s", settings.mdm.init_string);
-		SAFEPRINTF(opts[9], "Modem Dial String       %s", settings.mdm.dial_string);
-		SAFEPRINTF(opts[10], "List Path               %s", settings.stored_list_path);
-		SAFEPRINTF(opts[11], "TERM For Shell          %s", settings.TERM);
-		sprintf(opts[12], "Scaling                 %s", scaling_names[settings_to_scale()]);
-		sprintf(opts[13], "Invert Mouse Wheel      %s", settings.invert_wheel ? "Yes" : "No");
+		SAFEPRINTF(opts[8], "Modem/Comm Rate         %s", str);
+		SAFEPRINTF(opts[9], "Modem Init String       %s", settings.mdm.init_string);
+		SAFEPRINTF(opts[10], "Modem Dial String       %s", settings.mdm.dial_string);
+		SAFEPRINTF(opts[11], "List Path               %s", settings.stored_list_path);
+		SAFEPRINTF(opts[12], "TERM For Shell          %s", settings.TERM);
+		sprintf(opts[13], "Scaling                 %s", scaling_names[settings_to_scale()]);
+		sprintf(opts[14], "Invert Mouse Wheel      %s", settings.invert_wheel ? "Yes" : "No");
+		sprintf(opts[15], "Key Derivation Iters.   %d", settings.keyDerivationIterations);
+		sprintf(opts[16], "UIFC Colours");
 		if (connected)
-			opt[14] = NULL;
-		else
-			sprintf(opts[14], "Custom Screen Mode");
-		switch (uifc.list(WIN_MID | WIN_SAV | WIN_ACT, 0, 0, 0, &cur, NULL, "Program Settings", opt)) {
+			opt[opt_size - 1] = NULL;
+		else {
+			sprintf(opts[opt_size - 1], "Custom Screen Mode");
+			opt[opt_size - 1] = opts[opt_size - 1];
+		}
+		opt[opt_size] = NULL;
+		switch (uifc.list(WIN_MID | WIN_SAV | WIN_ACT, 0, 0, 0, &cur, &bar, "Program Settings", opt)) {
 			case -1:
 				check_exit(false);
 				goto write_ini;
@@ -2445,9 +3067,30 @@ change_settings(int connected)
 				}
 				break;
 			case 4:
-				edit_audio_mode(&inicontents);
+				j = settings.defaultCursor;
+				if (j < 0 || j > ST_CT_SOLID_BLK)
+					j = 0;
+				uifc.helpbuf = "`Default Cursor Style`\n\n"
+				               "The style the cursor is normally displayed with\n";
+				switch (i = uifc.list(WIN_SAV, 0, 0, 0, &j, NULL, "Default Cursor Style", cursor_descrs)) {
+					case -1:
+						check_exit(false);
+						continue;
+					default:
+						settings.defaultCursor = j;
+						iniSetEnum(&inicontents,
+						           "SyncTERM",
+						           "DefaultCursor",
+						           cursor_enum,
+						           settings.defaultCursor,
+						           &ini_style);
+						break;
+				}
 				break;
 			case 5:
+				edit_audio_mode(&inicontents);
+				break;
+			case 6:
 				uifc.helpbuf = "`Scrollback Buffer Lines`\n\n"
 				               "        The number of lines in the scrollback buffer.\n"
 				               "        This value MUST be greater than zero\n";
@@ -2487,7 +3130,7 @@ change_settings(int connected)
 				else
 					check_exit(false);
 				break;
-			case 6:
+			case 7:
 				uifc.helpbuf = "`Modem/Comm Device`\n\n"
 				               "Enter the name of the device used to communicate with the modem.\n\n"
 				               "Example: \"`"
@@ -2504,7 +3147,7 @@ change_settings(int connected)
 				else
 					check_exit(false);
 				break;
-			case 7:
+			case 8:
 				uifc.helpbuf = "`Modem/Comm Rate`\n\n"
 				               "Enter the rate (in `bits-per-second`) used to communicate with the modem.\n"
 				               "Use the highest `DTE Rate` supported by your communication port and modem.\n\n"
@@ -2524,7 +3167,7 @@ change_settings(int connected)
 					check_exit(false);
 				break;
 
-			case 8:
+			case 9:
 				uifc.helpbuf = "`Modem Init String`\n\n"
 				               "Your modem initialization string goes here.\n\n"
 				               "Example:\n"
@@ -2555,7 +3198,7 @@ change_settings(int connected)
 				else
 					check_exit(false);
 				break;
-			case 9:
+			case 10:
 				uifc.helpbuf = "`Modem Dial String`\n\n"
 				               "The command string to dial the modem goes here.\n\n"
 				               "Example: \"`ATDT`\" will dial a Hayes-compatible modem in touch-tone mode.";
@@ -2570,7 +3213,7 @@ change_settings(int connected)
 				else
 					check_exit(false);
 				break;
-			case 10:
+			case 11:
 				uifc.helpbuf = "`List Path`\n\n"
 				               "The complete path to the BBS list goes here.\n";
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "List Path", settings.stored_list_path, MAX_PATH,
@@ -2586,7 +3229,7 @@ change_settings(int connected)
 				else
 					check_exit(false);
 				break;
-			case 11:
+			case 12:
 				uifc.helpbuf = "`TERM For Shell`\n\n"
 				               "The value to set the TERM envirnonment variable to goes here.\n\n"
 				               "Example: \"`ansi`\" will select a dumb ANSI mode.";
@@ -2596,7 +3239,7 @@ change_settings(int connected)
 				else
 					check_exit(false);
 				break;
-			case 12:
+			case 13:
 				i = settings_to_scale();
 				i++;
 				if (i == 3)
@@ -2611,12 +3254,55 @@ change_settings(int connected)
 					cio_api.options &= ~CONIO_OPT_BLOCKY_SCALING;
 				setscaling_type(settings.extern_scale ? CIOLIB_SCALING_EXTERNAL : CIOLIB_SCALING_INTERNAL);
 				break;
-			case 13:
+			case 14:
 				settings.invert_wheel = !settings.invert_wheel;
 				ciolib_swap_mouse_butt45 = settings.invert_wheel;
 				iniSetBool(&inicontents, "SyncTERM", "InvertMouseWheel", settings.invert_wheel, &ini_style);
 				break;
-			case 14:
+			case 15:
+				{
+					uifc.helpbuf = "`Key Derivation Function Iterations`\n\n"
+						       "Number of iterations to run the Key Derivation Function when creating an\n"
+						       "encryption key from a password. Using more iterations makes offline\n"
+						       "attacks harder by making dictionary attacks more difficult, ideally\n"
+						       "making it more difficult than simple random key brute forcing.\n\n"
+						       "The default value is 50,000 which takes about 0.15 seconds on my current\n"
+						       "computer. This means that a normal read/modify/write of an entry ends up\n"
+						       "taking 0.3 seconds longer due to KDF. Lowering this value makes offline\n"
+						       "attacks easier, but can noticably speed up encrypted file access.\n\n"
+						       "Minimum value is 1, maximum value is 2147483647. You should choose the\n"
+						       "highest value you can put up with. NIST reccomends a minimum of 10,000.\n";
+					char value[11];
+					snprintf(value, sizeof(value), "%d", settings.keyDerivationIterations);
+					if (uifc.input(WIN_SAV | WIN_MID, 0, 0, "Iterations", value, sizeof(value) - 1, K_NUMBER | K_EDIT) > 0) {
+						long nval = strtol(value, NULL, 10);
+						if (nval > 0) {
+							FILE *listfile;
+
+							if ((listfile = fopen(settings.list_path, "r+b")) != NULL) {
+								str_list_t inifile = iniReadBBSList(listfile, true);
+								settings.keyDerivationIterations = nval;
+								iniSetInteger(&inicontents, "SyncTERM", "KeyDerivationIterations", settings.keyDerivationIterations, &ini_style);
+								if (list_algo != INI_CRYPT_ALGO_NONE)
+									iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
+								fclose(listfile);
+								iniFreeStringList(inifile);
+							}
+							else {
+								uifc.msg("Failed to open list file");
+								settings.keyDerivationIterations = nval;
+								iniSetInteger(&inicontents, "SyncTERM", "KeyDerivationIterations", settings.keyDerivationIterations, &ini_style);
+							}
+						}
+					}
+				}
+				break;
+			case 16:
+				{
+					edit_uifc_colours(&inicontents);
+				}
+				break;
+			case 17:
 				uifc.helpbuf = "`Custom Screen Mode`\n\n"
 				               "~ Rows ~\n"
 				               "        Sets the number of rows in the custom screen mode\n"
@@ -2803,7 +3489,7 @@ write_ini:
 	strListFree(&inicontents);
 }
 
-void
+static void
 load_bbslist(struct bbslist **list,
              size_t listsize,
              struct bbslist *defaults,
@@ -2820,13 +3506,14 @@ load_bbslist(struct bbslist **list,
 	*listcount = 0;
 
 	memset(list, 0, listsize);
-	memset(defaults, 0, sizeof(struct bbslist));
+	if (defaults)
+		memset(defaults, 0, sizeof(struct bbslist));
 
 	read_list(listpath, list, defaults, listcount, USER_BBSLIST);
 
 	/* System BBS List */
 	if (stricmp(shared_list, listpath)) /* don't read the same list twice */
-		read_list(shared_list, list, defaults, listcount, SYSTEM_BBSLIST);
+		read_list(shared_list, list, NULL, listcount, SYSTEM_BBSLIST);
 	/* Web lists */
 	if (settings.webgets) {
 		char cache_path[MAX_PATH + 1];
@@ -2839,7 +3526,7 @@ load_bbslist(struct bbslist **list,
 					free(lpath);
 				}
 				else {
-					read_list(lpath, list, defaults, listcount, SYSTEM_BBSLIST);
+					read_list(lpath, list, NULL, listcount, SYSTEM_BBSLIST);
 					free(lpath);
 				}
 			}
@@ -2905,8 +3592,8 @@ edit_comment(struct bbslist *list, char *listpath)
 		goto done;
 
 	// Open with write permissions so it fails if you can't edit.
-	if ((listfile = fopen(listpath, "r+")) != NULL) {
-		inifile = iniReadFile(listfile);
+	if ((listfile = fopen(listpath, "r+b")) != NULL) {
+		inifile = iniReadBBSList(listfile, true);
 		fclose(listfile);
 	}
 	else
@@ -2955,24 +3642,14 @@ edit_comment(struct bbslist *list, char *listpath)
 done:
 	free(old);
 	if (inifile != NULL) {
-		if ((listfile = fopen(listpath, "w")) != NULL) {
-			iniWriteFile(listfile, inifile);
+		if ((listfile = fopen(listpath, "wb")) != NULL) {
+			iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
 			fclose(listfile);
 		}
 		strListFree(&inifile);
 	}
 	draw_comment(list);
 	return ret;
-}
-
-static void
-kbwait(void)
-{
-	for (int tc = 0; tc < 50; tc++) {
-		if (kbhit())
-			break;
-		SLEEP(1);
-	}
 }
 
 static void
@@ -3039,7 +3716,13 @@ edit_web_lists(void)
 		    "Add and remove dialing directories available on the web (ie: via HTTP\n"
 		    "or HTTPS).  Each entry must have a unique name (which is used as a\n"
 		    "filename in the cache) and a URI that indicates where to download the\n"
-		    "directory list from.";
+		    "directory list from.\n"
+		    "\n"
+		    "The SyncTERM author hosts two BBS lists, the Synchronet BBS list at:\n"
+		    "http://syncterm.bbsdev.net/syncterm.lst\n"
+		    "and the Telnet BBS Guide BBS list at:\n"
+		    "http://syncterm.bbsdev.net/telnetbbsguide.lst\n"
+		    "for easy use and configuration.";
 		int i = uifc.list(WIN_SAV | WIN_INS | WIN_INSACT | WIN_DEL | WIN_XTR | WIN_ACT,
 		        0, 0, 0, &cur, &bar, "Web Lists", list);
 		if (i == -1) {
@@ -3059,13 +3742,17 @@ edit_web_lists(void)
 				tmpn[0] = 0;
 			while (uifc.input(WIN_SAV | WIN_MID, 0, 0, "Web List Name", tmpn, sizeof(tmpn) - 1, K_EDIT) != -1
 			    && tmpn[0]) {
+				if (stricmp(tmpn, "System List") == 0) {
+					uifc.msg("Invalid Name");
+					continue;
+				}
 				if (settings.webgets != NULL && namedStrListFindName(settings.webgets, tmpn)) {
 					uifc.msg("Duplicate Name");
 					continue;
 				}
 				else {
 					if (count == 0)
-						strlcpy(tmpv, "http://syncterm.bbsdev.net/syncterm.lst", sizeof(tmpn));
+						strlcpy(tmpv, "http://syncterm.bbsdev.net/syncterm.lst", sizeof(tmpv));
 					else
 						tmpv[0] = 0;
 					if (uifc.input(WIN_SAV | WIN_MID, 0, 0, "Web List URI", tmpv, sizeof(tmpv) - 1, K_EDIT) != -1
@@ -3114,6 +3801,103 @@ edit_web_lists(void)
 	return changed;
 }
 
+#if (defined(WITH_CRYPTLIB) && !defined(WITHOUT_CRYPTLIB))
+static void
+changeAlgo(const char *listpath, enum iniCryptAlgo algo, int keySize, const char *newpass)
+{
+	FILE *listfile;
+
+	if (safe_mode)
+		return;
+	if (newpass == NULL && algo != INI_CRYPT_ALGO_NONE && !list_password[0]) {
+		if (!prompt_password(NULL, NULL, NULL))
+			return;
+	}
+	if ((listfile = fopen(listpath, "r+b")) != NULL) {
+		str_list_t inifile = iniReadBBSList(listfile, true);
+		if (algo == INI_CRYPT_ALGO_NONE)
+			iniRemoveKey(&inifile, NULL, "DecryptionCheck");
+		else
+			iniSetBool(&inifile, NULL, "DecryptionCheck", true, &ini_style);
+		if (newpass)
+			strlcpy(list_password, newpass, sizeof(list_password));
+		iniWriteEncryptedFile(listfile, inifile, algo, keySize, settings.keyDerivationIterations, list_password, NULL);
+		fclose(listfile);
+		list_algo = algo;
+		list_keysize = keySize;
+		iniFreeStringList(inifile);
+	}
+}
+
+static void
+encryption_menu(const char *listpath)
+{
+	char *encryption[] = {
+		"Change Password",
+		"Encrypt Using ChaCha20",              // 2008
+		"Encrypt Using AES-128",               // 1998
+		"Encrypt Using AES-256",               // 1998
+		"Encrypt Using CAST-128",              // 1996
+		"Encrypt Using IDEA",                  // 1991
+		"Encrypt Using RC2",                   // 1987
+		"Encrypt Using RC4 (Insecure)",        // 1987
+		"Encrypt Using 3DES (Insecure)",       // 1981
+		"Decrypt",
+		NULL
+	};
+	int dflt = 0;
+	int bar = 0;
+	char title[80];
+	char newpass[sizeof(list_password)];
+
+	if (list_algo == INI_CRYPT_ALGO_NONE)
+		strlcpy(title, "Not Encrypted", sizeof(title));
+	else {
+		if (list_keysize)
+			snprintf(title, sizeof(title), "Currently %s (%d)", iniCryptGetAlgoName(list_algo), list_keysize);
+		else
+			snprintf(title, sizeof(title), "Currently %s", iniCryptGetAlgoName(list_algo));
+	}
+
+	uifc.helpbuf = "`Encryption`\n\n"
+	               "Choose the encryption type you would like to convert the list to.";
+	int val = uifc.list(WIN_SAV | WIN_MID, 0, 0, 0, &dflt, &bar, title, encryption);
+	switch(val) {
+		case 0:
+			if (uifc.input(WIN_SAV | WIN_MID, 0, 0, "New Password", newpass, sizeof(newpass), K_PASSWORD) > 0)
+				changeAlgo(listpath, list_algo, list_keysize, newpass);
+			break;
+		case 1:
+			changeAlgo(listpath, INI_CRYPT_ALGO_CHACHA20, 0, NULL);
+			break;
+		case 2:
+			changeAlgo(listpath, INI_CRYPT_ALGO_AES, 128, NULL);
+			break;
+		case 3:
+			changeAlgo(listpath, INI_CRYPT_ALGO_AES, 256, NULL);
+			break;
+		case 4:
+			changeAlgo(listpath, INI_CRYPT_ALGO_CAST, 0, NULL);
+			break;
+		case 5:
+			changeAlgo(listpath, INI_CRYPT_ALGO_IDEA, 0, NULL);
+			break;
+		case 6:
+			changeAlgo(listpath, INI_CRYPT_ALGO_RC2, 0, NULL);
+			break;
+		case 7:
+			changeAlgo(listpath, INI_CRYPT_ALGO_RC4, 0, NULL);
+			break;
+		case 8:
+			changeAlgo(listpath, INI_CRYPT_ALGO_3DES, 0, NULL);
+			break;
+		case 9:
+			changeAlgo(listpath, INI_CRYPT_ALGO_NONE, 0, NULL);
+			break;
+	}
+}
+#endif
+
 /*
  * Displays the BBS list and allows edits to user BBS list
  * Mode is one of BBSLIST_SELECT or BBSLIST_EDIT
@@ -3142,6 +3926,9 @@ show_bbslist(char *current, int connected)
 		"Program Settings",
 		"File Locations",
 		"Build Options",
+#if (defined(WITH_CRYPTLIB) && !defined(WITHOUT_CRYPTLIB))
+		"List Encryption",
+#endif
 		NULL
 	};
 	char *connected_settings_menu[] = {
@@ -3265,7 +4052,7 @@ show_bbslist(char *current, int connected)
 				if (uifc.list_height > (uifc.scrn_len - 4))
 					uifc.list_height = uifc.scrn_len - 4;
 				if (!nowait) {
-					kbwait();
+					bl_kbwait();
 					nowait = true;
 				}
 				val = uifc.list((listcount < MAX_OPTS ? WIN_XTR : 0)
@@ -3477,7 +4264,7 @@ show_bbslist(char *current, int connected)
 							}
 							if (!uifc.changes)
 								break;
-							if (list_name_check(list, tmp, NULL, false)) {
+							if (list_name_check(list, tmp, NULL, true)) {
 								uifc.helpbuf = "`Entry Name Already Exists`\n\n"
 								               "An entry with that name already exists in the directory.\n"
 								               "Please choose a unique name.\n";
@@ -3496,6 +4283,12 @@ show_bbslist(char *current, int connected)
 							list[listcount] = list[listcount - 1];
 							list[listcount
 							     - 1] = (struct bbslist *)malloc(sizeof(struct bbslist));
+							if (list[listcount - 1] == NULL) {
+								list[listcount - 1] = list[listcount];
+								list[listcount] = NULL;
+								listcount--;
+								break;
+							}
 							memcpy(list[listcount - 1], &defaults, sizeof(struct bbslist));
 							list[listcount - 1]->id = listcount - 1;
 							strcpy(list[listcount - 1]->name, tmp);
@@ -3785,7 +4578,7 @@ show_bbslist(char *current, int connected)
 					settitle(syncterm_version);
 				oldopt = -2;
 				if (!nowait) {
-					kbwait();
+					bl_kbwait();
 					nowait = true;
 				}
 				val = settings_list(&sopt, &sbar, connected ? connected_settings_menu : settings_menu, WIN_UNGETMOUSE | WIN_ESC);
@@ -3878,6 +4671,7 @@ show_bbslist(char *current, int connected)
 							i++;
 							uifcbail();
 							textmode(screen_to_ciolib(i));
+							set_default_cursor();
 							init_uifc(true, true);
 							uifc.list_height = listcount + 5;
 							if (uifc.list_height > (uifc.scrn_len - 4))
@@ -3956,15 +4750,18 @@ show_bbslist(char *current, int connected)
 						         default_download,
 						         cache_path,
 						         keys_path);
-						uifc.showbuf(WIN_MID | WIN_SAV | WIN_HLP,
-						             0,
-						             0,
-						             78,
-						             20,
-						             "File Locations",
-						             p,
-						             NULL,
-						             NULL);
+						if (p != NULL) {
+							uifc.showbuf(WIN_MID | WIN_SAV | WIN_HLP,
+							             0,
+							             0,
+							             78,
+							             20,
+							             "File Locations",
+							             p,
+							             NULL,
+							             NULL);
+							free(p);
+						}
 						break;
 					case 6: // Build Options
 						asprintf(&p,
@@ -3986,7 +4783,7 @@ show_bbslist(char *current, int connected)
 						         "    %s WaveOut\n"
 						         "    %s PortAudio\n"
 						         "    %s PulseAudio\n",
-#ifdef WITHOUT_CRYPTLIB
+#if (defined(WITHOUT_CRYPTLIB) || !defined(WITH_CRYPTLIB))
 						         "[ ]",
 #else
 						         "[`\xFB`]",
@@ -4062,16 +4859,24 @@ show_bbslist(char *current, int connected)
 						         "[ ]"
 #endif
 						        );
-						uifc.showbuf(WIN_MID | WIN_SAV | WIN_HLP,
-						             0,
-						             0,
-						             60,
-						             21,
-						             "Build Options",
-						             p,
-						             NULL,
-						             NULL);
+						if (p != NULL) {
+							uifc.showbuf(WIN_MID | WIN_SAV | WIN_HLP,
+							             0,
+							             0,
+							             60,
+							             21,
+							             "Build Options",
+							             p,
+							             NULL,
+							             NULL);
+							free(p);
+						}
 						break;
+#if (defined(WITH_CRYPTLIB) && !defined(WITHOUT_CRYPTLIB))
+					case 7:	// Encryption!
+						encryption_menu(settings.list_path);
+						break;
+#endif
 				}
 			}
 		}
@@ -4106,9 +4911,12 @@ get_emulation(struct bbslist *bbs)
 }
 
 const char *
-get_emulation_str(cterm_emulation_t emu)
+get_emulation_str(struct bbslist *bbs)
 {
-	switch (emu) {
+	if (bbs->term_name[0])
+		return bbs->term_name;
+	
+	switch (get_emulation(bbs)) {
 		case CTERM_EMULATION_ANSI_BBS:
 			return "syncterm";
 		case CTERM_EMULATION_PETASCII:

@@ -1,0 +1,975 @@
+/*
+
+The Clans BBS Door Game
+Copyright (C) 1997-2002 Allen Ussher
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+*/
+
+/*
+ * Door-specific ADT
+ *
+ * -- All other functions which deal with door specific stuff, should use this
+ *    ADT and NOT OpenDoors...
+ *
+ *
+ * DoorInit MUST be called before all other functions.
+ */
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include <OpenDoor.h>
+#include "platform.h"
+
+#include "door.h"
+#include "game.h"
+#include "help.h"
+#include "ibbs.h"
+#include "language.h"
+#include "mstrings.h"
+#include "myopen.h"
+#include "parsing.h"
+#include "readcfg.h"
+#include "semfile.h"
+#include "spells.h"
+#include "structs.h"
+#include "system.h"
+#include "user.h"
+#include "video.h"
+#include "village.h"
+
+#define ASCIIFILE   0
+#define ANSIFILE  1
+
+#define COLOR   0xB800
+#define MONO    0xB000
+
+struct Door Door = { 
+	.AllowScreenPause = true,
+	.ColorScheme = { 1, 9, 3, 1, 11, 7, 3, 2, 10, 2, 5, 3, 9, 5, 13, 1, 9, 15, 7, 0, 0, 8, 4,
+	  1, 1, 1 },
+};
+
+static FILE *LogFD;
+
+// ------------------------------------------------------------------------- //
+
+bool Door_Initialized(void)
+/*
+ * Returns true if od_init was already called.
+ */
+{
+	return Door.Initialized;
+}
+
+// ------------------------------------------------------------------------- //
+
+void Door_SetColorScheme(int8_t *ColorScheme)
+/*
+ * This function will set the color scheme.
+ */
+{
+	int16_t iTemp;
+
+	for (iTemp = 0; iTemp < 50; iTemp++)
+		Door.ColorScheme[iTemp] = ColorScheme[iTemp];
+}
+
+// ------------------------------------------------------------------------- //
+
+static void LocalLoad(void)
+/*
+ * This function will read in the local user's login name.
+ *
+ */
+{
+	char name[80], szString[128];
+
+	/* display box */
+	clrscr();
+
+	zputs(ST_LOCAL1);
+	zputs(ST_LOCAL2);
+	zputs(ST_LOCAL3);
+	zputs(ST_LOCAL4);
+	zputs(ST_LOCAL5);
+	zputs(ST_LOCAL6);
+	zputs(ST_LOCAL7);
+	zputs(ST_LOCAL8);
+	zputs(ST_LOCAL9);
+	zputs(ST_LOCAL10);
+	zputs(ST_LOCAL11);
+
+	// if in a league, tell the guy
+	if (Game.Data.InterBBS) {
+		IBBS_LoginStats();
+	}
+
+	qputs(" |09The Clans |07" VERSION, 0, 16);
+
+	snprintf(szString, sizeof(szString), " |07Enter login name.  Press [|09Enter|07] for |14%s", Config.szSysopName);
+	qputs(szString, 0, 18);
+	snprintf(szString, sizeof(szString), " |07Node |09%03d  |15> ", System.Node);
+	qputs(szString, 0, 19);
+
+	name[0] = 0;
+	szString[0] = 0;
+	gotoxy(13,19);
+	Input(szString, 27);
+
+	if (strlen(szString))
+		strlcpy(name, szString, sizeof(name));
+	else {
+		if (strlen(Config.szSysopName))
+			strlcpy(name, Config.szSysopName, sizeof(name));
+		else
+			strlcpy(name, "Sysop", sizeof(name));
+	}
+
+	zputs("|16");
+
+	strlcpy(od_control.user_name, name, sizeof(od_control.user_name));
+	/*    for (i = 0; i < (signed)strlen(name); i++)
+	      name[i] = toupper(name[i]); */
+	strlcpy(od_control.user_location, Config.szBBSName, sizeof(od_control.user_location));
+	od_control.user_timelimit = 30;
+	od_control.od_info_type = CUSTOM;
+	od_control.user_ansi = true;
+	od_control.user_screen_length = 25;
+
+	System.Local = true;
+}
+
+// ------------------------------------------------------------------------- //
+
+/*
+ * Functions run before and after chat respectively.
+ *
+ */
+
+static void BeforeChat(void)
+{
+	rputs(ST_BEFORECHAT);
+}
+
+static void AfterChat(void)
+{
+	rputs(ST_AFTERCHAT);
+}
+
+// ------------------------------------------------------------------------- //
+
+static void NoDoorFileHandler(void)
+/*
+ * If no dropfile was found, this function is run.
+ */
+{
+	if (!System.Local) {
+		/* show title ascii */
+
+		zputs(ST_NODOORFILE);
+		plat_Delay(2500);
+		System_Close();
+	}
+}
+
+// ------------------------------------------------------------------------- //
+#if defined(_WIN32) || defined(__MSDOS__)
+static bool StatusOn = true;
+
+static void NoStatus(void)
+/*
+ * If no status line is chosen, this is run?
+ */
+{
+	if (StatusOn) {
+		od_set_statusline(STATUS_NONE);
+		StatusOn = false;
+	}
+	else {
+		StatusOn = true;
+		od_set_statusline(STATUS_NORMAL);
+
+		if (Video_VideoType() == MONO) {
+			ClearArea(0,23,  79,24, (7<<4));
+			qputs("|23|00The C l a n s   " VERSION " copyright 1998 Allen Ussher    F1-F3 toggles status bar  ", 0, 24);
+		}
+		else {
+			ClearArea(0,23,  79,24,  7|(1<<4));
+			qputs("|15|17The C l a n s   |00" VERSION " |03copyright 1998 Allen Ussher    |00F1-F3 toggles status bar  |16", 0, 24);
+		}
+	}
+}
+#endif
+
+static void TwoLiner(unsigned char which)
+/*
+ * Two line status line function.
+ */
+{
+#if defined(_WIN32) || defined(__MSDOS__)
+	char szString[128];
+	static char Status[2][155];
+
+	switch (which) {
+		case PEROP_INITIALIZE :
+			od_control.key_status[0] = 0x3B00;    // F1
+			od_control.key_status[1] = 0x3C00;    // F2
+			od_control.key_status[2] = 0x3D00;    // F3
+			od_control.key_status[3] = 0;    // F4
+			od_control.key_status[4] = 0;    // F5
+			od_control.key_status[5] = 0;    // F6
+			od_control.key_status[6] = 0;    // F7
+			od_control.key_status[7] = 0;    // F8
+
+			od_control.od_hot_key[od_control.od_num_keys] = 0x4300;    // F9
+			od_control.od_hot_function[od_control.od_num_keys] = NoStatus;
+			od_control.od_num_keys++;
+
+			od_control.key_chat = 0x2E00;     // Alt-C
+			od_control.key_drop2bbs = 0x2000;   // Alt-D
+			od_control.key_dosshell = 0x2400;   // Alt-J
+			od_control.key_hangup = 0x2300;     // Alt-H
+			od_control.key_keyboardoff = 0x2500;  // Alt-K
+			od_control.key_lesstime = 0x5000;   // dn key
+			od_control.key_moretime = 0x4800;   // up key
+
+			if (Video_VideoType() == MONO) {
+				ClearArea(0,23,  79,24, (7<<4));
+				qputs("|23|00The C l a n s   " VERSION " copyright 1998 Allen Ussher    F1-F3 toggles status bar  ", 0, 24);
+			}
+			else {
+				ClearArea(0,23,  79,24,  7|(1<<4));
+
+				qputs("|15|17The C l a n s   |00" VERSION " |03copyright 1998 Allen Ussher    |00F1-F3 toggles status bar  |16", 0, 24);
+			}
+			break;
+		case PEROP_DEINITIALIZE :
+			break;
+		case PEROP_DISPLAY1 :
+			if (!StatusOn)  NoStatus();
+
+			snprintf(Status[0], sizeof(Status[0]), "%s of %-10s                     ", od_control.user_name, od_control.user_location);
+			xputs(Status[0], 0, 23);
+			snprintf(Status[1], sizeof(Status[1]), " Baud: %5ld Time: %2d      %s    Node: %3d ", od_control.baud, od_control.user_timelimit - od_control.user_time_used, (od_control.user_ansi) ? "[ANSI] " : "[ASCII]", System.Node);
+			xputs(Status[1], 31, 23);
+			break;
+		case PEROP_UPDATE1 :
+			if (!StatusOn)  NoStatus();
+
+			xputs(Status[0], 0, 23);
+
+			snprintf(szString, sizeof(szString), "%-3d", od_control.user_timelimit - od_control.user_time_used);
+
+			Status[1][19] = szString[0];
+			Status[1][20] = szString[1];
+			Status[1][21] = szString[2];
+			Status[1][22] = szString[3];
+			xputs(Status[1], 31, 23);
+			break;
+		case PEROP_DISPLAY2 :
+		case PEROP_UPDATE2 :
+			if (!StatusOn)  NoStatus();
+			xputs("Alt+ [H]angup  [J]ump to DOS  [C]hat w/User  [D]rop to BBS                      ", 0, 23);
+			break;
+		case PEROP_DISPLAY3 :
+		case PEROP_UPDATE3 :
+			if (!StatusOn)  NoStatus();
+			xputs("[F9] Toggle Status Line ON/OFF  [Up] Give Time to user  [Down] Take Time        ", 0, 23);
+			break;
+	}
+#else
+	(void)which;
+#endif
+}
+
+// ------------------------------------------------------------------------- //
+
+void Door_ToggleScreenPause(void)
+{
+	Door.AllowScreenPause = !Door.AllowScreenPause;
+}
+
+static void Door_SetScreenPause(bool State)
+{
+	Door.AllowScreenPause = State;
+}
+
+bool Door_AllowScreenPause(void)
+{
+	return Door.AllowScreenPause;
+}
+
+// ------------------------------------------------------------------------- //
+
+static bool JustPaused;
+void door_pause(void)
+/*
+ * Displays <pause> prompt.
+ */
+{
+	char *pc;
+
+	if (!JustPaused) {
+		rputs(ST_PAUSE);
+
+		/* wait for user to hit key */
+		while (GetKey() == false)
+			InputCallback();
+
+		od_putch('\r');
+		pc = ST_PAUSE;
+		while (*pc) {
+			od_putch(' ');
+			pc++;
+		}
+		od_putch('\r');
+	}
+	JustPaused = true;
+}
+
+
+// ------------------------------------------------------------------------- //
+
+/*
+ * Called from System_Close(), so must not recurse back into it
+ */
+void rputs(const char *string)
+/*
+ * Outputs the pipe or ` encoded string.
+ */
+{
+	int16_t i;
+	const char *pCurChar,*pStrChar;
+	int16_t attr;  // color
+	static int16_t o_fg = 7, o_bg = 0;
+	static int16_t old_fg = 7, old_bg = 0;
+	char szString[128],
+	*szQuality[4] = { "Average", "Good", "Very Good", "Excellent" };
+
+	if (!(*string))
+		return;
+
+	JustPaused = false;
+	pCurChar = string;
+
+	while (*pCurChar) {
+		// Skips to the next special character...
+		for (pStrChar=pCurChar; *pStrChar != '|'
+		    && *pStrChar != 0
+		    && *pStrChar != SPECIAL_CODE
+		    && *pStrChar != '\n'
+		    && *pStrChar != '`'; pStrChar++);
+		if (pCurChar != pStrChar)
+			od_disp(pCurChar, (INT)(pStrChar - pCurChar), true);
+		pCurChar=pStrChar;
+		if (!(*pCurChar))break;
+
+		if ((*pCurChar) == '|') {
+			if (isdigit(*(pCurChar + 1)) && isdigit(*(pCurChar +2))) {
+				attr = (int16_t)((pCurChar[1] - '0') * 10 + (pCurChar[2] - '0'));
+				if (attr > 15) {
+					if (o_bg != (attr-16)) {
+						o_bg = attr - 16;
+						od_set_colour(o_fg, o_bg);
+					}
+				}
+				else {
+					if (o_fg != attr) {
+						o_fg = attr;
+						od_set_colour(o_fg, o_bg);
+					}
+				}
+				pCurChar += 3;
+			}
+			else if (*(pCurChar+1) == '0' && isalpha(*(pCurChar+2))) {
+				if (!(o_fg == Door.ColorScheme[ *(pCurChar+2) - 'A'] &&
+						o_bg == 0)) {
+					o_fg = Door.ColorScheme[ *(pCurChar+2) - 'A'];
+					o_bg = 0;
+
+					od_set_colour(o_fg, o_bg);
+				}
+				pCurChar += 3;
+			}
+			else if (*(pCurChar+1) == 'S') {
+				old_fg = o_fg;
+				old_bg = o_bg;
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'R') {
+				o_fg = old_fg;
+				o_bg = old_bg;
+
+				od_set_colour(o_fg, o_bg);
+				pCurChar += 2;
+			}
+			else {
+				od_emulate(*pCurChar);
+				pCurChar++;
+			}
+
+		}
+		else if ((*pCurChar) == SPECIAL_CODE) {
+			if (*(pCurChar+1) == 'P') {
+				/* pause */
+				pCurChar += 2;
+				door_pause();
+			}
+			else if (*(pCurChar+1) == 'C') {
+				/* cls */
+				od_clr_scr();
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'B') {
+				/* backspace */
+				od_putch('\b');
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'V') {
+				/* version */
+				rputs(VERSION);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'N') {
+				Door_ToggleScreenPause();
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'T') {
+				/* send 24 CR/LF to "clear" line*/
+				for (i = 0; i < od_control.user_screen_length; i++) {
+					od_disp_str("\n\r");
+					plat_Delay(10);
+				}
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'Y') {
+				/* send 24 CR/LF to "clear" line*/
+				for (i = 0; i < od_control.user_screen_length; i++)
+					od_disp_str("\n\r");
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'Z') {
+				/* end line */
+				return;
+			}
+			else if (*(pCurChar+1) == 'D') {
+				/* delay 100 */
+				plat_Delay(100);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'R') {
+				/* \r */
+				od_disp_str("\r");
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'L') {
+				/* \r */
+				od_disp_str("\n\r");
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'F') {
+				/* fights remaining */
+				snprintf(szString, sizeof(szString), "%d", PClan.FightsLeft);
+				rputs(szString);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'M') {
+				/* mine level */
+				snprintf(szString, sizeof(szString), "%d", PClan.MineLevel);
+				rputs(szString);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'S') {
+				/* spellcasting options */
+				switch (*(pCurChar+2)) {
+					case 'S' : /* source of cast */
+						rputs(Spells_szCastSource);
+						pCurChar += 3;
+						break;
+					case 'D' : /* destination/target of cast */
+						rputs(Spells_szCastDestination);
+						pCurChar += 3;
+						break;
+					case 'V' : /* value of cast */
+						snprintf(szString, sizeof(szString), "%d", Spells_CastValue);
+						rputs(szString);
+						pCurChar += 3;
+						break;
+					default :
+						pCurChar++;
+						break;
+				}
+			}
+			else if (*(pCurChar+1) == '1') {
+				/* pawn level */
+				snprintf(szString, sizeof(szString), "%d", Village.Data.PawnLevel);
+				rputs(szString);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == '2') {
+				/* wiz shop level */
+				snprintf(szString, sizeof(szString), "%d", Village.Data.WizardLevel);
+				rputs(szString);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'X') {
+				/* mine level */
+				snprintf(szString, sizeof(szString), "%d", Village.Data.MarketLevel);
+				rputs(szString);
+				pCurChar += 2;
+			}
+			else if (*(pCurChar+1) == 'Q') {
+				/* market quality level */
+
+				snprintf(szString, sizeof(szString), "%s", szQuality[Village.Data.MarketQuality]);
+				rputs(szString);
+				pCurChar += 2;
+			}
+			else {
+				od_putch(*pCurChar);
+				pCurChar++;
+			}
+		}
+		else if ((*pCurChar) == '\n') {
+			od_putch('\n');
+			od_putch('\r');
+			pCurChar++;
+		}
+		else if ((*pCurChar) == '`' && iscodechar(*(pCurChar + 1))
+				 && iscodechar(*(pCurChar +2))) {
+			pCurChar++;
+
+			// get background
+			if (isdigit(*pCurChar))
+				o_bg = *pCurChar - '0';
+			else
+				o_bg = *pCurChar - 'A' + 10;
+
+			pCurChar++;
+
+			// get foreground
+			if (isdigit(*pCurChar))
+				o_fg = *pCurChar - '0';
+			else
+				o_fg = *pCurChar - 'A' + 10;
+
+			od_set_colour(o_fg, o_bg);
+
+			pCurChar++;
+		}
+		else {
+			od_putch(*pCurChar);
+			pCurChar++;
+		}
+	}
+}
+
+static const char wdays[7][4] = {"Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"};
+static void LogToWhatever(const char *szString)
+{
+	if (Door_Initialized()) {
+		od_log_write(szString);
+	}
+	else {
+		time_t now = time(NULL);
+		struct tm *tm = localtime(&now);
+
+		if (LogFD == NULL) {
+			char szFileName[16];
+			snprintf(szFileName, sizeof(szFileName), "clans%u.log", (unsigned)System.Node);
+			LogFD = plat_fsopen(szFileName, "a", PLAT_SH_DENYWR);
+			if (LogFD) {
+				fprintf(LogFD, "\n----------  %s %02d %s %02d, %s\n", wdays[tm->tm_wday],
+				    tm->tm_mday, aszShortMonthName[tm->tm_mon], tm->tm_year % 100, "The Clans");
+			}
+		}
+		if (LogFD) {
+			fprintf(LogFD, "> %2d:%02d:%02d  %s\n", tm->tm_hour, tm->tm_min, tm->tm_sec, szString);
+		}
+	}
+}
+
+char
+GetKey(void)
+{
+	return od_get_key(true);
+}
+
+char
+GetKeyNoWait(void)
+{
+	return od_get_key(false);
+}
+
+char
+GetAnswer(const char *allowed)
+{
+	return od_get_answer(allowed);
+}
+
+void LogStr(const char *szString)
+{
+	if (od_control.od_logfile == INCLUDE_LOGFILE) {
+		// Remove pipes, %-codes, and control characters.
+		char *szStrDup = strdup(szString);
+		size_t stLen;
+
+		if (!szStrDup) {
+			LogToWhatever("Failed to allocate memory, raw log entry follows:");
+			LogToWhatever(szString);
+			return;
+		}
+
+		stLen = strlen(szStrDup);
+		for (size_t stPos = 0; stPos < stLen; stPos++) {
+			char *src = &szStrDup[stPos];
+			size_t remain = stLen - stPos + 1;
+			if ((*src < 32 && (signed char)*src >= 0) || *src == 127) {
+				// Remove control characters
+				memmove(src, &src[1], remain - 1);
+				stPos--;
+				stLen--;
+				continue;
+			}
+			if (*src == '|') {
+				// Remove pipe codes
+				if (remain > 3 && isdigit(src[1]) && isdigit(src[2])) {
+					memmove(src, &src[3], remain - 3);
+					stPos--;
+					stLen -= 3;
+					continue;
+				}
+				if (remain > 3 && src[1] == 0 && isalpha(src[2])) {
+					memmove(src, &src[3], remain - 3);
+					stPos--;
+					stLen -= 3;
+					continue;
+				}
+				if (remain > 2 && (src[1] == 'S' || src[1] == 'R')) {
+					memmove(src, &src[2], remain - 2);
+					stPos--;
+					stLen -= 2;
+					continue;
+				}
+			}
+			if (remain > 2 && *src == SPECIAL_CODE) {
+				switch (src[1]) {
+					case '1':
+					case '2':
+					case 'B':
+					case 'C':
+					case 'D':
+					case 'F':
+					case 'L':
+					case 'M':
+					case 'N':
+					case 'P':
+					case 'Q':
+					case 'R':
+					case 'T':
+					case 'V':
+					case 'X':
+					case 'Y':
+					case 'Z':
+						memmove(src, &src[2], remain - 2);
+						stPos--;
+						stLen -= 2;
+						continue;
+					case 'S': // SS, SD, SV or nothing
+						if (remain > 3 && (src[2] == 'S' || src[2] == 'D' || src[2] == 'V')) {
+							memmove(src, &src[3], remain - 3);
+							stPos--;
+							stLen -= 3;
+							continue;
+						}
+						break;
+					default:
+						break;
+				}
+			}
+			if (remain > 3 && *src == '`' && iscodechar(src[1]) && iscodechar(src[2])) {
+				memmove(src, &src[3], remain - 3);
+				stPos--;
+				stLen -= 3;
+				continue;
+			}
+		}
+		LogToWhatever(szStrDup);
+		free(szStrDup);
+	}
+}
+
+void LogDisplayStr(const char *szString)
+{
+	LogStr(szString);
+	DisplayStr(szString);
+}
+
+// ------------------------------------------------------------------------- //
+
+void Display(char *FileName)
+/*
+ * Displays the file given.
+ */
+{
+	/* if file ends in .ASC, assume that it is pipe codes */
+	/* if file ends in .ANS, assume it is ANSI */
+	/* if ends in something else, assume pipe codes */
+
+	int16_t FileType; /* 0 == ASCII, 1 == ANSI */
+	int16_t CurLine = 0, NumLines, iTemp;
+	int32_t MaxBytes;
+	char Lines[30][256];
+	struct FileHeader FileHeader;
+
+	if ((toupper(FileName[ strlen(FileName) - 3 ]) == 'A') &&
+			(toupper(FileName[ strlen(FileName) - 2 ]) == 'N') &&
+			(toupper(FileName[ strlen(FileName) - 1 ]) == 'S'))
+		FileType = ANSIFILE;
+	else
+		FileType = ASCIIFILE;
+
+	/* now display it according to the type of file it is */
+	// open the file
+	MyOpen(FileName, "r", &FileHeader);
+
+	if (!FileHeader.fp)
+		return;
+
+	for (;;) {
+		// if at end of file, stop
+		/* get od_control.user_screen_length-3 lines if possible */
+		for (iTemp = 0; iTemp < (od_control.user_screen_length-3) && iTemp < 30; iTemp++) {
+			MaxBytes = FileHeader.lEnd - (int32_t)ftell(FileHeader.fp) + EXTRABYTES;
+			if (MaxBytes > 254)
+				MaxBytes = 254;
+
+			if (ftell(FileHeader.fp) >= FileHeader.lEnd || feof(FileHeader.fp))
+				break;
+
+			if (!fgets(Lines[iTemp], (int)MaxBytes, FileHeader.fp))
+				break;
+
+			Lines[iTemp][(int16_t)(MaxBytes - EXTRABYTES + 1)] = 0;
+		}
+		NumLines = iTemp;
+
+		/* display them all */
+		for (CurLine = 0; CurLine < NumLines; CurLine++) {
+			if (FileType == ANSIFILE) {
+				JustPaused = false;
+				od_disp_emu(Lines[CurLine], true);
+			}
+			else  /* assume ASCII pipe codes */
+				rputs(Lines[CurLine]);
+		}
+
+		/* pause if od_control.user_screen_length-3 lines */
+		if (CurLine == (od_control.user_screen_length-3) && Door.AllowScreenPause) {
+			rputs(ST_MORE);
+			InputCallback();
+			if (toupper(GetKey()) == 'N') {
+				rputs("\r                       \r");
+				break;
+			}
+			rputs("\r                       \r");
+		}
+
+		/* see if end of file, if so, exit */
+		if (ftell(FileHeader.fp) >= FileHeader.lEnd || feof(FileHeader.fp))
+			break;
+
+		/* see if key hit */
+		if (GetKeyNoWait()) break;
+	}
+
+	fclose(FileHeader.fp);
+}
+
+// ------------------------------------------------------------------------- //
+
+bool YesNo(char *Query)
+{
+	/* show query */
+	DisplayStr(Query);
+
+	/* show Yes/no */
+	DisplayStr(STR_YESNO);
+
+	/* get user input */
+	if (GetAnswer("YN\r\n") == 'N') {
+		/* user says NO */
+		DisplayStr("No\n");
+		return false;
+	}
+	else { /* user says YES */
+		DisplayStr("Yes\n");
+		return true;
+	}
+}
+
+bool NoYes(char *Query)
+{
+	/* show query */
+	DisplayStr(Query);
+
+	/* show Yes/no */
+	DisplayStr(STR_NOYES);
+
+	/* get user input */
+	if (GetAnswer("YN\r\n") == 'Y') {
+		/* user says YES */
+		DisplayStr("Yes\n");
+		return (true);
+	}
+	else { /* user says NO */
+		DisplayStr("No\n");
+		return (false);
+	}
+}
+
+// ------------------------------------------------------------------------- //
+void Door_ShowTitle(void)
+{
+	char szFileName[20];
+
+	snprintf(szFileName, sizeof(szFileName), "Title %d", (int16_t) my_random(3));
+
+	Door_SetScreenPause(false);
+	Help(szFileName, ST_MENUSHLP);
+	Door_SetScreenPause(true);
+	rputs("|16|07");
+	GetKey();
+	od_clr_scr();
+}
+// ------------------------------------------------------------------------- //
+
+void Door_Init(bool Local)
+/*
+ * Called to initialize OpenDoors specific info (od_init namely) and
+ * load the dropfile or prompt the user for local login.
+ */
+{
+	if (Verbose) {
+		LogDisplayStr("> Door_Init()\n");
+		plat_Delay(500);
+	}
+
+	/* force opendoors to NOT show copyright message */
+	od_control.od_nocopyright = true;
+	od_control.od_node = System.Node;
+	od_control.od_before_exit = System_Close_AtExit;
+
+	/* If local, intialize user data before od_init is run */
+	if (Local) {
+		od_control.od_info_type = NO_DOOR_FILE;
+		od_control.od_force_local = true;
+		od_control.user_ansi = true;
+		od_control.od_always_clear = true;
+		od_control.od_disable |= DIS_NAME_PROMPT;
+		od_control.baud = 0;
+
+		LocalLoad();
+	}
+
+	/* initialize opendoors ------------------------------------------------*/
+	od_control.od_mps = INCLUDE_MPS;
+
+	strlcpy(od_registered_to, "Your Name", sizeof(od_registered_to));
+
+	od_add_personality("TWOLINER", 1, 23, TwoLiner);
+	od_control.od_default_personality = TwoLiner;
+
+	od_control.od_cbefore_chat = BeforeChat;
+	od_control.od_cafter_chat = AfterChat;
+
+	od_control.od_chat_colour1 = 14;
+	od_control.od_chat_colour2 = 7;
+
+	od_control.od_no_file_func = NoDoorFileHandler;
+
+	/* All need for the console has passed */
+	Video_Close();
+
+	if (LogFD) {
+		fclose(LogFD);
+		LogFD = NULL;
+	}
+	od_init();
+
+	Door.Initialized = true;
+
+	od_control.od_before_chat = "";
+	od_control.od_after_chat = "";
+
+	/* see if local using dropfile */
+	if (System.Local == false) {
+		if (od_carrier() == false) {
+			System.Local = true;
+		}
+	}
+
+	if (Door.UserBooted) {
+		rputs(ST_MAIN4);
+		System_Close();
+	}
+}
+
+// ------------------------------------------------------------------------- //
+
+void Door_Close(void)
+/*
+ * Called to destroy anything created by Door_Init.
+ */
+{
+	if (LogFD) {
+		fclose(LogFD);
+		LogFD = NULL;
+	}
+	if (Door.UserBooted == false)
+		RemoveSemaphor();
+}
+
+void
+InputCallback(void)
+{
+	od_sleep(0);
+}
+
+void PutCh(char ch)
+{
+	od_putch(ch);
+}
+
+void rawputs(const char *str)
+{
+	od_disp_str(str);
+}
+
+int16_t
+GetHoursLeft(void)
+{
+	return (int16_t)((od_control.user_timelimit - od_control.user_time_used) / 60);
+}
+
+int16_t
+GetMinutesLeft(void)
+{
+	return (int16_t)((od_control.user_timelimit - od_control.user_time_used) % 60);
+}

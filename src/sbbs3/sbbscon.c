@@ -128,6 +128,7 @@ bool               syslog_always = FALSE;
 #endif
 
 static const char* prompt;
+static const char* default_prompt = "[Threads: %d  Sockets: %d  Clients: %d  Served: %lu  Errors: %lu] (?=Help): ";
 
 static const char* usage  = "\nusage: %s [[cmd | setting] [...]] [ctrl_dir | path/sbbs.ini]\n"
                             "\n"
@@ -947,6 +948,7 @@ static void terminate(void)
 		count++;
 		SLEEP(1000);
 	}
+	prompt = default_prompt;
 }
 
 static void read_startup_ini(bool recycle
@@ -969,14 +971,15 @@ static void read_startup_ini(bool recycle
 		lputs(LOG_WARNING, "Using default initialization values");
 
 	/* We call this function to set defaults, even if there's no .ini file */
-	sbbs_read_ini(fp,
+	if (!sbbs_read_ini(fp,
 	              ini_file,
 	              NULL, /* global_startup */
 	              &run_bbs,       bbs,
 	              &run_ftp,       ftp,
 	              &run_web,       web,
 	              &run_mail,      mail,
-	              &run_services,  services);
+	              &run_services,  services))
+		lprintf(LOG_CRIT, "Internal error reading or initializing startup structures from %s", ini_file);
 
 	/* read/default any sbbscon-specific .ini keys here */
 #if defined(__unix__)
@@ -1168,7 +1171,6 @@ static const char* sbbscon_ver()
 	return str;
 }
 
-
 /****************************************************************************/
 /* Main Entry Point															*/
 /****************************************************************************/
@@ -1206,6 +1208,11 @@ int main(int argc, char** argv)
 #endif
 	printf("\nSynchronet Console for %s-%s  Version %s%c  %s\n\n"
 	       , PLATFORM_DESC, ARCHITECTURE_DESC, VERSION, REVISION, COPYRIGHT_NOTICE);
+
+    if(bbs_ver_num() != VERSION_HEX) {
+        fprintf(stderr, "!Incorrect SBBS Library Version (%x, expected %x)\n", bbs_ver_num(), VERSION_HEX);
+		return EXIT_FAILURE;
+	}
 
 	SetThreadName("sbbs");
 	listInit(&client_list, LINK_LIST_MUTEX);
@@ -1703,7 +1710,7 @@ int main(int argc, char** argv)
 	scfg.size = sizeof(scfg);
 	SAFECOPY(error, UNKNOWN_LOAD_ERROR);
 	lprintf(LOG_INFO, "Loading configuration files from %s", scfg.ctrl_dir);
-	if (!load_cfg(&scfg, /* text: */ NULL, /* prep: */ TRUE, /* node: */ FALSE, error, sizeof(error))) {
+	if (!load_cfg(&scfg, /* text: */ NULL, 0, /* prep: */ TRUE, /* node: */ FALSE, error, sizeof(error))) {
 		lprintf(LOG_CRIT, "!ERROR loading configuration files: %s", error);
 		return -1;
 	}
@@ -1934,7 +1941,7 @@ int main(int argc, char** argv)
 	else                                /* interactive */
 #endif
 	{
-		prompt = "[Threads: %d  Sockets: %d  Clients: %d  Served: %lu  Errors: %lu] (?=Help): ";
+		prompt = default_prompt;
 		lputs(LOG_INFO, NULL);   /* display prompt */
 
 		while (!terminated) {
@@ -2029,15 +2036,21 @@ int main(int argc, char** argv)
 				case 'r':   /* recycle */
 				case 's':   /* shutdown */
 				case 't':   /* terminate */
-					printf("BBS, FTP, Web, Mail, Services, All, or [Cancel] ? ");
-					fflush(stdout);
-					switch (toupper(getch())) {
+					prompt = "BBS, FTP, Web, Mail, Services, All, or [Cancel] ? ";
+					lputs(LOG_INFO, NULL);   /* display prompt */
+					int which = getch();
+					prompt = default_prompt;
+					switch (toupper(which)) {
 						case 'B':
 							printf("BBS\n");
 							if (ch == 't')
 								bbs_terminate();
-							else if (ch == 's')
-								bbs_startup.shutdown_now = TRUE;
+							else if (ch == 's') {
+								if (!server_running(SERVER_TERM))
+									_beginthread((void (*)(void*)) bbs_thread, 0, &bbs_startup);
+								else
+									bbs_startup.shutdown_now = TRUE;
+							}
 							else
 								bbs_startup.recycle_now = TRUE;
 							break;
@@ -2045,8 +2058,12 @@ int main(int argc, char** argv)
 							printf("FTP\n");
 							if (ch == 't')
 								ftp_terminate();
-							else if (ch == 's')
-								ftp_startup.shutdown_now = TRUE;
+							else if (ch == 's') {
+								if (!server_running(SERVER_FTP))
+									_beginthread((void (*)(void*)) ftp_server, 0, &ftp_startup);
+								else
+									ftp_startup.shutdown_now = TRUE;
+							}
 							else
 								ftp_startup.recycle_now = TRUE;
 							break;
@@ -2054,8 +2071,12 @@ int main(int argc, char** argv)
 							printf("Web\n");
 							if (ch == 't')
 								web_terminate();
-							else if (ch == 's')
-								web_startup.shutdown_now = TRUE;
+							else if (ch == 's') {
+								if (!server_running(SERVER_WEB))
+									_beginthread((void (*)(void*)) web_server, 0, &web_startup);
+								else
+									web_startup.shutdown_now = TRUE;
+							}
 							else
 								web_startup.recycle_now = TRUE;
 							break;
@@ -2063,8 +2084,12 @@ int main(int argc, char** argv)
 							printf("Mail\n");
 							if (ch == 't')
 								mail_terminate();
-							else if (ch == 's')
-								mail_startup.shutdown_now = TRUE;
+							else if (ch == 's') {
+								if (!server_running(SERVER_MAIL))
+									_beginthread((void (*)(void*)) mail_server, 0, &mail_startup);
+								else
+									mail_startup.shutdown_now = TRUE;
+							}
 							else
 								mail_startup.recycle_now = TRUE;
 							break;
@@ -2072,8 +2097,12 @@ int main(int argc, char** argv)
 							printf("Services\n");
 							if (ch == 't')
 								services_terminate();
-							else if (ch == 's')
-								services_startup.shutdown_now = TRUE;
+							else if (ch == 's') {
+								if (!server_running(SERVER_SERVICES))
+									_beginthread((void (*)(void*)) services_thread, 0, &services_startup);
+								else
+									services_startup.shutdown_now = TRUE;
+							}
 							else
 								services_startup.recycle_now = TRUE;
 							break;
@@ -2082,11 +2111,25 @@ int main(int argc, char** argv)
 							if (ch == 't')
 								terminate();
 							else if (ch == 's') {
-								bbs_startup.shutdown_now = TRUE;
-								ftp_startup.shutdown_now = TRUE;
-								web_startup.shutdown_now = TRUE;
-								mail_startup.shutdown_now = TRUE;
-								services_startup.shutdown_now = TRUE;
+								if (any_server_running()) {
+									bbs_startup.shutdown_now = TRUE;
+									ftp_startup.shutdown_now = TRUE;
+									web_startup.shutdown_now = TRUE;
+									mail_startup.shutdown_now = TRUE;
+									services_startup.shutdown_now = TRUE;
+								}
+								else {
+									if (run_bbs && !server_running(SERVER_TERM))
+										_beginthread((void (*)(void*)) bbs_thread, 0, &bbs_startup);
+									if (run_ftp && !server_running(SERVER_FTP))
+										_beginthread((void (*)(void*)) ftp_server, 0, &ftp_startup);
+									if (run_web && !server_running(SERVER_WEB))
+										_beginthread((void (*)(void*)) web_server, 0, &web_startup);
+									if (run_mail && !server_running(SERVER_MAIL))
+										_beginthread((void (*)(void*)) mail_server, 0, &mail_startup);
+									if (run_services && !server_running(SERVER_SERVICES))
+										_beginthread((void (*)(void*)) services_thread, 0, &services_startup);
+								}
 							}
 							else {
 								recycle_all();
@@ -2183,7 +2226,7 @@ int main(int argc, char** argv)
 					printf("a   = show failed login attempts\n");
 					printf("c   = show connected clients\n");
 					printf("r   = recycle servers (when not in use)\n");
-					printf("s   = shutdown servers (when not in use)\n");
+					printf("s   = shutdown servers (when not in use) or start if not already running\n");
 					printf("t   = terminate servers (immediately)\n");
 					printf("!   = execute external command\n");
 					printf("?   = print this help information\n");

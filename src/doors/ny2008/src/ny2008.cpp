@@ -10,6 +10,7 @@
 
 // include the header
 #include "ny2008.h"
+#include "ciolib.h"
 
 // include prototypes for fights
 #include "fights.h"
@@ -129,30 +130,6 @@ glob_t fff;
 glob_t ff;
 char	**fname;
 
-/*
- * Date Stuff for *nix
- */
-#ifdef __unix__
-#include <time.h>
-struct date {
-	INT16 da_year;
-	char  da_day;
-	char  da_mon;
-};
-
-void getdate(struct date *nyd)  {
-	time_t tim;
-	struct tm *dte;
-
-	tim=time(NULL);
-	dte=localtime(&tim);
-	nyd->da_year=dte->tm_year+1900;
-	nyd->da_day=dte->tm_mday;
-	nyd->da_mon=dte->tm_mon+1;
-}
-#endif
-
-
 void
 time_slice(void) {
 #if 0	/* ToDo */
@@ -169,7 +146,7 @@ INT16
 copyfile(const char *file1,const char *file2) {
 	FILE *f1,*f2;
 	char *buffer;
-	INT32 len1,where,x,y;
+	INT32 len1,x,y;
 
 
 	f1=ShareFileOpen(file1,"rb");
@@ -226,11 +203,11 @@ void
 trim(char *numstr) {
 	INT16 x;
 	for(x=strlen(numstr)-1;numstr[x]==' ' && x>=0;x--)
-		od_kernal;
+		od_kernal();
 	numstr[x+1]=0;
 	strrev(numstr);
 	for(x=strlen(numstr)-1;numstr[x]==' ' && x>=0;x--)
-		od_kernal;
+		od_kernal();
 	numstr[x+1]=0;
 	strrev(numstr);
 }
@@ -251,14 +228,14 @@ loadbadwords(void) {
 	INT32 len=filelength(fileno(fp));
 
 	if(len>4000) {
-		ny_disp_emu("\n\r\n`%BADWORDS FILE TOO BIG!\n\r\n");
+		ny_disp_emu("\r\n\r\n`%BADWORDS FILE TOO BIG!\r\n\r\n");
 		fclose(fp);
 		return;
 	}
 
 	temp=(char *)malloc(len+1);
 	if(temp==0) {
-		ny_disp_emu("\n\r\n`%Not Enough memory for BADWORDS.TXT\n\r\n");
+		ny_disp_emu("\r\n\r\n`%Not Enough memory for BADWORDS.TXT\r\n\r\n");
 		fclose(fp);
 		return;
 	}
@@ -267,7 +244,7 @@ loadbadwords(void) {
 
 		badwords[x]=(char *)malloc(strlen(temp)+1);
 		if(badwords[x]==0) {
-			ny_disp_emu("\n\r\n`%Not Enough memory for BADWORDS.TXT\n\r\n");
+			ny_disp_emu("\r\n\r\n`%Not Enough memory for BADWORDS.TXT\r\n\r\n");
 			fclose(fp);
 			free(temp);
 			return;
@@ -281,14 +258,208 @@ loadbadwords(void) {
 	fclose(fp);
 }
 
-extern "C" int
-main(int argc,char *argv[]) {
-	FILE *justfile,*njustfile;
+#ifdef ODPLAT_WIN32
+static BOOL /* BOOL is char in OpenDoors */
+#else
+static char /* BOOL is char in OpenDoors */
+#endif
+ODCmdLineFlagHandler(const char *flag)
+{
 	char key;
-	WORD uintval;
+	INT16 intval;
 	char numstr[26];
-	scr_rec srec;
-	INT16 cnt,intval,x;
+
+	if (strnicmp(flag,"RESET",5)==0) {
+		od_control.od_force_local=TRUE;
+		reset=TRUE;
+		return TRUE;
+	} else if (strnicmp(flag,"-IBBSM",6)==0) {
+		ibbs_i_mail=TRUE;
+		od_control.od_force_local=TRUE;
+		return TRUE;
+	} else if (strnicmp(flag,"-RIP",4)==0) {
+		rip=166;
+		return TRUE;
+	} else if (strnicmp(flag,"-L",2)==0) {
+		od_control.od_force_local=TRUE;
+		clrscr();
+		textbackground(LIGHTCYAN);
+		textcolor(BLUE);
+		gotoxy(1,7);
+		cprintf("ษอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออป");
+		gotoxy(1,8);
+		cprintf("บ New York 2008 v%-5s %-20s                                   บ",ver,verinfo);
+		gotoxy(1,9);
+		cprintf("บ Starting in local mode input your name: ฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐ บ");
+		gotoxy(1,10);
+		cprintf("ศอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผ");
+		gotoxy(43,9);
+
+		INT16 cntv=0;
+		intval=TRUE;
+		do {
+			if(cntv>=35) {
+				cntv=34;
+				putch('\b');
+				key=getch();
+				if(key=='\n' || key=='\r')
+					cntv=35;
+			} else {
+				key=getch();
+			}
+
+			if(key==27) {
+				gotoxy(1,9);
+				cprintf("บ Starting in local mode input your name: ฐ Canceled ... ฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐ บ");
+				gotoxy(1,12);
+				exit(10);
+			}
+
+			if(intval==TRUE) {
+				if (key>='a' && key<='z')
+					key-=32;
+				intval=FALSE;
+			} else if(intval==FALSE) {
+				if (key>='A' && key<='Z')
+					key+=32;
+			}
+			if(key==' ') {
+				putch('ฐ');
+				key=0;
+				intval=TRUE;
+			} else if(key=='\b') {
+				if(cntv==0) {
+					intval=TRUE;
+					key=0;
+					cntv--;
+				} else {
+					cntv-=2;
+					if(cntv>=0 && od_control.user_name[cntv]==' ')
+						intval=TRUE;
+					if(cntv==32)
+						cprintf("\bฐฐ\b\b");
+					else
+						cprintf("\bฐ\b");
+					key=0;
+				}
+			}
+
+			if(key!=0) {
+				od_control.user_name[cntv]=key;
+				putch(key);
+			}
+			cntv++;
+		} while (key!='\n' && key!='\r');
+		od_control.user_name[cntv-1]=0;
+
+		trim(od_control.user_name);
+		return TRUE;
+	} else if (strnicmp(flag,"-NAD",4)==0) {
+		autodetect=FALSE;
+		return TRUE;
+	} else if (strnicmp(flag,"-P",2)==0) {
+		strzcpy(od_control.info_path,flag,2,61);
+		return TRUE;
+	} else if (strnicmp(flag,"-RDBPS",6)==0) {
+		od_control.od_disable &=~ DIS_BPS_SETTING;
+		return TRUE;
+	} else if (strnicmp(flag,"-CL",3)==0) {
+		clean_mode=TRUE;
+		/*      } else if (strnicmp(flag,"-DV",3)==0) {
+			directvideo=1; */
+		return TRUE;
+	} else if (strnicmp(flag,"-NM",3)==0) {
+		do_maint=FALSE;
+		return TRUE;
+	} else if (strnicmp(flag,"-CR",3)==0) {
+		od_control.od_force_local=TRUE;
+		od_init();
+		od_control.od_status_on=FALSE;
+		od_set_statusline(STATUS_NONE);
+		getcwd(gamedir,MAX_PATH);
+		gamedisk=gamedir[0] - 'A';
+		strzcpy(gamedir,gamedir,2,MAX_PATH);
+		if(flagdisk==-1) {
+			flagdisk=gamedisk;
+			strcpy(flagdir,gamedir);
+		}
+		ch_game_d();
+		registered=TRUE;
+		/*        if (fexist(KEY_FILENAME)) {
+		strcpy(numstr,od_control.system_name);
+		get_bbsname(numstr);
+		registered=seereg(numstr);
+		}*/
+		ny_line(-1,0,0);
+		CrashRecovery();
+		od_exit(10,FALSE);
+		return TRUE;
+	} else if (strnicmp(flag,"-MM",3)==0) {
+		od_control.od_force_local=TRUE;
+		od_init();
+		od_control.od_status_on=FALSE;
+		od_set_statusline(STATUS_NONE);
+		getcwd(gamedir,MAX_PATH);
+		gamedisk=gamedir[0] - 'A';
+		strzcpy(gamedir,gamedir,2,MAX_PATH);
+		if(flagdisk==-1) {
+			flagdisk=gamedisk;
+			strcpy(flagdir,gamedir);
+		}
+		ch_game_d();
+		registered=TRUE;
+		/*      if (fexist(KEY_FILENAME)) {
+			  strcpy(numstr,od_control.system_name);
+			  get_bbsname(numstr);
+			  registered=seereg(numstr);
+			}*/
+		ny_line(-1,0,0);
+		forced_maint=TRUE;
+		Maintanance();
+		od_exit(10,FALSE);
+		return TRUE;
+	} else if (strnicmp(flag,"-M",2)==0) {
+		od_control.od_force_local=TRUE;
+		od_init();
+		od_control.od_status_on=FALSE;
+		od_set_statusline(STATUS_NONE);
+		getcwd(gamedir,MAX_PATH);
+		gamedisk=gamedir[0] - 'A';
+		strzcpy(gamedir,gamedir,2,MAX_PATH);
+		if(flagdisk==-1) {
+			flagdisk=gamedisk;
+			strcpy(flagdir,gamedir);
+		}
+		ch_game_d();
+		registered=TRUE;
+		/*      if (fexist(KEY_FILENAME)) {
+			  strcpy(numstr,od_control.system_name);
+			  get_bbsname(numstr);
+			  registered=seereg(numstr);
+			}*/
+		ny_line(-1,0,0);
+		Maintanance();
+		od_exit(10,FALSE);
+		return TRUE;
+	} else if (strnicmp(flag,"-N",2)==0) {
+		strzcpy(numstr,flag,2,59);
+		sscanf(numstr,"%" SCNd16,&intval);
+		od_control.od_node=intval;
+		return TRUE;
+	} else if (strnicmp(flag,"-C",2)==0) {
+		od_control.od_config_filename=flag+2;
+		od_control.od_config_file = INCLUDE_CONFIG_FILE;
+		return TRUE;
+	}
+}
+
+extern "C" int
+main(int argc,char *argv[])
+{
+	FILE *justfile;
+	char key;
+	char numstr[26];
+	INT16 cnt,intval;
 	scr_rec rec;
 	date today;
 	date lastday;
@@ -297,13 +468,7 @@ main(int argc,char *argv[]) {
 	strcpy(od_registered_to,"Your Name");
 	od_registration_key=00000000;
 
-#ifdef __unix__
-
-	srandomdev();
-#else
-
-	randomize();
-#endif
+	xp_randomize();
 
 	od_control.od_no_file_func=NoDropFile;
 	od_control.od_disable = DIS_BPS_SETTING | DIS_NAME_PROMPT;
@@ -338,185 +503,15 @@ main(int argc,char *argv[]) {
 	od_control.od_cbefore_chat=ny_chat;
 	od_control.od_cbefore_shell=scr_save;
 	od_control.od_cafter_shell=scr_res;
-
-
-	cnt=1;
-	if(argc>1) {
-		do {
-			if (strnicmp(argv[cnt],"RESET",5)==0) {
-				od_control.od_force_local=TRUE;
-				reset=TRUE;
-			} else if (strnicmp(argv[cnt],"-IBBSM",6)==0) {
-				ibbs_i_mail=TRUE;
-				od_control.od_force_local=TRUE;
-			} else if (strnicmp(argv[cnt],"-RIP",4)==0) {
-				rip=166;
-			} else if (strnicmp(argv[cnt],"-L",2)==0) {
-				od_control.od_force_local=TRUE;
-				clrscr();
-				textbackground(LIGHTCYAN);
-				textcolor(BLUE);
-				gotoxy(1,7);
-				cprintf("ษอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออป");
-				gotoxy(1,8);
-				cprintf("บ New York 2008 v%-5s %-20s                                   บ",ver,verinfo);
-				gotoxy(1,9);
-				cprintf("บ Starting in local mode input your name: ฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐ บ");
-				gotoxy(1,10);
-				cprintf("ศอออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออออผ");
-				gotoxy(43,9);
-
-				INT16 cntv=0;
-				intval=TRUE;
-				do {
-					if(cntv>=35) {
-						cntv=34;
-						putch('\b');
-						key=getch();
-						if(key=='\n' || key=='\r')
-							cntv=35;
-					} else {
-						key=getch();
-					}
-
-					if(key==27) {
-						gotoxy(1,9);
-						cprintf("บ Starting in local mode input your name: ฐ Canceled ... ฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐฐ บ");
-						gotoxy(1,12);
-						exit(10);
-					}
-
-					if(intval==TRUE) {
-						if (key>='a' && key<='z')
-							key-=32;
-						intval=FALSE;
-					} else if(intval==FALSE) {
-						if (key>='A' && key<='Z')
-							key+=32;
-					}
-					if(key==' ') {
-						putch('ฐ');
-						key=0;
-						intval=TRUE;
-					} else if(key=='\b') {
-						if(cntv==0) {
-							intval=TRUE;
-							key=0;
-							cntv--;
-						} else {
-							cntv-=2;
-							if(cntv>=0 && od_control.user_name[cntv]==' ')
-								intval=TRUE;
-							if(cntv==32)
-								cprintf("\bฐฐ\b\b");
-							else
-								cprintf("\bฐ\b");
-							key=0;
-						}
-					}
-
-					if(key!=0) {
-						od_control.user_name[cntv]=key;
-						putch(key);
-					}
-					cntv++;
-				} while (key!='\n' && key!='\r');
-				od_control.user_name[cntv-1]=0;
-
-				trim(od_control.user_name);
-
-			} else if (strnicmp(argv[cnt],"-NAD",4)==0) {
-				autodetect=FALSE;
-			} else if (strnicmp(argv[cnt],"-P",2)==0) {
-				strzcpy(od_control.info_path,argv[cnt],2,61);
-			} else if (strnicmp(argv[cnt],"-RDBPS",6)==0) {
-				od_control.od_disable &=~ DIS_BPS_SETTING;
-			} else if (strnicmp(argv[cnt],"-CL",3)==0) {
-				clean_mode=TRUE;
-				/*      } else if (strnicmp(argv[cnt],"-DV",3)==0) {
-					directvideo=1; */
-			} else if (strnicmp(argv[cnt],"-NM",3)==0) {
-				do_maint=FALSE;
-			} else if (strnicmp(argv[cnt],"-CR",3)==0) {
-				od_control.od_force_local=TRUE;
-				od_init();
-				od_control.od_status_on=FALSE;
-				od_set_statusline(STATUS_NONE);
-				getcwd(gamedir,MAX_PATH);
-				gamedisk=gamedir[0] - 'A';
-				strzcpy(gamedir,gamedir,2,MAX_PATH);
-				if(flagdisk==-1) {
-					flagdisk=gamedisk;
-					strcpy(flagdir,gamedir);
-				}
-				ch_game_d();
-				registered=TRUE;
-				/*        if (fexist(KEY_FILENAME)) {
-				strcpy(numstr,od_control.system_name);
-				get_bbsname(numstr);
-				registered=seereg(numstr);
-				}*/
-				ny_line(-1,0,0);
-				CrashRecovery();
-				od_exit(10,FALSE);
-			} else if (strnicmp(argv[cnt],"-MM",3)==0) {
-				od_control.od_force_local=TRUE;
-				od_init();
-				od_control.od_status_on=FALSE;
-				od_set_statusline(STATUS_NONE);
-				getcwd(gamedir,MAX_PATH);
-				gamedisk=gamedir[0] - 'A';
-				strzcpy(gamedir,gamedir,2,MAX_PATH);
-				if(flagdisk==-1) {
-					flagdisk=gamedisk;
-					strcpy(flagdir,gamedir);
-				}
-				ch_game_d();
-				registered=TRUE;
-				/*      if (fexist(KEY_FILENAME)) {
-					  strcpy(numstr,od_control.system_name);
-					  get_bbsname(numstr);
-					  registered=seereg(numstr);
-					}*/
-				ny_line(-1,0,0);
-				forced_maint=TRUE;
-				Maintanance();
-				od_exit(10,FALSE);
-
-			} else if (strnicmp(argv[cnt],"-M",2)==0) {
-				od_control.od_force_local=TRUE;
-				od_init();
-				od_control.od_status_on=FALSE;
-				od_set_statusline(STATUS_NONE);
-				getcwd(gamedir,MAX_PATH);
-				gamedisk=gamedir[0] - 'A';
-				strzcpy(gamedir,gamedir,2,MAX_PATH);
-				if(flagdisk==-1) {
-					flagdisk=gamedisk;
-					strcpy(flagdir,gamedir);
-				}
-				ch_game_d();
-				registered=TRUE;
-				/*      if (fexist(KEY_FILENAME)) {
-					  strcpy(numstr,od_control.system_name);
-					  get_bbsname(numstr);
-					  registered=seereg(numstr);
-					}*/
-				ny_line(-1,0,0);
-				Maintanance();
-				od_exit(10,FALSE);
-			} else if (strnicmp(argv[cnt],"-N",2)==0) {
-				strzcpy(numstr,argv[cnt],2,59);
-				sscanf(numstr,"%d",&intval);
-				od_control.od_node=intval;
-			} else if (strnicmp(argv[cnt],"-C",2)==0) {
-				od_control.od_config_filename=argv[cnt]+2;
-				od_control.od_config_file = INCLUDE_CONFIG_FILE;
-			}
-		} while ((++cnt)<argc);
-	}
+	od_control.od_cmd_line_flag_handler = ODCmdLineFlagHandler;
 
 	nCurrentUserNumber=MAX_USERS+1;
+
+#ifdef ODPLAT_WIN32
+	od_parse_cmd_line(GetCommandLine());
+#else
+	od_parse_cmd_line(argc, argv);
+#endif
 
 	od_init();
 	if(!od_control.od_force_local)
@@ -563,8 +558,6 @@ main(int argc,char *argv[]) {
 		od_control.user_screen_length=35;
 	}
 
-	char *InComing;
-	char *OutGoing;
 	ibbs_mail_type ibmail;
 
 	registered=TRUE;
@@ -579,7 +572,6 @@ main(int argc,char *argv[]) {
 
 	if(ibbs==TRUE) {
 		ch_game_d();
-		INT16 xx;
 		strcpy(IBBSInfo.szThisNodeAddress, "0:000/000");
 		sprintf(IBBSInfo.szProgName, "#@NYG#%05d IBBS",ibbs_game_num);
 		strcpy(IBBSInfo.szNetmailDir, "C:/FD/NETMAIL");
@@ -594,8 +586,8 @@ main(int argc,char *argv[]) {
 
 		char szDirFileName[PATH_CHARS + 1];
 
-		if(IBBSInfo.szNetmailDir==NULL || strlen(IBBSInfo.szNetmailDir)>PATH_CHARS) {
-			od_printf("\n\r\nNETMAIL DIR NOT FOUND\n\r\n");
+		if(strlen(IBBSInfo.szNetmailDir)>PATH_CHARS) {
+			od_printf("\r\n\r\nNETMAIL DIR NOT FOUND\r\n\r\n");
 			od_exit(10,FALSE);
 		}
 
@@ -608,7 +600,7 @@ main(int argc,char *argv[]) {
 
 		/* Return true iff file exists and it is a directory */
 		if(!fexist(szDirFileName) || !isdir(szDirFileName)) {
-			od_printf("\n\r\nNETMAIL DIR NOT FOUND\n\r\n");
+			od_printf("\r\n\r\nNETMAIL DIR NOT FOUND\r\n\r\n");
 			od_exit(10,FALSE);
 		}
 
@@ -616,7 +608,7 @@ main(int argc,char *argv[]) {
 			IBBSInfo.nTotalSystems=255;
 
 		if(ibbs_i_mail) {
-			ny_disp_emu("\n\r`0##> Getting InterBBS Mail\n\r");
+			ny_disp_emu("\r\n`0##> Getting InterBBS Mail\r\n");
 			sprintf(IBBSInfo.szProgName, "#@NYG#%05d MAIL",ibbs_game_num);
 
 			justfile=ShareFileOpen(IBBS_MAIL_INDEX,"a+b");
@@ -633,11 +625,11 @@ main(int argc,char *argv[]) {
 
 	if(rip) {
 		od_control.user_ansi=TRUE;
-		od_disp_str("\n\r!|*|10000$SBAROFF$$HKEYOFF$|#|#|#\n\r");
-		od_control.od_no_time=(char *)"\n\r!|10000((Sorry, you have used up all your time for today::@OK))|#|#|#\n\r";
-		od_control.od_time_warning=(char *)"\n\r!|10000((Warning, only %d minute(s) remaining today!::@OK))|#|#|#\n\r";
-		od_control.od_inactivity_warning=(char *)"\n\r!|10000((Warning, inactivity timeout in %d minute(s)!::@OK))|#|#|#\n\r";
-		od_control.od_inactivity_timeout=(char *)"\n\r!|10000((Inactivity Timeout!::@OK))|#|#|#\n\r";
+		od_disp_str("\r\n!|*|10000$SBAROFF$$HKEYOFF$|#|#|#\r\n");
+		od_control.od_no_time=(char *)"\r\n!|10000((Sorry, you have used up all your time for today::@OK))|#|#|#\r\n";
+		od_control.od_time_warning=(char *)"\r\n!|10000((Warning, only %d minute(s) remaining today!::@OK))|#|#|#\r\n";
+		od_control.od_inactivity_warning=(char *)"\r\n!|10000((Warning, inactivity timeout in %d minute(s)!::@OK))|#|#|#\r\n";
+		od_control.od_inactivity_timeout=(char *)"\r\n!|10000((Inactivity Timeout!::@OK))|#|#|#\r\n";
 	}
 
 
@@ -646,25 +638,25 @@ main(int argc,char *argv[]) {
 		od_set_statusline(STATUS_NONE);
 		od_clr_scr();
 		ny_disp_emu("`@N`4ew `@Y`4ork `@2008 `%RESET `@U`4tility");
-		ny_disp_emu("\n\n\r`2Not all options may aply to you. If you are not in an `0InterBBS`2 game");
-		ny_disp_emu("\n\rand just wish to `0RESET`2 your game choose 1.");
+		ny_disp_emu("\r\n\r\n`2Not all options may aply to you. If you are not in an `0InterBBS`2 game");
+		ny_disp_emu("\r\nand just wish to `0RESET`2 your game choose 1.");
 
-		ny_disp_emu("\n\n\r`%1 `4- `@R`4eset `@T`4he `@G`4ame `@O`4nly `2(You will stay in an InterBBS game)");
-		ny_disp_emu("\n\r`%2 `4- `@G`4et `@O`4ut `@O`4f `@InterBBS `2(The game will `0NOT `2be RESET)");
-		ny_disp_emu("\n\r`%Q `4- `@Q`4uit `@T`4his `2(No RESETs)");
+		ny_disp_emu("\r\n\r\n`%1 `4- `@R`4eset `@T`4he `@G`4ame `@O`4nly `2(You will stay in an InterBBS game)");
+		ny_disp_emu("\r\n`%2 `4- `@G`4et `@O`4ut `@O`4f `@InterBBS `2(The game will `0NOT `2be RESET)");
+		ny_disp_emu("\r\n`%Q `4- `@Q`4uit `@T`4his `2(No RESETs)");
 
-		ny_disp_emu("\n\n\r`@Y`4our `@C`4hoice: `0");
+		ny_disp_emu("\r\n\r\n`@Y`4our `@C`4hoice: `0");
 		key=od_get_answer("12Q");
 		od_printf("%c",(char)key);
 		if(key=='1') {
-			ny_disp_emu("\n\n\r`@T`4he current game `%WILL `4be lost`%!");
-			ny_disp_emu("\n\n\r`@A`4re you sure you want to `%RESET `4(`@Y`4/`@N`4):");
+			ny_disp_emu("\r\n\r\n`@T`4he current game `%WILL `4be lost`%!");
+			ny_disp_emu("\r\n\r\n`@A`4re you sure you want to `%RESET `4(`@Y`4/`@N`4):");
 			key=od_get_answer("YN");
 
-			od_printf("%c\n\n\r",(char)key);
+			od_printf("%c\r\n\r\n",(char)key);
 
 			if(key=='Y') {
-				ny_disp_emu("`%Ignore any error messages following this\n\n\r");
+				ny_disp_emu("`%Ignore any error messages following this\r\n\r\n");
 				ch_flag_d();
 
 				ny_remove("u00?????.*");
@@ -685,16 +677,16 @@ main(int argc,char *argv[]) {
 				ny_remove(SENTLIST_FILENAME);
 			}
 		} else if(key=='2') {
-			ny_disp_emu("\n\n\r`@Y`4ou will be taken out of this InterBBS game!");
-			ny_disp_emu("\n\r`@M`4ake sure the operator bbs of this game has taken you out of the nodelist!");
-			ny_disp_emu("\n\r`@A`4nd turn the InterBBS keyword off in your .cfg file!");
-			ny_disp_emu("\n\n\r`@A`4re you sure you want to `%Get Local Only? `4(`@Y`4/`@N`4):");
+			ny_disp_emu("\r\n\r\n`@Y`4ou will be taken out of this InterBBS game!");
+			ny_disp_emu("\r\n\r\n`@M`4ake sure the operator bbs of this game has taken you out of the nodelist!");
+			ny_disp_emu("\r\n\r\n`@A`4nd turn the InterBBS keyword off in your .cfg file!");
+			ny_disp_emu("\r\n\r\n`@A`4re you sure you want to `%Get Local Only? `4(`@Y`4/`@N`4):");
 			key=od_get_answer("YN");
 
-			od_printf("%c\n\n\r",(char)key);
+			od_printf("%c\r\n\r\n",(char)key);
 
 			if(key=='Y') {
-				ny_disp_emu("`%Ignore any error messages following this\n\n\r");
+				ny_disp_emu("`%Ignore any error messages following this\r\n\r\n");
 				ch_game_d();
 
 				ny_remove(NODELIST_FILENAME);
@@ -739,7 +731,7 @@ main(int argc,char *argv[]) {
 		//(Xpert mode recomended for slow modems)
 		ny_line(269,1,0);
 		//Wanna start in Xpert, Regular or Novice mode (X/[R]/N)
-		key=od_get_answer("XRN\n\r");
+		key=od_get_answer("XRN\r\n");
 		if (key=='\n' || key=='\r')
 			key='R';
 		if (key=='N')
@@ -748,7 +740,7 @@ main(int argc,char *argv[]) {
 			expert=1;
 		if (key=='X')
 			expert=2;
-		od_printf("%c\n\r\n\r",key);
+		od_printf("%c\r\n\r\n",key);
 
 		if(*regptr==TRUE && reg_check==784)
 			od_exit(10,TRUE);
@@ -759,15 +751,15 @@ main(int argc,char *argv[]) {
 			od_send_file("intro");
 			ny_line(1,1,0);
 			//Smack [ENTER] to go on.
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		}
 	} else {
 		expert=0;
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		ny_clr_scr();
 		od_send_file("intro");
 		ny_line(1,1,0);
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 	}
 	if(rip)
 		ny_clr_scr();
@@ -810,7 +802,7 @@ main(int argc,char *argv[]) {
 
 	ch_flag_d();
 	if (single_node==FALSE && fexist(MAINTFLAG_FILENAME)) {
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		if(rip)
 			ny_clr_scr();
 		ny_send_menu(MAINT_RUN,"");
@@ -830,7 +822,7 @@ main(int argc,char *argv[]) {
 			/* the door after displaying an error message.                       */
 			if(rip)
 				ny_clr_scr();
-			od_printf("Unable to access user file. File may be locked or full.\n\r");
+			od_printf("Unable to access user file. File may be locked or full.\r\n");
 			WaitForEnter();
 			od_exit(1, FALSE);
 		}
@@ -882,7 +874,7 @@ main(int argc,char *argv[]) {
 				/* the door after displaying an error message.                       */
 				if(rip)
 					ny_clr_scr();
-				od_printf("Unable to access user file. File may be locked or full.\n\r");
+				od_printf("Unable to access user file. File may be locked or full.\r\n");
 				WaitForEnter();
 				od_exit(1, FALSE);
 			}
@@ -892,7 +884,7 @@ main(int argc,char *argv[]) {
 				/* the door after displaying an error message.                       */
 				if(rip)
 					ny_clr_scr();
-				od_printf("Unable to access user file. File may be locked or full.\n\r");
+				od_printf("Unable to access user file. File may be locked or full.\r\n");
 				WaitForEnter();
 				od_exit(1, FALSE);
 			}
@@ -989,7 +981,7 @@ main(int argc,char *argv[]) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					od_exit(10,FALSE);
 				} else {
 					sprintf(numstr,"u%07d.bfa",nCurrentUserNumber);
@@ -1043,7 +1035,7 @@ main(int argc,char *argv[]) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					od_exit(10,FALSE);
 				}
 
@@ -1054,7 +1046,7 @@ main(int argc,char *argv[]) {
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					od_exit(10,FALSE);
 				}
 
@@ -1106,7 +1098,7 @@ main(int argc,char *argv[]) {
 						if(!rip)
 							WaitForEnter();
 						else
-							od_get_answer("\n\r");
+							od_get_answer("\r\n");
 					} else if (cur_user.days_not_on>0) { //user gets 10 points for not getting his ass kicked
 						ny_line(398,1,1);
 						//          od_printf("\n\r\n\r`bright red`Y`red`ou get 10 points for not having yer ass kicked...\n\r\n\r");
@@ -1114,7 +1106,7 @@ main(int argc,char *argv[]) {
 						if(!rip)
 							WaitForEnter();
 						else
-							od_get_answer("\n\r");
+							od_get_answer("\r\n");
 
 					}
 
@@ -1185,7 +1177,7 @@ main(int argc,char *argv[]) {
 				oneframe=TRUE;
 				/*display users stats*/
 				if(rip) {
-					od_disp_str("\n\r");
+					od_disp_str("\r\n");
 					od_send_file("frame.rip");
 					od_send_file("frame1.rip");
 				}
@@ -1301,7 +1293,7 @@ ny_pers(unsigned char message) {
 		cprintf(" by Franz  ");
 
 		textcolor(BLACK);
-		cprintf("%s\n\r",ver);
+		cprintf("%s\r\n",ver);
 
 		clreol();
 		textcolor(LIGHTBLUE);
@@ -1351,7 +1343,7 @@ ny_pers(unsigned char message) {
 		else
 			cprintf("Female");
 
-		cprintf("\n\r");
+		cprintf("\r\n");
 
 		clreol();
 		textcolor(WHITE);
@@ -1372,7 +1364,7 @@ ny_pers(unsigned char message) {
 
 		gotoxy(1,24);
 		clreol();
-		cprintf("  These are the personalities NY2008 supports:\n\r");
+		cprintf("  These are the personalities NY2008 supports:\r\n");
 
 		clreol();
 		textcolor(LIGHTBLUE);
@@ -1616,13 +1608,11 @@ ny_kernel(void) {
 		FILE *justfile;
 		static char numstr[35],numstr2[14];
 		INT16 intval,
-		INT16used,
 		battled_user = -1;
 
 		//if(0) {
 		/* This is terrible - ToDo */
-#ifndef ODPLAT_NIX
-
+#ifdef ODPLAT_DOS
 		fcloseall();
 #endif
 
@@ -1666,49 +1656,48 @@ ny_kernel(void) {
 			if(justfile != NULL) {
 				ny_fread(&intval,2,1,justfile);
 				fclose(justfile);
-			}
-			sprintf(numstr,"u%07d.fgg",nCurrentUserNumber);
-			if (fexist(numstr)) {
+				sprintf(numstr,"u%07d.fgg",nCurrentUserNumber);
+				if (fexist(numstr)) {
 
-				sprintf(numstr,"u%07d.fgg",intval);
-				justfile = ShareFileOpen(numstr,"wb");
+					sprintf(numstr,"u%07d.fgg",intval);
+					justfile = ShareFileOpen(numstr,"wb");
+					if(justfile != NULL)
+						fclose(justfile);
+					sprintf(numstr,"u%07d.atk",nCurrentUserNumber);
+					sprintf(numstr2,"u%07d.atk",intval);
+					rename(numstr,numstr2);
+				}
+
+				sprintf(numstr,"u%07d.chl",nCurrentUserNumber);
+				sprintf(numstr2,"u%07d.chl",intval);
+				rename(numstr,numstr2);
+
+				/*clean up*/
+				sprintf(numstr,"u%07d.*",nCurrentUserNumber);
+				ny_remove(numstr);
+
+				sprintf(numstr,"u%07d.fgc",nCurrentUserNumber);
+				justfile = ShareFileOpen(numstr, "wb");
+				if(justfile != NULL) {
+					ny_fwrite(&intval,2,1,justfile);
+					fclose(justfile);
+				}
+
+				nCurrentUserNumber=intval;
+
+				/* tady se musi zmenit vsechnt flagy......*/
+				sprintf(numstr,"u%07d.sts",nCurrentUserNumber);
+				justfile = ShareFileOpen(numstr, "wb");
+				if(justfile != NULL) {
+					ny_fwrite(&cur_user,sizeof(user_rec),1,justfile);
+					fclose(justfile);
+				}
+
+				sprintf(numstr,"u%07d.on",nCurrentUserNumber);
+				justfile = ShareFileOpen(numstr, "a+b");
 				if(justfile != NULL)
 					fclose(justfile);
-				sprintf(numstr,"u%07d.atk",nCurrentUserNumber);
-				sprintf(numstr2,"u%07d.atk",intval);
-				rename(numstr,numstr2);
 			}
-
-			sprintf(numstr,"u%07d.chl",nCurrentUserNumber);
-			sprintf(numstr2,"u%07d.chl",intval);
-			rename(numstr,numstr2);
-
-			/*clean up*/
-			sprintf(numstr,"u%07d.*",nCurrentUserNumber);
-			ny_remove(numstr);
-
-			sprintf(numstr,"u%07d.fgc",nCurrentUserNumber);
-			justfile = ShareFileOpen(numstr, "wb");
-			if(justfile != NULL) {
-				ny_fwrite(&intval,2,1,justfile);
-				fclose(justfile);
-			}
-
-			nCurrentUserNumber=intval;
-
-			/* tady se musi zmenit vsechnt flagy......*/
-			sprintf(numstr,"u%07d.sts",nCurrentUserNumber);
-			justfile = ShareFileOpen(numstr, "wb");
-			if(justfile != NULL) {
-				ny_fwrite(&cur_user,sizeof(user_rec),1,justfile);
-				fclose(justfile);
-			}
-
-			sprintf(numstr,"u%07d.on",nCurrentUserNumber);
-			justfile = ShareFileOpen(numstr, "a+b");
-			if(justfile != NULL)
-				fclose(justfile);
-
 		}
 		if(battled_user>=0) {
 			sprintf(numstr,"u%07d.bfa",battled_user);
@@ -1797,7 +1786,7 @@ fig_ker(void) //waiting for user not in middle of calcs or whatever
 				if(omg[0]==27 && intval==1 ) {
 					if(rip) {
 						ny_line(7,2,1);
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 					}
 					if(omg[1]<10) {
 						type=1;
@@ -1807,12 +1796,12 @@ fig_ker(void) //waiting for user not in middle of calcs or whatever
 							ny_disp_emu(nam);
 						} else {
 							ny_un_emu(nam);
-							od_printf("\n\r!|10000((%s",nam);
+							od_printf("\r\n!|10000((%s",nam);
 						}
 
 						ny_line(357 + omg[1],0,1);
 						if(rip)
-							od_get_answer("\n\r");
+							od_get_answer("\r\n");
 
 
 					} else {
@@ -1823,11 +1812,11 @@ fig_ker(void) //waiting for user not in middle of calcs or whatever
 							ny_disp_emu(nam);
 						} else {
 							ny_un_emu(nam);
-							od_printf("\n\r!|10000((%s",nam);
+							od_printf("\r\n!|10000((%s",nam);
 						}
 						ny_line(360 + omg[1]-10,0,1);
 						if(rip)
-							od_get_answer("\n\r");
+							od_get_answer("\r\n");
 
 					}
 				} else {
@@ -1835,9 +1824,9 @@ fig_ker(void) //waiting for user not in middle of calcs or whatever
 					if (intval==1) {
 						if(rip) {
 							scr_save();
-							od_disp_str("\n\r");
+							od_disp_str("\r\n");
 							od_send_file("texti.rip");
-							ny_disp_emu("`%You get a message!\n\r");
+							ny_disp_emu("`%You get a message!\r\n");
 						}
 
 						ny_disp_emu("`0");
@@ -1846,7 +1835,7 @@ fig_ker(void) //waiting for user not in middle of calcs or whatever
 							ny_line(8,0,0);
 							//          ny_disp_emu("   `9F`1rom: `@");
 							ny_disp_emu(nam);
-							od_printf("\n\r");
+							od_printf("\r\n");
 						}
 					}
 
@@ -1860,20 +1849,20 @@ fig_ker(void) //waiting for user not in middle of calcs or whatever
 
 		if(type==1) {
 			ny_line(359,0,0);
-			type=od_get_answer("YN\n\r");
+			type=od_get_answer("YN\r\n");
 			if(type=='\n' || type=='\r')
 				type='Y';
 			if(!rip)
-				od_printf("%c\n\r",type);
+				od_printf("%c\r\n",type);
 			else
-				od_disp_str("\n\r");
+				od_disp_str("\r\n");
 			if(type=='Y')
 				read_mail();
 			ch_flag_d();
 		} else if(rip==FALSE || type==0) {
 			ny_line(1,1,0);
 			od_kernal();
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		}
 
 		if(rip==FALSE || type==0)
@@ -1956,10 +1945,10 @@ wrt_sts(void) {
 			if(justfile != NULL) {
 				ny_fread(&cur_user.rank,2,1,justfile);
 				fclose(justfile);
+				ny_remove(numstr);
+				//      sprintf(numstr,"del u%07d.rnk",nCurrentUserNumber);
+				//      system(numstr);
 			}
-			ny_remove(numstr);
-			//      sprintf(numstr,"del u%07d.rnk",nCurrentUserNumber);
-			//      system(numstr);
 		}
 		sprintf(numstr,"u%07d.sts",nCurrentUserNumber);
 		justfile = ShareFileOpen(numstr, "w+b");
@@ -1986,7 +1975,7 @@ wrt_sts(void) {
 
 	ch_game_d();
 	scr_file=ShareFileOpen(SCR_FILENAME,"r+b");
-	if(justfile != NULL) {
+	if(scr_file != NULL) {
 		fseek(scr_file, (INT32)cur_user.rank * sizeof(scr_rec), SEEK_SET);
 		ny_fwrite(&rec, sizeof(scr_rec), 1, scr_file);
 		fclose(scr_file);
@@ -2014,7 +2003,7 @@ exit_ops(void) {
 
 	if(rip) {
 		ny_clr_scr();
-		od_disp_str("\n\r!|10000$SBARON$$HKEYON$|#|#|#\n\r");
+		od_disp_str("\r\n!|10000$SBARON$$HKEYON$|#|#|#\r\n");
 		od_control.user_screen_length=temp_len_stor;
 		od_control.user_rip=temp_rip_stor;
 		od_control.user_ansi=temp_avt_stor;
@@ -2030,11 +2019,11 @@ exit_ops(void) {
 	/*Print return message*/
 
 	if (registered) {
-		ny_disp_emu("\n\r\n\r`@R`4eturning you to `@");
+		ny_disp_emu("\r\n\r\n`@R`4eturning you to `@");
 		ny_disp_emu(od_control.system_name);
 		ny_disp_emu("`4...");
 	} else {
-		ny_disp_emu("\n\r\n\r`@R`4eturning you to `%UNREGISTERED BBS`4...\n\r");
+		ny_disp_emu("\r\n\r\n`@R`4eturning you to `%UNREGISTERED BBS`4...\r\n");
 	}
 
 	//od_set_statusline(STATUS_NONE);
@@ -2054,9 +2043,9 @@ exit_ops(void) {
 		if(justfile != NULL) {
 			ny_fread(&intval,2,1,justfile);
 			fclose(justfile);
+			sprintf(numstr,"u%07d.bfa",intval);
+			ny_remove(numstr);
 		}
-		sprintf(numstr,"u%07d.bfa",intval);
-		ny_remove(numstr);
 	}
 
 	sprintf(numstr,"u%07d.swp",nCurrentUserNumber);
@@ -2137,7 +2126,6 @@ Maintanance(void) {
 	FILE *scr_file;
 	FILE *justfile;
 	FILE *njustfile;
-	FILE *delfile;
 	char numstr[45],numstr2[14];
 	scr_rec scr_user;
 	user_rec urec;
@@ -2173,7 +2161,7 @@ Maintanance(void) {
 			ch_game_d();
 			if (fexist(LASTMAINT_FILENAME)) {
 				fpUserFile = ShareFileOpen(LASTMAINT_FILENAME, "r+b");
-				if(justfile != NULL) {
+				if(fpUserFile != NULL) {
 					ny_fread(&lastday, sizeof(date), 1, fpUserFile);
 					if (lastday.da_year==today.da_year && lastday.da_mon==today.da_mon && lastday.da_day==today.da_day) {
 						fclose(fpUserFile);
@@ -2303,12 +2291,12 @@ Maintanance(void) {
 						urec.alive=ALIVE;
 						urec.hitpoints=urec.maxhitpoints;
 						urec.days_in_hospital=0;
-						od_printf("### %s kicked out of the hospital\n\r",ny_un_emu(urec.name,numstr));
+						od_printf("### %s kicked out of the hospital\r\n",ny_un_emu(urec.name,numstr));
 					}
 					if (urec.rest_where!=NOWHERE) {
 						if (urec.hotel_paid_fer==0) {
 							urec.rest_where=NOWHERE;
-							od_printf("### %s was kicked out of the hotel\n\r",ny_un_emu(urec.name,numstr));
+							od_printf("### %s was kicked out of the hotel\r\n",ny_un_emu(urec.name,numstr));
 						} else {
 							urec.hotel_paid_fer--;
 						}
@@ -2384,7 +2372,7 @@ Maintanance(void) {
 
 					user_num_w++;
 				} else {
-					od_printf("### Deleting (%s)\n\r",ny_un_emu(urec.name,numstr));
+					od_printf("### Deleting (%s)\r\n",ny_un_emu(urec.name,numstr));
 					ny_remove(SENTLIST_FILENAME);
 					/*ch_game_d();
 					delfile=ShareFileOpen(DELUSER_FILENAME,"a+b");
@@ -2596,7 +2584,7 @@ ChangeOnlineRanks(void) {
 			strcpy(numstr,*fname);
 			numstr[0]='0';
 			numstr[8]=0;
-			sscanf(numstr,"%d",&intval);
+			sscanf(numstr,"%" SCNd16,&intval);
 			ch_game_d();
 			justfile=ShareFileOpen(USER_FILENAME,"rb");
 			if(justfile != NULL) {
@@ -2630,7 +2618,6 @@ CrashRecovery(void) {
 	char numstr[36];
 	scr_rec scr_user;
 	user_rec urec;
-	INT16 intval;
 	INT16 user_num=0;
 	//  struct ffblk ffblk;
 
@@ -2730,7 +2717,6 @@ CrashRecovery(void) {
 void
 SortScrFile(INT16 usr,INT16 max) // pebble sorting of scorefile
 {
-	FILE *justfile;
 	FILE *scr_file;
 	FILE *fpUserFile;
 	FILE *njustfile;
@@ -2758,9 +2744,9 @@ SortScrFile(INT16 usr,INT16 max) // pebble sorting of scorefile
 					fseek(scr_file, (INT32)cnt * sizeof(scr_rec), SEEK_SET);
 					if (ny_fread(&rec[1], sizeof(scr_rec), 1, scr_file)!=1) {
 						/* This is terrible - ToDo */
-	#ifndef ODPLAT_NIX
+#ifdef ODPLAT_DOS
 						fcloseall();
-	#endif
+#endif
 
 						return;
 					}
@@ -2911,7 +2897,6 @@ SortScrFile(INT16 usr,INT16 max) // pebble sorting of scorefile
 void
 SortScrFileB(INT16 usr) // pebble sorting of scorefile
 {
-	FILE *justfile;
 	FILE *scr_file;
 	FILE *fpUserFile;
 	FILE *njustfile;
@@ -3027,7 +3012,7 @@ change_info(void) {
 
 
 	do {
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		ny_clr_scr();
 
 		ny_line(28,0,2);
@@ -3049,11 +3034,11 @@ change_info(void) {
 
 		key=ny_get_answer("123Q");
 
-		od_printf("%c\n\r\n\r",key);
+		od_printf("%c\r\n\r\n",key);
 		if (key=='1') {
 			do {
 
-				od_printf("\n\r");
+				od_printf("\r\n");
 				if(rip)
 					od_send_file("texti.rip");
 				ny_send_menu(NEW_NAME,"");
@@ -3077,7 +3062,7 @@ change_info(void) {
 		}
 		if (key=='2') {
 
-			od_printf("\n\r");
+			od_printf("\r\n");
 			if(rip)
 				od_send_file("texti.rip");
 			ny_send_menu(NEW_WIN,"");
@@ -3087,7 +3072,7 @@ change_info(void) {
 			wrt_sts();
 		} else if (key=='3') {
 
-			od_printf("\n\r");
+			od_printf("\r\n");
 			if(rip)
 				od_send_file("texti.rip");
 			ny_send_menu(NEW_LOOSE,"");
@@ -3104,11 +3089,10 @@ change_info(void) {
 
 char entry_menu(void) {
 	char key;
-	char allowed[]="ELYNQ\n\r";
+	char allowed[]="ELYNQ\r\n";
 	FILE *justfile;
 	INT16 intval;
 	static int unreg_sign=TRUE;
-	char numstr[100];
 
 
 	key=0;
@@ -3116,7 +3100,7 @@ char entry_menu(void) {
 
 
 	od_clear_keybuffer();               // Clear any pending keys in buffer
-	od_printf("\n\r\n\r");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();                       // Clear screen
 
 	ny_send_menu(ENTRY_1,"");
@@ -3132,7 +3116,7 @@ char entry_menu(void) {
 	if(!rip) {
 		//od_printf("`blue`Thx fer the help Martin ...\n\r");
 		if(clean_mode==TRUE)
-			ny_disp_emu("`@C`4lean mode `@ON\n\r");
+			ny_disp_emu("`@C`4lean mode `@ON\r\n");
 		//   else if(clean_mode==666)
 		//     ny_disp_emu("`@X`4tra Fucking Dirty mode `@ON\n\r");
 		if (registered==TRUE) {
@@ -3144,28 +3128,28 @@ char entry_menu(void) {
 			       ny_line(405,0,0);//`@T`4hanks to `0");
 			       ny_disp_emu(rec_credit);
 			     } */
-			ny_disp_emu("`@!\n\r");
+			ny_disp_emu("`@!\r\n");
 		} else {
 			if(unreg_sign==TRUE) {
-				ny_disp_emu("`%UNREGISTERED!\n\rPausing For 5 Seconds `#.");
+				ny_disp_emu("`%UNREGISTERED!\r\nPausing For 5 Seconds `#.");
 				unreg_sign=FALSE;
-				sleep(1);
+				od_sleep(1000);
 				ny_kernel();
 				od_printf(".");
-				sleep(1);
+				od_sleep(1000);
 				ny_kernel();
 				od_printf(".");
-				sleep(1);
+				od_sleep(1000);
 				ny_kernel();
 				od_printf(".");
-				sleep(1);
+				od_sleep(1000);
 				ny_kernel();
 				od_printf(".");
 				ny_kernel();
-				sleep(1);
+				od_sleep(1000);
 				od_printf("\r");
 			} else {
-				ny_disp_emu("`%UNREGISTERED!\n\r");
+				ny_disp_emu("`%UNREGISTERED!\r\n");
 				ny_line(404,0,1);
 			}
 		}
@@ -3175,12 +3159,12 @@ char entry_menu(void) {
 		if(justfile != NULL) {
 			ny_fread(&intval,2,1,justfile);
 			fclose(justfile);
+			ny_line(34,0,0);
+			//   ny_disp_emu("`$T`6his game has been running for `0");
+			od_printf("%d",intval);
+			ny_line(35,0,1);
+			//   ny_disp_emu("`6 days!\n\r");
 		}
-		ny_line(34,0,0);
-		//   ny_disp_emu("`$T`6his game has been running for `0");
-		od_printf("%d",intval);
-		ny_line(35,0,1);
-		//   ny_disp_emu("`6 days!\n\r");
 
 		key=ny_send_menu(ENTRY_2,allowed);
 	}
@@ -3197,15 +3181,15 @@ char entry_menu(void) {
 
 	if(key==0) {
 		if(rip)
-			od_disp_str("\n\r!|10000$HKEYON$|#|#|#\n\r");
+			od_disp_str("\r\n!|10000$HKEYON$|#|#|#\r\n");
 		key= ny_get_answer(allowed);
 		if(rip)
-			od_disp_str("\n\r!|10000$HKEYOFF$|#|#|#\n\r");
+			od_disp_str("\r\n!|10000$HKEYOFF$|#|#|#\r\n");
 	}
 	if(!rip)
-		od_printf("%c\n\r",key);
+		od_printf("%c\r\n",key);
 	else
-		od_disp_str("\n\r");
+		od_disp_str("\r\n");
 
 	return key;
 }
@@ -3229,12 +3213,12 @@ DisplayStats(void) {
 	wrt_sts(); //just in case write the stats file
 
 	if(oneframe==FALSE || rip==FALSE) {
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		ny_clr_scr();
 		if(rip)
 			od_send_file("frame1.rip");
 	} else {
-		od_disp_str("\n\r!|e|#|#|#\n\r  \b\b");
+		od_disp_str("\r\n!|e|#|#|#\r\n  \b\b");
 	}
 	//ny_line(38,0,0);
 	ny_stat_line(0,0,0);
@@ -3296,7 +3280,7 @@ DisplayStats(void) {
 	//ny_line(272,0,0);
 	ny_stat_line(15,0,0);
 	//  od_printf("`bright red`M`red`oney `bright red`I`red`n `bright red`H`red`and: `bright green`
-	od_printf("%s\n\r",D_Num(cur_user.money));
+	od_printf("%s\r\n",D_Num(cur_user.money));
 	//ny_line(273,0,0);
 	ny_stat_line(16,0,0);
 	//  od_printf("`bright red`F`red`ights: `bright green`
@@ -3305,7 +3289,7 @@ DisplayStats(void) {
 	//ny_line(274,0,0);
 	ny_stat_line(17,0,0);
 	//  od_printf("`bright red`M`red`oney `bright red`I`red`n `bright red`B`red`ank: `bright green`
-	od_printf("%s\n\r",D_Num(cur_user.bank));
+	od_printf("%s\r\n",D_Num(cur_user.bank));
 	//ny_line(275,0,0);
 	ny_stat_line(18,0,0);
 	//  od_printf("`bright red`H`red`it `bright red`P`red`oints: `bright green`
@@ -3319,7 +3303,7 @@ DisplayStats(void) {
 	//ny_line(277,0,0);
 	ny_stat_line(20,0,0);
 	//  od_printf("`bright red`H`red`ungry: `bright green`
-	od_printf("%d%c\n\r", (INT16)cur_user.hunger,37);
+	od_printf("%d%c\r\n", (INT16)cur_user.hunger,37);
 	//ny_line(278,0,0);
 	ny_stat_line(21,0,0);
 	//  ny_disp_emu("`@A`4rm: ");
@@ -3349,14 +3333,14 @@ DisplayStats(void) {
 	//ny_line(284,0,0);
 	ny_stat_line(27,0,0);
 	//  od_printf("`bright red`I`red`nfected: `bright green`
-	od_printf("%d%c\n\r", (INT16)cur_user.std_percent,37);
+	od_printf("%d%c\r\n", (INT16)cur_user.std_percent,37);
 	//ny_line(285,0,0);
 	ny_stat_line(28,0,0);
 	//  od_printf("`bright red`C`red`ondoms: `bright green`
-	od_printf("%d\n\r", (INT16)cur_user.condoms);
+	od_printf("%d\r\n", (INT16)cur_user.condoms);
 	//ny_line(433,0,0);
 	ny_stat_line(29,0,0);
-	od_printf("%d\n\r", (INT16)cur_user.rocks);
+	od_printf("%d\r\n", (INT16)cur_user.rocks);
 	//ny_line(434,0,0);
 	ny_stat_line(30,0,0);
 	od_printf("%d ", (INT16)cur_user.throwing_ability);
@@ -3365,7 +3349,7 @@ DisplayStats(void) {
 	od_printf("%d ", (INT16)cur_user.kick_ability);
 	//ny_line(436,0,0);
 	ny_stat_line(32,0,0);
-	od_printf("%d\n\r", (INT16)cur_user.punch_ability);
+	od_printf("%d\r\n", (INT16)cur_user.punch_ability);
 	//ny_line(286,0,0);
 	ny_stat_line(33,0,0);
 	//  ny_disp_emu("`@D`4rug: `0");
@@ -3373,21 +3357,21 @@ DisplayStats(void) {
 	//ny_line(287,1,0);
 	ny_stat_line(34,1,0);
 	//  od_printf("\n\r`bright red`H`red`its: `bright green`
-	od_printf("%-6d\n\r",(INT16)cur_user.drug_hits);
+	od_printf("%-6d\r\n",(INT16)cur_user.drug_hits);
 	//ny_line(288,0,0);
 	ny_stat_line(35,0,0);
 	//  od_printf("`bright red`H`red`igh: `bright green`
-	od_printf("%d%c\n\r",(INT16)cur_user.drug_high,37);
+	od_printf("%d%c\r\n",(INT16)cur_user.drug_high,37);
 	if (cur_user.drug>=COKE) {
 		//ny_line(289,0,0);
 		ny_stat_line(36,0,0);
 		//    od_printf("`bright red`A`red`ddicted: `bright green`
-		od_printf("%d%c\n\r", (INT16)cur_user.drug_addiction,37);
+		od_printf("%d%c\r\n", (INT16)cur_user.drug_addiction,37);
 		if (cur_user.drug_addiction>0) {
 			//ny_line(290,0,0);
 			ny_stat_line(37,0,0);
 			//od_printf("`bright red`D`red`ays `bright red`S`red`ince `bright red`L`red`ast `bright red`H`red`it: `bright green`
-			od_printf("%d\n\r",(INT16)cur_user.drug_days_since);
+			od_printf("%d\r\n",(INT16)cur_user.drug_days_since);
 		}
 	}
 	if(cur_user.rest_where!=NOWHERE) {
@@ -3426,7 +3410,7 @@ Die(INT16 diecode) {
 	cur_user.alive=DEAD;
 	wrt_sts();
 
-	od_printf("\n\r\n\r");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();
 	ny_line(40,0,2);
 	//  ny_disp_emu("\n\r\n\r`@W`4ell it's end of the road for ya....yer `%DEAD`4!");
@@ -3602,7 +3586,6 @@ MakeFiles(void) {
 	FILE *ascii_file;
 	FILE *ansi_file;
 	scr_rec user_scr;
-	INT32 filepos;
 	INT16 cnt;
 
 	//od_printf("\n\r\n\r");
@@ -3698,7 +3681,7 @@ PlInfo(scr_rec *user_scr, INT16 cnt) {
 	}
 	if (user_scr->online==TRUE)
 		ny_disp_emu("`%ON");
-	od_disp_str("\n\r");
+	od_disp_str("\r\n");
 }
 
 
@@ -3713,7 +3696,7 @@ ListPlayers(void) {
 	char key;
 	INT16 nonstop=FALSE;
 
-	od_printf("\n\r\n\r");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();
 
 
@@ -3742,7 +3725,7 @@ ListPlayers(void) {
 				fclose(scr_file);
 
 				ny_disp_emu("`%More (Y/n/=)");
-				key=ny_get_answer("YN=\n\r");
+				key=ny_get_answer("YN=\r\n");
 				od_disp_str("\r            \r");
 				//if(key=='\n' || key=='\r') key='Y';
 				//od_putch(key);
@@ -3775,11 +3758,11 @@ ListPlayersS(sex_type psex) {
 	FILE *scr_file;
 	scr_rec user_scr;
 	INT32 filepos;
-	INT16 cnt,rnk;
+	INT16 cnt;
 	INT16 nonstop=FALSE;
 	char key;
 
-	od_printf("\n\r\n\r");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();
 
 	if(rip) {
@@ -3793,7 +3776,6 @@ ListPlayersS(sex_type psex) {
 	ch_game_d();
 	if ((scr_file=ShareFileOpen(SCR_FILENAME,"rb"))!=NULL) {
 		cnt=5;
-		rnk=1;
 
 		while (scr_file != NULL && ny_fread(&user_scr, sizeof(scr_rec), 1, scr_file) == 1) {
 			if (user_scr.sex==psex) {
@@ -3806,7 +3788,7 @@ ListPlayersS(sex_type psex) {
 
 
 					ny_disp_emu("`%More (Y/n/=)");
-					key=ny_get_answer("YN=\n\r");
+					key=ny_get_answer("YN=\r\n");
 					od_disp_str("\r            \r");
 					//if(key=='\n' || key=='\r') key='Y';
 					//od_putch(key);
@@ -3824,7 +3806,6 @@ ListPlayersS(sex_type psex) {
 						fseek(scr_file,filepos,SEEK_SET);
 				}
 			}
-			rnk++;
 		}
 		if(scr_file != NULL)
 			fclose(scr_file);
@@ -3844,12 +3825,12 @@ ListPlayersA() {
 	FILE *scr_file;
 	scr_rec user_scr;
 	INT32 filepos;
-	INT16 cnt,rnk;
+	INT16 cnt;
 	INT16 nonstop=FALSE;
 	char key;
 
 
-	od_printf("\n\r\n\r");
+	od_printf("\r\n\r\n");
 	ny_clr_scr();
 	if(rip)
 		od_send_file("frame.rip");
@@ -3862,7 +3843,6 @@ ListPlayersA() {
 	ch_game_d();
 	if ((scr_file=ShareFileOpen(SCR_FILENAME,"rb"))!=NULL) {
 		cnt=5;
-		rnk=1;
 		while (scr_file != NULL && ny_fread(&user_scr, sizeof(scr_rec), 1, scr_file) == 1) {
 			if (user_scr.alive==ALIVE) {
 
@@ -3875,7 +3855,7 @@ ListPlayersA() {
 					fclose(scr_file);
 
 					ny_disp_emu("`%More (Y/n/=)");
-					key=ny_get_answer("YN=\n\r");
+					key=ny_get_answer("YN=\r\n");
 					od_printf("\r            \r");
 					//if(key=='\n' || key=='\r') key='Y';
 					//od_putch(key);
@@ -3893,7 +3873,6 @@ ListPlayersA() {
 						fseek(scr_file,filepos,SEEK_SET);
 				}
 			}
-			rnk++;
 		}
 		if(scr_file != NULL)
 			fclose(scr_file);
@@ -3914,20 +3893,20 @@ WhosOnline(void) {
 	FILE *scr_file;
 	scr_rec user_scr;
 	INT32 filepos;
-	INT16 cnt,rnk;
+	INT16 cnt;
 	INT16 nonstop=FALSE;
 	char key;
 
 
 	if(oneframe==FALSE || rip==FALSE) {
-		od_printf("\n\r\n");
+		od_printf("\r\n\r\n");
 		ny_clr_scr();
 		if(rip)
 			od_send_file("frame.rip");
 		if(rip)
 			od_send_file("frame3.rip");
 	} else {
-		od_disp_str("\n\r!|e\n\r");
+		od_disp_str("\r\n!|e\r\n");
 		od_send_file("frame3.rip");
 	}
 
@@ -3939,7 +3918,6 @@ WhosOnline(void) {
 	ch_game_d();
 	if ((scr_file=ShareFileOpen(SCR_FILENAME,"rb"))!=NULL) {
 		cnt=5;
-		rnk=1;
 		while (scr_file != NULL && ny_fread(&user_scr, sizeof(scr_rec), 1, scr_file) == 1) {
 			if (user_scr.online==TRUE) {
 				PlInfo(&user_scr,cnt);
@@ -3950,7 +3928,7 @@ WhosOnline(void) {
 					fclose(scr_file);
 
 					ny_disp_emu("`%More (Y/n/=)");
-					key=ny_get_answer("YN=\n\r");
+					key=ny_get_answer("YN=\r\n");
 					od_printf("\r            \r");
 					//if(key=='\n' || key=='\r') key='Y';
 					//od_putch(key);
@@ -3968,7 +3946,6 @@ WhosOnline(void) {
 						fseek(scr_file,filepos,SEEK_SET);
 				}
 			}
-			rnk++;
 		}
 		if(scr_file != NULL)
 			fclose(scr_file);
@@ -4025,7 +4002,7 @@ EnterStreet(void) {
 	}
 
 	if (cur_user.hunger==100) {   //user dying of hunger
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		ny_clr_scr();
 		//if(rip) od_send_file("frame.rip");
 
@@ -4036,11 +4013,11 @@ EnterStreet(void) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		food_ops();
 	}
 	else if (cur_user.hunger>=50) {  //user 50% or more hungry....cmon eat
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		ny_clr_scr();
 
 		//if(rip) od_send_file("frame.rip");
@@ -4051,7 +4028,7 @@ EnterStreet(void) {
 		if(!rip)
 			WaitForEnter();
 		else
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		food_ops();
 	}
 
@@ -4060,15 +4037,15 @@ EnterStreet(void) {
 	do {
 		//key=central_park(); //display menu and get the key pressed
 		if(!ibbs)
-			key=callmenu("SCPFDAGUMIXEBHYWLRNOKQ!?\n\r",CENTRAL_PARK,342,FALSE);
+			key=callmenu("SCPFDAGUMIXEBHYWLRNOKQ!?\r\n",CENTRAL_PARK,342,FALSE);
 		else
-			key=callmenu("SCPFDAGUMIXEBHYWLRNO*KQ!?\n\r",CENTRAL_PARK_IB,342,FALSE);
+			key=callmenu("SCPFDAGUMIXEBHYWLRNO*KQ!?\r\n",CENTRAL_PARK_IB,342,FALSE);
 		while (expert>0 && key=='?') {
 			expert+=20;
 			if(!ibbs)
-				key=callmenu("SCPFDAGUMIXEBHYWLRNOKQ!?\n\r",CENTRAL_PARK,342,FALSE);
+				key=callmenu("SCPFDAGUMIXEBHYWLRNOKQ!?\r\n",CENTRAL_PARK,342,FALSE);
 			else
-				key=callmenu("SCPFDAGUMIXEBHYWLRNO*KQ!?\n\r",CENTRAL_PARK_IB,342,FALSE);
+				key=callmenu("SCPFDAGUMIXEBHYWLRNO*KQ!?\r\n",CENTRAL_PARK_IB,342,FALSE);
 			expert-=20;
 		}
 
@@ -4174,9 +4151,9 @@ EnterStreet(void) {
 				ny_line(54,2,0);
 				key=ny_get_answer("YN");
 				if(!rip)
-					od_printf("%c\n\r",key);
+					od_printf("%c\r\n",key);
 				else if(key=='Y') {
-					od_disp_str("\n\r!|10000((*REALLY want to DIE?::y@Yes,n@No))|#|#|#\n\r");
+					od_disp_str("\r\n!|10000((*REALLY want to DIE?::y@Yes,n@No))|#|#|#\r\n");
 					key=od_get_answer("YN");
 				}
 				if (key=='Y')
@@ -4186,7 +4163,7 @@ EnterStreet(void) {
 				break;
 			case 'I':
 				if(registered==FALSE) {
-					ny_disp_emu("`%\n\r\n\rUNREGISTERED!!!\n\r\n\rCannot do this!!!\n\r");
+					ny_disp_emu("`%\r\n\r\nUNREGISTERED!!!\r\n\r\nCannot do this!!!\r\n");
 					WaitForEnter();
 				} else {
 					if(expert==3)
@@ -4197,7 +4174,7 @@ EnterStreet(void) {
 				}
 				break;
 			case '!':               //instructions
-				od_printf("\n\r\n\r");
+				od_printf("\r\n\r\n");
 				ny_clr_scr();
 				ch_game_d();
 				if(rip)
@@ -4214,7 +4191,7 @@ EnterStreet(void) {
 				break;
 			case 'C': // copfights
 				if(registered==FALSE) {
-					ny_disp_emu("`%\n\r\n\rUNREGISTERED!!!\n\r\n\rCannot do this!!!\n\r");
+					ny_disp_emu("`%\r\n\r\nUNREGISTERED!!!\r\n\r\nCannot do this!!!\r\n");
 					WaitForEnter();
 				} else {
 					if(expert==3)
@@ -4257,9 +4234,9 @@ EnterStreet(void) {
 				ny_line(57,2,0);
 				key=ny_get_answer("YN");
 				if(!rip)
-					od_printf("%c\n\r",key);
+					od_printf("%c\r\n",key);
 				else
-					od_disp_str("\n\r");
+					od_disp_str("\r\n");
 				if (key=='Y')
 					key='Q';
 				else if(!rip)
@@ -4272,7 +4249,7 @@ EnterStreet(void) {
 					if(!rip)
 						WaitForEnter();
 					else {
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 						no_rip_m=1;
 					}
 				} else {
@@ -4280,19 +4257,19 @@ EnterStreet(void) {
 					//                  od_printf("`bright red`\n\r\n\rR`red`eally do it? (`bright red`Y`red`/`bright red`N`red`)");
 					key=ny_get_answer("YN");
 					if(!rip)
-						od_printf("%c\n\r",key);
+						od_printf("%c\r\n",key);
 					else
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 					if (key=='Y') {
 						cur_user.alive=DEAD;
 						wrt_sts();
-						od_printf("\n\r\n\r");
+						od_printf("\r\n\r\n");
 						ny_clr_scr();
 						od_send_file("win");
 						ny_line(1,1,0);
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 
-						od_printf("\n\r\n\r");
+						od_printf("\r\n\r\n");
 						ny_clr_scr();
 
 						ny_line(295,2,0);
@@ -4308,7 +4285,7 @@ EnterStreet(void) {
 						if(ibbs)
 							AddBestPlayerIB();
 						ny_line(1,1,0);
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 						od_exit(10,FALSE);
 					}
 				}
@@ -4361,7 +4338,7 @@ char *D_Num(INT32 num) {
 		str[0]='-';
 	}
 
-	sprintf(temp,"%ld",num);
+	sprintf(temp,"%" PRId32,num);
 
 	len=strlen(temp);
 
@@ -4389,7 +4366,7 @@ char *D_Num(DWORD num) {
 	char temp[14];
 	INT16 cnt,cnt2,len;
 
-	sprintf(temp,"%lu",num);
+	sprintf(temp,"%" PRIu32,num);
 
 	len=strlen(temp);
 
@@ -4436,11 +4413,11 @@ points_raise(DWORD raise) {       // when is time for next level      0   1    2
 			od_send_file("frame1.rip");
 		}
 
-		ny_disp_emu("`%\n\r\n\rUNREGISTERED!!!\n\r\n\r");
-		ny_disp_emu("You reached 30,000 points, and this game is `$UNREGISTERED`%!\n\r");
-		ny_disp_emu("This nag screen will appear to you every time your points raise\n\r");
-		ny_disp_emu("And you can't get into level 10, until the game is registered\n\r");
-		ny_disp_emu("Otherwise nothing will happen, please tell the sysop to register the game!\n\r");
+		ny_disp_emu("`%\r\n\r\nUNREGISTERED!!!\r\n\r\n");
+		ny_disp_emu("You reached 30,000 points, and this game is `$UNREGISTERED`%!\r\n");
+		ny_disp_emu("This nag screen will appear to you every time your points raise\r\n");
+		ny_disp_emu("And you can't get into level 10, until the game is registered\r\n");
+		ny_disp_emu("Otherwise nothing will happen, please tell the sysop to register the game!\r\n");
 		WaitForEnter();
 		if(rip)
 			scr_res();
@@ -4486,15 +4463,15 @@ points_raise(DWORD raise) {       // when is time for next level      0   1    2
 		ny_line(60,2,0);
 		//Yer level has been raised to level
 		if(!rip) {
-			od_printf("%d`red`!\n\r",(INT16)cur_user.level);
+			od_printf("%d`red`!\r\n",(INT16)cur_user.level);
 			ny_line(437,1,0);
 			key=od_get_answer("TKP");
-			od_printf("%c\n\r",key);
+			od_printf("%c\r\n",key);
 		} else {
 			od_printf("%d\\!::^M",(INT16)cur_user.level);
 			od_putch('@');
-			od_printf("OK))|#|#|#\n\r");
-			od_get_answer("\n\r");
+			od_printf("OK))|#|#|#\r\n");
+			od_get_answer("\r\n");
 			ny_line(437,1,1);
 			key=od_get_answer("TKP");
 		}
@@ -4576,7 +4553,7 @@ callmenu(const char allowed[],menu_t menu,INT16 menu_line,char figst) {
 
 	if(no_rip_m!=1 || !rip) {
 
-		od_printf("\n\r\n\r");
+		od_printf("\r\n\r\n");
 		if (expert!=2 && expert!=3)
 			ny_clr_scr();
 
@@ -4588,10 +4565,10 @@ callmenu(const char allowed[],menu_t menu,INT16 menu_line,char figst) {
 			ny_line(37,0,0);
 			//od_printf("`bright green`%s`bright blue`E`blue`nter `bright blue`Y`blue`er `bright blue`C`blue`ommand (%d mins)`bright blue`>",allowed,od_control.caller_timelimit);
 			if(rip)
-				od_disp_str("\n\r!|10000$HKEYON$|#|#|#\n\r");
+				od_disp_str("\r\n!|10000$HKEYON$|#|#|#\r\n");
 			key=ny_get_answer(allowed);
 			if(rip)
-				od_disp_str("\n\r!|10000$HKEYOFF$|#|#|#\n\r");
+				od_disp_str("\r\n!|10000$HKEYOFF$|#|#|#\r\n");
 		} else {
 			if(figst && !rip) {
 				ny_line(menu_line,0,2);
@@ -4607,18 +4584,18 @@ callmenu(const char allowed[],menu_t menu,INT16 menu_line,char figst) {
 
 			if (key==0) {
 				if(rip)
-					od_disp_str("\n\r!|10000$HKEYON$|#|#|#\n\r");
+					od_disp_str("\r\n!|10000$HKEYON$|#|#|#\r\n");
 				key= ny_get_answer(allowed);
 				if(rip)
-					od_disp_str("\n\r!|10000$HKEYOFF$|#|#|#\n\r");
+					od_disp_str("\r\n!|10000$HKEYOFF$|#|#|#\r\n");
 			}
 
 		}
 	} else {
 		no_rip_m=0;
-		od_disp_str("\n\r!|10000$HKEYON$|#|#|#\n\r");
+		od_disp_str("\r\n!|10000$HKEYON$|#|#|#\r\n");
 		key=ny_get_answer(allowed);
-		od_disp_str("\n\r!|10000$HKEYOFF$|#|#|#\n\r");
+		od_disp_str("\r\n!|10000$HKEYOFF$|#|#|#\r\n");
 	}
 	if (menu!=CENTRAL_PARK && menu!=CENTRAL_PARK_IB && (key=='\n' || key=='\r'))
 		key='Q';
@@ -4639,10 +4616,10 @@ rest_ops(void) {
 	DWORD max;
 
 	do {
-		key=callmenu("CERYQ?\n\r",REST,343,FALSE);
+		key=callmenu("CERYQ?\r\n",REST,343,FALSE);
 		while (expert>0 && key=='?') {
 			expert+=10;
-			key=callmenu("CERYQ?\n\r",REST,343,FALSE);
+			key=callmenu("CERYQ?\r\n",REST,343,FALSE);
 			expert-=10;
 		}
 
@@ -4663,9 +4640,9 @@ rest_ops(void) {
 						od_printf("E`green`xpensive `bright green`H`green`otel");
 				} else {
 					if (cur_user.rest_where==REG_HOTEL)
-						od_printf(" Regular Hotel::@OK))|#|#|#\n\r");
+						od_printf(" Regular Hotel::@OK))|#|#|#\r\n");
 					else if (cur_user.rest_where==EXP_HOTEL)
-						od_printf(" Expensive Hotel::@OK))|#|#|#\n\r");
+						od_printf(" Expensive Hotel::@OK))|#|#|#\r\n");
 				}
 
 				ny_line(62,2,0);
@@ -4691,13 +4668,13 @@ Cheap_motel_ok:
 				if (max>255)
 					max=255;
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				ny_line(299,2,0);
 				//            od_printf("\n\r`bright red`Y`red`ou can afford `bright red`
 				od_printf(D_Num(max));
 				ny_line(300,0,2);
 				if(rip) {
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 					//          `red` days!\n\r",D_Num(max));
 					od_send_file("input.rip");
 				}
@@ -4727,12 +4704,12 @@ Cheap_motel_ok:
 							if (cur_user.rest_where==MOTEL)
 								od_printf("Cheap Motel::@OK))|#|#|#");
 							else if (cur_user.rest_where==REG_HOTEL)
-								od_printf(" Regular Hotel::@OK))|#|#|#\n\r");
+								od_printf(" Regular Hotel::@OK))|#|#|#\r\n");
 							else if (cur_user.rest_where==EXP_HOTEL)
-								od_printf(" Expensive Hotel::@OK))|#|#|#\n\r");
+								od_printf(" Expensive Hotel::@OK))|#|#|#\r\n");
 						}
 
-						od_printf("\n\r");
+						od_printf("\r\n");
 						if (rip==FALSE)
 							WaitForEnter();
 					}
@@ -4764,7 +4741,7 @@ Cheap_motel_ok:
 					if (cur_user.rest_where==MOTEL)
 						od_printf("Cheap Motel::@OK))|#|#|#");
 					else if (cur_user.rest_where==EXP_HOTEL)
-						od_printf(" Expensive Hotel::@OK))|#|#|#\n\r");
+						od_printf(" Expensive Hotel::@OK))|#|#|#\r\n");
 				}
 				ny_line(62,2,0);
 				//od_printf(" `bright red`W`red`anna check outta there (no money back)? (`bright red`Y`red`/`bright red`N`red`)");
@@ -4786,7 +4763,7 @@ Reg_hotel_ok:
 				//            od_printf("\n\r\n\r`bright red`I`red`t will cost ya `bright red`%d`red` per day.",intval);// still wanna do it(`bright red`Y`red`/`bright red`N`red`)",intval);
 				max=cur_user.money/intval;
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				if (max>255)
 					max=255;
 				ny_line(299,2,0);
@@ -4794,7 +4771,7 @@ Reg_hotel_ok:
 				ny_line(300,0,2);
 				//            od_printf("\n\r`bright red`Y`red`ou can afford `bright red`%s`red` days!\n\r",D_Num(max));
 				if(rip) {
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 					od_send_file("input.rip");
 				}
 				ny_line(301,0,0);
@@ -4823,13 +4800,13 @@ Reg_hotel_ok:
 							if (cur_user.rest_where==MOTEL)
 								od_printf("Cheap Motel::@OK))|#|#|#");
 							else if (cur_user.rest_where==REG_HOTEL)
-								od_printf(" Regular Hotel::@OK))|#|#|#\n\r");
+								od_printf(" Regular Hotel::@OK))|#|#|#\r\n");
 							else if (cur_user.rest_where==EXP_HOTEL)
-								od_printf(" Expensive Hotel::@OK))|#|#|#\n\r");
+								od_printf(" Expensive Hotel::@OK))|#|#|#\r\n");
 						}
 
 
-						od_printf("\n\r");
+						od_printf("\r\n");
 						if (rip==FALSE)
 							WaitForEnter();
 					}
@@ -4861,7 +4838,7 @@ Reg_hotel_ok:
 					if (cur_user.rest_where==MOTEL)
 						od_printf("Cheap Motel::@OK))|#|#|#");
 					else if (cur_user.rest_where==REG_HOTEL)
-						od_printf(" Regular Hotel::@OK))|#|#|#\n\r");
+						od_printf(" Regular Hotel::@OK))|#|#|#\r\n");
 				}
 				ny_line(62,2,0);
 				//od_printf(" `bright red`W`red`anna check outta there (no money back)? (`bright red`Y`red`/`bright red`N`red`)");
@@ -4883,14 +4860,14 @@ Exp_hotel_ok:
 				//od_printf("\n\r\n\r`bright red`I`red`t will cost ya `bright red`%d`red` per day.",intval);// still wanna do it(`bright red`Y`red`/`bright red`N`red`)",intval);
 				max=cur_user.money/intval;
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				if (max>255)
 					max=255;
 				ny_line(299,2,0);
 				od_printf(D_Num(max));
 				ny_line(300,0,2);
 				if(rip) {
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 					//od_printf("\n\r`bright red`Y`red`ou can afford `bright red`%s`red` days!\n\r",D_Num(max));
 					od_send_file("input.rip");
 				}
@@ -4921,11 +4898,11 @@ Exp_hotel_ok:
 							if (cur_user.rest_where==MOTEL)
 								od_printf("Cheap Motel::@OK))|#|#|#");
 							else if (cur_user.rest_where==REG_HOTEL)
-								od_printf(" Regular Hotel::@OK))|#|#|#\n\r");
+								od_printf(" Regular Hotel::@OK))|#|#|#\r\n");
 							else if (cur_user.rest_where==EXP_HOTEL)
-								od_printf(" Expensive Hotel::@OK))|#|#|#\n\r");
+								od_printf(" Expensive Hotel::@OK))|#|#|#\r\n");
 						}
-						od_printf("\n\r");
+						od_printf("\r\n");
 
 						if (rip==FALSE)
 							WaitForEnter();
@@ -4961,7 +4938,7 @@ DisplayBest(void) {
 	if (fexist(BESTTEN_FILENAME)) {
 		justfile=ShareFileOpen(BESTTEN_FILENAME,"rb");
 		if(justfile != NULL) {
-			od_printf("\n\r\n\r");
+			od_printf("\r\n\r\n");
 			ny_clr_scr();
 			if(rip)
 				od_send_file("frame.rip");
@@ -4975,7 +4952,7 @@ DisplayBest(void) {
 			while(ny_fread(&best_rec,sizeof(best_rec),1,justfile)==1) {
 				od_printf("`bright red`%-2d       `bright green`",cnt);
 				ny_disp_emu(best_rec.name,25);
-				od_printf(" `bright red`%s\n\r",D_Num(best_rec.points));
+				od_printf(" `bright red`%s\r\n",D_Num(best_rec.points));
 				cnt++;
 			}
 			//    od_printf("\n\r");
@@ -4986,7 +4963,7 @@ DisplayBest(void) {
 		}
 		ny_line(1,1,0);
 		//    ny_disp_emu("\n\r`@Smack [ENTER] to go on.");
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 	}
 }
 
@@ -4995,20 +4972,18 @@ DisplayBestIB(void) {
 	//  ffblk ffblk;
 	ibbs_best_rec_type best_rec;
 	FILE *justfile;
-	INT16 cnt;
 
 	ch_game_d();
 	if (fexist(IBBS_BESTTEN_FILENAME)) {
 		justfile=ShareFileOpen(IBBS_BESTTEN_FILENAME,"rb");
 		if(justfile != NULL) {
-			od_printf("\n\r\n\r");
+			od_printf("\r\n\r\n");
 			ny_clr_scr();
 			if(rip)
 				od_send_file("frame.rip");
 			if(rip)
 				od_send_file("frame1.rip");
 			ny_send_menu(TEN_BEST_IBBS,"");
-			cnt=1;
 			/*    od_printf("\n\r`bright red`T`red`en `bright red`B`red`est ... `bright red`W`red`inners\n\r\n\r");
 		    	od_printf("`bright blue`-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-\n\r");
 		    	od_printf("`cyan`Rank:    Name:                     Points:");*/
@@ -5020,8 +4995,7 @@ DisplayBestIB(void) {
 				od_printf(" `bright red`%-13s ",D_Num(best_rec.points));
 				od_set_attrib(0x02);
 				ny_disp_emu(LocationOf(best_rec.location));
-				od_disp_str("\n\r");
-				cnt++;
+				od_disp_str("\r\n");
 			}
 			//    od_printf("\n\r");
 			ny_line(399,0,1);
@@ -5031,7 +5005,7 @@ DisplayBestIB(void) {
 		}
 		ny_line(1,1,0);
 		//    ny_disp_emu("\n\r`@Smack [ENTER] to go on.");
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 	}
 }
 
@@ -5082,7 +5056,7 @@ AddBestPlayer(void) {
 
 					//        WaitForEnter();
 					if(rip)
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 				return;
 			}
@@ -5102,7 +5076,7 @@ AddBestPlayer(void) {
 				//od_printf("\n\r\n\r`bright red`Y`red`ou made the `bright`BEST`red` list.\n\r");
 
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 			return;
 		} else {
@@ -5113,7 +5087,7 @@ AddBestPlayer(void) {
 
 				//    WaitForEnter();
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 			return;
 		}
@@ -5128,10 +5102,10 @@ AddBestPlayer(void) {
 		ny_line(302,2,1);
 		//    od_printf("\n\r\n\r`bright red`Y`red`ou made the `bright`BEST`red` list.\n\r
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(304,0,1);
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 	}
 	//`bright red`A`red`ctually ya were the first to do it.\n\r");
 
@@ -5199,7 +5173,7 @@ AddBestPlayerIB(void) {
 
 				//      WaitForEnter();
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 				return;
 			}
 			cnt++;
@@ -5217,7 +5191,7 @@ AddBestPlayerIB(void) {
 			//od_printf("\n\r\n\r`bright red`Y`red`ou made the `bright`BEST`red` list.\n\r");
 
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return;
 		} else {
 
@@ -5226,7 +5200,7 @@ AddBestPlayerIB(void) {
 
 			//  WaitForEnter();
 			if(rip)
-				od_get_answer("\n\r");
+				od_get_answer("\r\n");
 			return;
 		}
 	}
@@ -5239,10 +5213,10 @@ AddBestPlayerIB(void) {
 	ny_line(302,2,1);
 	//  od_printf("\n\r\n\r`bright red`Y`red`ou made the `bright`BEST`red` list.\n\r
 	if(rip)
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 	ny_line(304,0,1);
 	if(rip)
-		od_get_answer("\n\r");
+		od_get_answer("\r\n");
 	//`bright red`A`red`ctually ya were the first to do it.\n\r");
 
 	// WaitForEnter();
@@ -5294,7 +5268,7 @@ AddBestPlayerInIB(char *name,DWORD points) {
 
 					//        WaitForEnter();
 					if(rip)
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 				return;
 			}
@@ -5316,7 +5290,7 @@ AddBestPlayerInIB(char *name,DWORD points) {
 				//od_printf("\n\r\n\r`bright red`Y`red`ou made the `bright`BEST`red` list.\n\r");
 
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 			return;
 		} else {
@@ -5327,7 +5301,7 @@ AddBestPlayerInIB(char *name,DWORD points) {
 
 				//    WaitForEnter();
 				if(rip)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 			return;
 		}
@@ -5342,11 +5316,11 @@ AddBestPlayerInIB(char *name,DWORD points) {
 		ny_line(302,2,1);
 		//    od_printf("\n\r\n\r`bright red`Y`red`ou made the `bright`BEST`red` list.\n\r
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 		ny_line(304,0,1);
 		//Actually ya were the first to do it.
 		if(rip)
-			od_get_answer("\n\r");
+			od_get_answer("\r\n");
 	}
 	return;
 }
@@ -5390,10 +5364,10 @@ mail_ops(void) {
 	line[0]=0;
 
 	do {
-		key=callmenu("SAROCQ?\n\r",MAIL,344,FALSE);
+		key=callmenu("SAROCQ?\r\n",MAIL,344,FALSE);
 		while (expert>0 && key=='?') {
 			expert+=10;
-			key=callmenu("SAROCQ?\n\r",MAIL,344,FALSE);
+			key=callmenu("SAROCQ?\r\n",MAIL,344,FALSE);
 			expert-=10;
 		}
 
@@ -5403,7 +5377,7 @@ mail_ops(void) {
 			WaitForEnter();
 		} else if (key=='C') {
 
-			od_printf("\n\r\n\r");
+			od_printf("\r\n\r\n");
 			if(rip) {
 				od_send_file("frame.rip");
 				od_send_file("frame1.rip");
@@ -5461,7 +5435,7 @@ mail_ops(void) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			} else if (hand[0]!=0) {
 				if (urec.sex!=cur_user.sex && cur_user.sex_today>0) {
 
@@ -5476,9 +5450,9 @@ mail_ops(void) {
 
 					key=ny_get_answer("YN");
 					if(!rip)
-						od_printf("%c\n\r",key);
+						od_printf("%c\r\n",key);
 					else
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 					if (key=='Y') {
 						if (cur_user.sex_today<=0) {
 
@@ -5488,8 +5462,8 @@ mail_ops(void) {
 							if(!rip)
 								WaitForEnter();
 							else
-								od_get_answer("\n\r");
-							od_printf("\n\r");
+								od_get_answer("\r\n");
+							od_printf("\r\n");
 						} else {
 							mail_idx.flirt=1;
 							cur_user.sex_today--;
@@ -5583,7 +5557,7 @@ mail_ops(void) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 		} else if (key=='R') {
 			read_mail();
@@ -5608,7 +5582,7 @@ mail_ops(void) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 		} else if (key=='O') {
 			if (single_node==TRUE) {
@@ -5617,7 +5591,7 @@ mail_ops(void) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			} else {
 
 				if(rip)
@@ -5627,7 +5601,7 @@ mail_ops(void) {
 
 				od_input_str(hand,24,' ',255);
 				ny_un_emu(hand);
-				od_printf("\n\r");
+				od_printf("\r\n");
 				unum=0;
 				if (hand[0]!=0) {
 					do {
@@ -5656,7 +5630,7 @@ ask_online_again:
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				} else if (hand[0]!=0) {
 
 					ny_line(313,2,0);
@@ -5681,7 +5655,7 @@ ask_online_again:
 					if(!rip)
 						WaitForEnter();
 					else
-						od_get_answer("\n\r");
+						od_get_answer("\r\n");
 				}
 			}
 		}
@@ -5740,7 +5714,7 @@ read_mail(void) {
 			ny_line(318,0,0);
 			//To:
 			ny_disp_emu(mail_idx.recver);
-			od_printf("\n\r");
+			od_printf("\r\n");
 			cnt=0;
 			cnt2=2;
 			if (mail_idx.flirt<=998) {
@@ -5754,11 +5728,11 @@ read_mail(void) {
 						if (cnt<mail_idx.afterquote) {
 							ny_disp_emu("`9>`2");
 							ny_disp_emu(line);
-							od_printf("\n\r");
+							od_printf("\r\n");
 						} else {
 							od_set_attrib(0x0a); //bright green
 							ny_disp_emu(line);
-							od_printf("\n\r");
+							od_printf("\r\n");
 						}
 						cnt++;
 						cnt2++;
@@ -5766,7 +5740,7 @@ read_mail(void) {
 							fclose(justfile);
 
 							ny_disp_emu("`%More (Y/n/=)");
-							key=ny_get_answer("YN=\n\r");
+							key=ny_get_answer("YN=\r\n");
 							ny_disp_emu("\r            \r");
 							cnt2=1;
 							if(key=='N')
@@ -5786,14 +5760,14 @@ read_mail(void) {
 
 				if (mail_idx.flirt==1) {
 
-					ny_disp_emu("\n\r`@");
+					ny_disp_emu("\r\n`@");
 					ny_disp_emu(mail_idx.sender);
 					ny_line(319,0,0);
 					//wants to have sex with ya Ok?
 					ny_line(320,1,0);
 					//[O]=OK (sex) R=reply D=delete I=ignore >
 
-					key=ny_get_answer("ORDI\n\r");
+					key=ny_get_answer("ORDI\r\n");
 					if (key=='\n' || key=='\r')
 						key='O';
 				} else {
@@ -5801,14 +5775,14 @@ read_mail(void) {
 					ny_line(321,1,0);
 					//R=reply [D]=delete I=ignore >
 
-					key=ny_get_answer("RDI\n\r");
+					key=ny_get_answer("RDI\r\n");
 					if (key=='\n' || key=='\r')
 						key='D';
 				}
-				od_printf("%c\n\r",key);
+				od_printf("%c\r\n",key);
 			} else if (mail_idx.flirt==999) {
 
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(mail_idx.sender);
 				ny_line(322,0,1);
 				//agreed and had sex with ya ...
@@ -5828,7 +5802,7 @@ read_mail(void) {
 				key=-1;
 			} else if (mail_idx.flirt==1000) {
 
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(mail_idx.sender);
 				ny_line(323,0,1);
 				//raped you!!
@@ -5846,7 +5820,7 @@ read_mail(void) {
 				key=-1;
 			} else if (mail_idx.flirt==1001) {
 
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(mail_idx.sender);
 				ny_line(324,0,1);
 				//defeated you!!
@@ -5875,7 +5849,7 @@ read_mail(void) {
 					mon=med;
 
 
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(mail_idx.sender);
 				ny_line(419,0,0);
 				od_printf("%s",D_Num(mon));
@@ -5909,7 +5883,7 @@ read_mail(void) {
 					fclose(justfile);
 				}
 				if(key=='D' && rip==TRUE)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 			if (key=='O') {
 				/*sex with playeres goes here*/
@@ -5934,7 +5908,7 @@ read_mail(void) {
 					ny_line(327,2,0);
 					//You just had sex with
 					ny_disp_emu(mail_idx.sender);
-					ny_disp_emu("`4 ...\n\r");
+					ny_disp_emu("`4 ...\r\n");
 
 					cur_user.since_got_laid=0;
 					cur_user.sex_today--;
@@ -6016,9 +5990,9 @@ found_the_guy:
 
 					key=ny_get_answer("YN");
 					if(!rip)
-						od_printf("%c\n\r",key);
+						od_printf("%c\r\n",key);
 					else
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 					if (key=='Y') {
 						if (cur_user.sex_today<=0) {
 
@@ -6026,7 +6000,7 @@ found_the_guy:
 							//You already used up all your sex turns today ...
 
 							WaitForEnter();
-							od_printf("\n\r");
+							od_printf("\r\n");
 						} else {
 							mail_idx.flirt=1;
 							cur_user.sex_today--;
@@ -6039,9 +6013,9 @@ found_the_guy:
 
 				key=ny_get_answer("YN");
 				if(!rip)
-					od_printf("%c\n\r",key);
+					od_printf("%c\r\n",key);
 				else
-					od_disp_str("\n\r");
+					od_disp_str("\r\n");
 				ch_flag_d();
 				sprintf(numstr,"u%07d.tmg",nCurrentUserNumber);
 				njustfile=ShareFileOpen(numstr,"wb");
@@ -6061,7 +6035,7 @@ found_the_guy:
 								ny_fwrite(&line,80,1,njustfile);
 								ny_disp_emu("`9>`2");
 								ny_disp_emu(line);
-								ny_disp_emu("\n\r");
+								ny_disp_emu("\r\n");
 								cnt++;
 							}
 							fclose(justfile);
@@ -6080,7 +6054,7 @@ found_the_guy:
 				}
 				if (line[1]=='s' || line[1]=='S') {
 					ny_line(135,0,1);
-					//        od_printf("\b\b`bright red`S`red`aving...\n\r");
+					//        od_printf("\b\b`bright red`S`red`aving...\r\n");
 					cnt+=mail_idx.afterquote;
 					mail_idx.length=cnt;
 					strcpy(mail_idx.recver,mail_idx.sender);
@@ -6164,7 +6138,7 @@ found_the_guy_2:
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 		}
 	} while (intval==1);
@@ -6233,7 +6207,7 @@ read_ibmail(void) {
 			ny_line(318,0,0);
 			//ny_disp_emu("  `@T`4o: `0");
 			ny_disp_emu(ibmail.recver);
-			od_printf("\n\r");
+			od_printf("\r\n");
 			cnt=0;
 			//      cnt2=2;
 			if (ibmail.flirt<=998) {
@@ -6241,7 +6215,7 @@ read_ibmail(void) {
 				while (cnt<ibmail.quote_length && cnt<10) {
 					ny_disp_emu("`9>`2");
 					ny_disp_emu(ibmail.lines[cnt]);
-					od_printf("\n\r");
+					od_printf("\r\n");
 					cnt++;
 				}
 				cnt=0;
@@ -6249,12 +6223,12 @@ read_ibmail(void) {
 					//od_printf("`bright green`");
 					od_set_attrib(0x0a);
 					ny_disp_emu(ibmail.lines[cnt+ibmail.quote_length]);
-					od_printf("\n\r");
+					od_printf("\r\n");
 					cnt++;
 				}
 				if (ibmail.flirt==1) {
 
-					ny_disp_emu("\n\r`@");
+					ny_disp_emu("\r\n`@");
 					ny_disp_emu(ibmail.sender);
 					//      od_printf("\n\r`bright red`%s`red`
 					ny_line(319,0,0);
@@ -6262,7 +6236,7 @@ read_ibmail(void) {
 					ny_line(320,1,0);
 					//od_printf("\n\r`bright blue`[O]`red`=OK (sex) `bright blue`R`red`=reply `bright blue`D`red`=delete `bright blue`I`red`=ignore `bright blue`>"); //S`red`=stop `bright blue` >");
 
-					key=ny_get_answer("ORDI\n\r");
+					key=ny_get_answer("ORDI\r\n");
 					if (key=='\n' || key=='\r')
 						key='O';
 				} else {
@@ -6270,14 +6244,14 @@ read_ibmail(void) {
 					ny_line(321,1,0);
 					//        od_printf("\n\r`bright blue`R`red`=reply `bright blue`[D]`red`=delete `bright blue`I`red`=ignore `bright blue`>"); //S`red`=stop `bright blue`>");
 
-					key=ny_get_answer("RDI\n\r");
+					key=ny_get_answer("RDI\r\n");
 					if (key=='\n' || key=='\r')
 						key='D';
 				}
-				od_printf("%c\n\r",key);
+				od_printf("%c\r\n",key);
 			} else if (ibmail.flirt==999) {
 
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(ibmail.sender);
 				od_printf(" `dark green`(%s)",LocationOf(ibmail.node_s));
 				ny_line(322,0,1);
@@ -6299,7 +6273,7 @@ read_ibmail(void) {
 
 				if(xp_random(2)==0) {
 					if(xp_random(2)==0) {
-						ny_disp_emu("\n\r`@");
+						ny_disp_emu("\r\n`@");
 						ny_disp_emu(ibmail.sender);
 						od_printf(" `dark green`(%s)",LocationOf(ibmail.node_s));
 						ny_line(458,0,1);
@@ -6323,7 +6297,7 @@ read_ibmail(void) {
 
 				if(xp_random(3)==0) {
 					if(xp_random(2)==0) {
-						ny_disp_emu("\n\r`@");
+						ny_disp_emu("\r\n`@");
 						ny_disp_emu(ibmail.sender);
 						od_printf(" `dark green`(%s)",LocationOf(ibmail.node_s));
 						ny_line(463,0,1);
@@ -6347,7 +6321,7 @@ read_ibmail(void) {
 				}
 				WaitForEnter();
 			} else if (ibmail.flirt==1004) {
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(ibmail.sender);
 				od_printf(" `dark green`(%s)",LocationOf(ibmail.node_s));
 				ny_line(461,0,2);
@@ -6378,7 +6352,7 @@ read_ibmail(void) {
 				if (med<=cur_user.money)
 					mon=med;
 
-				ny_disp_emu("\n\r`@");
+				ny_disp_emu("\r\n`@");
 				ny_disp_emu(ibmail.sender);
 				od_printf(" `dark green`(%s)",LocationOf(ibmail.node_s));
 				ny_line(419,0,0);
@@ -6415,7 +6389,7 @@ read_ibmail(void) {
 				}
 
 				if(key=='D' && rip==TRUE)
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 			if (key=='O') {
 				/*sex with playeres goes here*/
@@ -6441,7 +6415,7 @@ read_ibmail(void) {
 					//od_printf("\n\r\n\r`bright red`Y`red`ou just had sex with `bright red`
 					ny_disp_emu(ibmail.sender);
 					od_printf(" `dark green`(%s)",LocationOf(ibmail.node_s));
-					ny_disp_emu("`4 ...\n\r");
+					ny_disp_emu("`4 ...\r\n");
 
 					cur_user.since_got_laid=0;
 					cur_user.sex_today--;
@@ -6489,9 +6463,9 @@ read_ibmail(void) {
 
 					key=ny_get_answer("YN");
 					if(!rip)
-						od_printf("%c\n\r",key);
+						od_printf("%c\r\n",key);
 					else
-						od_disp_str("\n\r");
+						od_disp_str("\r\n");
 					if (key=='Y') {
 						if (cur_user.sex_today<=0) {
 
@@ -6499,7 +6473,7 @@ read_ibmail(void) {
 							//od_printf("\n\r\n\r`bright`You already used up all your sex turns today ...\n\r");
 
 							WaitForEnter();
-							od_printf("\n\r");
+							od_printf("\r\n");
 						} else {
 							ibmail.flirt=1;
 							cur_user.sex_today--;
@@ -6512,9 +6486,9 @@ read_ibmail(void) {
 
 				key=ny_get_answer("YN");
 				if(!rip)
-					od_printf("%c\n\r",key);
+					od_printf("%c\r\n",key);
 				else
-					od_disp_str("\n\r");
+					od_disp_str("\r\n");
 
 				if(key=='Y') {
 					if(ibmail.quote_length>0) {
@@ -6527,7 +6501,7 @@ read_ibmail(void) {
 					while (cnt<ibmail.length) {
 						ny_disp_emu("`9>`2");
 						ny_disp_emu(ibmail.lines[cnt]);
-						ny_disp_emu("\n\r");
+						ny_disp_emu("\r\n");
 						cnt++;
 					}
 				} else {
@@ -6576,7 +6550,7 @@ read_ibmail(void) {
 				if(!rip)
 					WaitForEnter();
 				else
-					od_get_answer("\n\r");
+					od_get_answer("\r\n");
 			}
 		}
 	} while (intval==1);

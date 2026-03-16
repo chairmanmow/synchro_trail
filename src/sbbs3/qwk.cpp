@@ -295,8 +295,7 @@ void sbbs_t::qwk_success(uint msgcnt, char bi, char prepack)
 	}
 
 	if (!prepack) {
-		SAFECOPY(str, "downloaded QWK packet");
-		logline("D-", str);
+		logline("D-", "downloaded QWK packet");
 		posts_read += msgcnt;
 
 		snprintf(str, sizeof str, "%sfile/%04u.qwk", cfg.data_dir, useron.number);
@@ -369,8 +368,10 @@ void sbbs_t::qwk_success(uint msgcnt, char bi, char prepack)
 			smb_unlockmsghdr(&smb, &msg);
 		}
 
-		if (deleted && cfg.sys_misc & SM_DELEMAIL)
+		if (deleted && (cfg.sys_misc & SM_DELEMAIL) && smb_lock(&smb) == SMB_SUCCESS) {
 			delmail(useron.number, MAIL_YOUR);
+			smb_unlock(&smb);
+		}
 		smb_close(&smb);
 		if (msgs)
 			free(mail);
@@ -485,6 +486,9 @@ void sbbs_t::qwk_sec()
 				term->add_hotspot('U');
 				bprintf(text[QWKSettingsUtf8]
 				        , useron.qwk & QWK_UTF8 ? text[Yes]:text[No]);
+				term->add_hotspot('G');
+				bprintf(text[QWKSettingsMIME]
+				        , useron.qwk & QWK_MIME ? text[Yes]:text[No]);
 				term->add_hotspot('W');
 				bprintf(text[QWKSettingsWrapText]
 				        , useron.qwk & QWK_WORDWRAP ? text[Yes]:text[No]);
@@ -493,7 +497,7 @@ void sbbs_t::qwk_sec()
 				        , useron.qwk & QWK_EXT ? text[Yes]:text[No]);
 				bputs(text[QWKSettingsWhich]);
 				term->add_hotspot('Q');
-				ch = (char)getkeys("AEDFHIOPQTUYMNCXZVW", 0);
+				ch = (char)getkeys("AEDFGHIOPQTUYMNCXZVW", 0);
 				if (sys_status & SS_ABORT || !ch || ch == 'Q' || !online)
 					break;
 				switch (ch) {
@@ -573,6 +577,9 @@ void sbbs_t::qwk_sec()
 						break;
 					case 'W':
 						useron.qwk ^= QWK_WORDWRAP;
+						break;
+					case 'G':
+						useron.qwk ^= QWK_MIME;
 						break;
 					case 'X':   /* QWKE */
 						useron.qwk ^= QWK_EXT;
@@ -733,8 +740,7 @@ void sbbs_t::qwkcfgline(char *buf, int subnum)
 				y = l - (x * 1000);
 				if (x >= usrgrps || y >= usrsubs[x]) {
 					bprintf(text[QWKInvalidConferenceN], l);
-					snprintf(str, sizeof str, "Invalid conference number %u", l);
-					logline(LOG_NOTICE, "Q!", str);
+					llprintf(LOG_NOTICE, "Q!", "Invalid conference number %u", l);
 				}
 				else
 					subscan[usrsub[x][y]].cfg &= ~SUB_CFG_NSCAN;
@@ -1082,12 +1088,10 @@ bool sbbs_t::qwk_vote(str_list_t ini, const char* section, smb_net_type_t net_ty
 		return false;
 	}
 	if (hubnum == -1 && strnicmp(section, "poll:", 5) == 0) {
-		char str[256];
 		uint reason = CantPostOnSub;
 		if (!user_can_post(&cfg, smb.subnum, &useron, &client, &reason)) {
 			bputs(text[reason]);
-			SAFEPRINTF2(str, "QWK Poll not allowed, reason = %u (%s)", reason, text[reason]);
-			logline(LOG_NOTICE, "P!", str);
+			llprintf(LOG_NOTICE, "P!", "QWK Poll not allowed, reason = %u (%s)", reason, text[reason]);
 			return false;
 		}
 	}

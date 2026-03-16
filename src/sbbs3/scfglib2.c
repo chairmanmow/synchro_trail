@@ -33,7 +33,7 @@ static void read_dir_defaults_cfg(scfg_t* cfg, str_list_t ini, dir_t* dir)
 	SAFECOPY(dir->upload_sem, iniGetString(ini, NULL, "upload_sem", "", value));
 	SAFECOPY(dir->exts, iniGetString(ini, NULL, "extensions", "", value));
 
-	dir->maxfiles = iniGetUInt16(ini, NULL, "max_files", 0);
+	dir->maxfiles = iniGetUInteger(ini, NULL, "max_files", 0);
 	dir->misc = iniGetInt32(ini, NULL, "settings",  DEFAULT_DIR_OPTIONS);
 	dir->seqdev = iniGetUInteger(ini, NULL, "seq_dev", 0);
 	dir->sort = iniGetUInteger(ini, NULL, "sort", 0);
@@ -72,7 +72,7 @@ bool read_file_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	cfg->leech_sec = iniGetUInt16(ini, ROOT_SECTION, "leech_sec", 0);
 	cfg->file_misc = iniGetInt32(ini, ROOT_SECTION, "settings", 0);
 	cfg->filename_maxlen = iniGetIntInRange(ini, ROOT_SECTION, "filename_maxlen", 8, SMB_FILEIDX_NAMELEN, UINT16_MAX);
-	SAFECOPY(str, iniGetString(ini, ROOT_SECTION, "supported_archive_formats", "zip,z7,tgz", value));
+	SAFECOPY(str, iniGetString(ini, ROOT_SECTION, "supported_archive_formats", "zip,7z,tgz", value));
 	cfg->supported_archive_formats = strListSplit(NULL, str, " ,");
 
 	named_str_list_t** sections = iniParseSections(ini);
@@ -512,6 +512,7 @@ bool read_xtrn_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 
 		SAFECOPY(cfg->event[i]->code, name + 6);
 		SAFECOPY(cfg->event[i]->cmd, iniGetString(section, NULL, "cmd", "", value));
+		SAFECOPY(cfg->event[i]->xtrn, iniGetString(section, NULL, "xtrn", "", value));
 		cfg->event[i]->days = (uint8_t)iniGetUInteger(section, NULL, "days", 0);
 		cfg->event[i]->time = iniGetUInteger(section, NULL, "time", 0);
 		cfg->event[i]->node = iniGetUInteger(section, NULL, "node_num", 0);
@@ -780,7 +781,7 @@ char *u32toaf(uint32_t l, char *str)
 /* Returns the actual attribute code from a string of ATTR characters       */
 /* Ignores any Ctrl-A characters in the string (as attrstr() used to)       */
 /****************************************************************************/
-uint strtoattr(const char *str, char** endptr)
+uint strtoattr(scfg_t* cfg, const char *str, char** endptr)
 {
 	int   atr;
 	ulong l = 0;
@@ -847,6 +848,12 @@ uint strtoattr(const char *str, char** endptr)
 			case '7':   /* White Background */
 				atr = (uchar)((atr & 0x8f) | BG_LIGHTGRAY);
 				break;
+			case 'U':	/* User Theme */
+				atr = cfg->color[str[l] == 'u' ? clr_userlow : clr_userhigh];
+				break;
+			case 'V':	/* Mnemonics */
+				atr = cfg->color[str[l] == 'v' ? clr_mnelow : clr_mnehigh];
+				break;
 			default:
 				if (endptr != NULL)
 					*endptr = (char*)str + l;
@@ -859,11 +866,11 @@ uint strtoattr(const char *str, char** endptr)
 	return atr;
 }
 
-void parse_attr_str_list(uint* list, int max, const char* str)
+void parse_attr_str_list(scfg_t* cfg, uint* list, int max, const char* str)
 {
 	char* endptr = NULL;
 	for (int i = 0; i < max && *str != '\0'; ++i) {
-		list[i] = strtoattr(str, &endptr);
+		list[i] = strtoattr(cfg, str, &endptr);
 		if (*endptr == '\0')
 			break;
 		str = endptr + 1;

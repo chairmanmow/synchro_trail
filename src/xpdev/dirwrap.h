@@ -165,7 +165,8 @@ extern "C" {
 
 #if defined(__unix__)
 	#define PATH_DELIM			'/'
-	#define IS_PATH_DELIM(x)	(x=='/')
+	#define IS_PATH_DELIM(x)	((x) == '/')
+	#define IS_ROOT_DIR(p)      ((p)[0] == '/' && (p)[1] == '\0')
 
 	/* These may be pre-defined in paths.h (BSD) */
 	#ifndef _PATH_TMP
@@ -178,7 +179,8 @@ extern "C" {
 #else /* MS-DOS based OS */
 
 	#define PATH_DELIM			'\\'
-	#define IS_PATH_DELIM(x)	((x)=='/' || (x)=='\\')
+	#define IS_PATH_DELIM(x)	((x) == '/' || (x) == '\\')
+	#define IS_ROOT_DIR(p)      (((p)[0] == '/' && (p)[1] == '\0') || ((p)[0] != '\0' && (p)[1] == ':' && IS_PATH_DELIM((p)[2]) && (p)[3] == '\0'))
 	#define _PATH_TMP			getenv("TEMP")
 	#define _PATH_DEVNULL		"NUL"
 
@@ -230,7 +232,7 @@ DLLEXPORT char*		backslash(char* path);
 DLLEXPORT bool 		wildmatch(const char *fname, const char *spec, bool path, bool case_sensitive);
 DLLEXPORT bool 		wildmatchi(const char *fname, const char *spec, bool path);
 DLLEXPORT int		mkpath(const char* path);
-
+DLLEXPORT bool      paths_are_same(const char* path1, const char* path2);
 
 #if defined(__unix__)
 DLLEXPORT void _splitpath(const char *path, char *drive, char *dir, 

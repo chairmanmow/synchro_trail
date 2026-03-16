@@ -37,6 +37,8 @@ typedef struct {
 #define WEB_DEFAULT_MAX_CGI_INACTIVITY  120 /* seconds */
 	uint max_concurrent_connections;
 #define WEB_DEFAULT_MAX_CON_CONN        10  /* 0=unlimited */
+	uint max_requests_per_period;
+	uint request_rate_limit_period;
 	uint16_t port;
 	uint16_t tls_port;
 	str_list_t interfaces;
@@ -60,6 +62,8 @@ typedef struct {
 	char default_auth_list[128];
 	uint outbuf_drain_timeout;
 	char login_info_save[INI_MAX_VALUE_LEN];
+	char proxy_ip_header[128];
+	char custom_log_fmt[INI_MAX_VALUE_LEN];
 
 	/* JavaScript operating parameters */
 	js_startup_t js;
@@ -90,6 +94,7 @@ static struct init_field web_init_fields[] = {
 #define WEB_OPT_HSTS_SAFE           (1 << 8)  /* All URLs can be served over HTTPS*/
 #define WEB_OPT_NO_HTTP             (1 << 9)  /* Disable HTTP support				*/
 #define WEB_OPT_NO_FILEBASE         (1 << 10) /* Disable FileBase support			*/
+#define WEB_OPT_ONE_HTTP_LOG        (1 << 12) /* Don't use requested-host in log filenames */
 
 /* web_startup_t.options bits that require re-init/recycle when changed */
 #define WEB_INIT_OPTS   (WEB_OPT_HTTP_LOGGING)
@@ -107,12 +112,14 @@ static ini_bitdesc_t web_options[] = {
 	{ WEB_OPT_ALLOW_TLS, "ALLOW_TLS"            },
 	{ WEB_OPT_HSTS_SAFE, "HSTS_SAFE"            },
 	{ WEB_OPT_NO_FILEBASE, "NO_FILEBASE"          },
+	{ WEB_OPT_ONE_HTTP_LOG, "ONE_HTTP_LOG"          },
 
 	/* shared bits */
 	{ BBS_OPT_NO_HOST_LOOKUP, "NO_HOST_LOOKUP"       },
 	{ BBS_OPT_NO_RECYCLE, "NO_RECYCLE"           },
 	{ BBS_OPT_NO_JAVASCRIPT, "NO_JAVASCRIPT"        },
 	{ BBS_OPT_MUTE, "MUTE"                 },
+	{ BBS_OPT_HAPROXY_PROTO, "HAPROXY_PROTO" },
 
 	/* terminator */
 	{ 0, NULL                   }

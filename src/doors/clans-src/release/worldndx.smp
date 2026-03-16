@@ -8,6 +8,12 @@
 WorldName       Magnamund
 LeagueId        MG
 
+# StrictRouting <- optional, requires that all routes are symmetric and only
+#                  parses packets coming via the appropriate route
+# StrictMsgFile <- optional, requires StrictRouting and requires .MSG file to
+#                  exist and be correct (ie: No NoMSG use, and all nodes
+#                  configured with a mailer type that isn't None)
+
 # The following is a listing of all BBSes in the league.
 # ----------------------------------------------------------------------------
 # BBSId must ALWAYS come first followed by the other information (which can be
@@ -39,6 +45,7 @@ Status          Active
 # BBSName         BBS Name
 # VillageName     Village Name
 # Address         XXX:YYY/ZZZ
+# Status          Inactive
 # NoMSG <- optional, use this if you don't want a .MSG file to be created.
 #          this is useful for ftp networks
 

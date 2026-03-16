@@ -293,30 +293,10 @@ gdi_handle_wm_sizing(WPARAM wParam, RECT *r)
 	bitmap_get_scaled_win_size(s, &nw, &nh, 0, 0);
 	assert_rwlock_unlock(&vstatlock);
 
-	if (nw != ow) {
-		switch (wParam) {
-			case WMSZ_BOTTOMLEFT:
-			case WMSZ_LEFT:
-			case WMSZ_TOPLEFT:
-				r->left += (nw - ow);
-				break;
-			default:
-				r->right += (nw - ow);
-				break;
-		}
-	}
-	if (nh != oh) {
-		switch (wParam) {
-			case WMSZ_TOP:
-			case WMSZ_TOPLEFT:
-			case WMSZ_TOPRIGHT:
-				r->top += (nh - oh);
-				break;
-			default:
-				r->bottom += (nh - oh);
-				break;
-		}
-	}
+	if (nw != ow)
+		r->right += (nw - ow);
+	if (nh != oh)
+		r->bottom += (nh - oh);
 
 	return TRUE;
 }
@@ -1067,6 +1047,39 @@ gdi_kbhit(void)
 	return (avail > 0);
 }
 
+static int
+kbwaitGot(uint8_t ch, DWORD got)
+{
+	if (got)
+		ciolib_ungetch_byte(ch);
+	return got;
+}
+
+int
+gdi_kbwait(int ms)
+{
+	uint8_t ch;
+	DWORD got = 0;
+	OVERLAPPED ohgod = {0};
+
+	if (ReadFile(rch, &ch, 1, NULL, &ohgod))
+		return kbwaitGot(ch, 1);
+	if (GetLastError() == ERROR_IO_PENDING) {
+		if (GetOverlappedResultEx(rch, &ohgod, &got, ms, FALSE))
+			return kbwaitGot(ch, got);
+		if (GetLastError() == WAIT_TIMEOUT) {
+			if (CancelIo(rch)) {
+				if (GetOverlappedResult(rch, &ohgod, &got, TRUE))
+					return kbwaitGot(ch, got);
+				return 0;
+			}
+		}
+	}
+	// If we failed. do a quick sleep to prevent 100% CPU
+	Sleep(1);
+	return 0;
+}
+
 int
 gdi_getch(void)
 {
@@ -1246,11 +1259,26 @@ gdi_get_window_info(int *width, int *height, int *xpos, int *ypos)
 	return(1);
 }
 
+static volatile long PipeSerialNumber;
+BOOL CreateOverlappedPipe(LPHANDLE rp, LPHANDLE wp)
+{
+	char PipeNameBuffer[ MAX_PATH ];
+	sprintf( PipeNameBuffer,
+           "\\\\.\\Pipe\\LOCAL\\SyncTERMKeyboard.%08lx.%08lx",
+           GetCurrentProcessId(),
+           InterlockedIncrement(&PipeSerialNumber)
+         );
+	*rp = CreateNamedPipeA(PipeNameBuffer, PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED, PIPE_TYPE_BYTE | PIPE_WAIT,
+	    1, 1024, 1024, 120 * 1000, NULL);
+	*wp = CreateFileA(PipeNameBuffer, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+	return TRUE;
+}
+
 static dll_handle shcoreDLL;
 int
 gdi_init(int mode)
 {
-	CreatePipe(&rch, &wch, NULL, 0);
+	CreateOverlappedPipe(&rch, &wch);
 
 	// code that tells windows we're High DPI aware so it doesn't scale our windows
 	// taken from Yamagi Quake II

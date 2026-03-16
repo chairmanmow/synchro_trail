@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: rlogin.c,v 1.38 2020/06/27 00:04:50 deuce Exp $ */
-
 #include <stdlib.h>
 
 #include "bbslist.h"
@@ -138,16 +136,16 @@ rlogin_connect(struct bbslist *bbs)
 		conn_send(passwd, strlen(passwd) + 1, 1000);
 		conn_send(ruser, strlen(ruser) + 1, 1000);
 		if (bbs->bpsrate) {
-			char sbuf[30];
+			char sbuf[64];
 
-			sprintf(sbuf, "%s/%d", get_emulation_str(get_emulation(bbs)), bbs->bpsrate);
+			sprintf(sbuf, "%s/%d", get_emulation_str(bbs), bbs->bpsrate);
 
 			conn_send(sbuf, strlen(sbuf) + 1, 1000);
 		}
 		else {
-			char sbuf[30];
+			char sbuf[64];
 
-			sprintf(sbuf, "%s/115200", get_emulation_str(get_emulation(bbs)));
+			sprintf(sbuf, "%s/115200", get_emulation_str(bbs));
 
 			conn_send(sbuf, strlen(sbuf) + 1, 1000);
 		}
@@ -164,6 +162,8 @@ rlogin_connect(struct bbslist *bbs)
 
 		idx = 0;
 		while (socket_readable(rlogin_sock, 1000)) {
+			if (idx >= sizeof(rbuf) - 1)
+				return -1;
 			ret = recv(rlogin_sock, rbuf + idx, 1, 0);
 			if (ret <= 0)
 				break;
@@ -172,10 +172,6 @@ rlogin_connect(struct bbslist *bbs)
                         /* It says ERROR, but this is a good response to PING. */
 			if (strstr(rbuf, "ERROR\r\n"))
 				break;
-
-                        /* We didn't receive the desired response in time, so bail. */
-			if (idx >= sizeof(rbuf))
-				return -1;
 		}
 
 		if (ret < 1)
@@ -192,6 +188,8 @@ rlogin_connect(struct bbslist *bbs)
 
 		idx = 0;
 		while (socket_readable(rlogin_sock, 1000)) {
+			if (idx >= sizeof(rbuf) - 1)
+				return -1;
 			ret = recv(rlogin_sock, rbuf + idx, 1, 0);
 			if (ret <= 0)
 				break;
@@ -200,10 +198,6 @@ rlogin_connect(struct bbslist *bbs)
                         /* GHost says it's launching the program, so pass terminal to user. */
 			if (strstr(rbuf, "OK\r\n"))
 				break;
-
-                        /* We didn't receive the desired response in time, so bail. */
-			if (idx >= sizeof(rbuf))
-				return -1;
 		}
 
 		if (ret < 1)

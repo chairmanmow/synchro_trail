@@ -137,7 +137,7 @@ void node_menu()
 			sprintf(tmp, "Node %d Directory", i);
 			uifc.helpbuf = node_path_help;
 			j = uifc.input(WIN_MID | WIN_SAV, 0, 0, tmp, str, 50, K_EDIT);
-			uifc.changes = 0;
+			uifc.changes = FALSE;
 			if (j < 2)
 				continue;
 			truncsp(str);
@@ -197,7 +197,7 @@ void node_cfg()
 		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Phone Number", cfg.node_phone);
 		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Login Requirements", cfg.node_arstr);
 		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Keep Node File Open", cfg.node_misc & NM_CLOSENODEDAB ? "No":"Yes");
-		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Daily Event", (cfg.node_daily.misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.node_daily.cmd);
+		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Daily Event", (cfg.node_daily_misc & EVENT_DISABLED) ? "<DISABLED>" : cfg.node_daily_cmd);
 		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Node Directory", cfg.node_path[cfg.node_num - 1]);
 		snprintf(opt[i++], MAX_OPLN, "%-27.27s%s", "Text Directory", cfg.text_dir);
 		opt[i][0] = 0;
@@ -230,7 +230,7 @@ void node_cfg()
 				break;
 			case __COUNTER__:
 				sprintf(str, "Node %u Login", cfg.node_num);
-				getar(str, cfg.node_arstr);
+				getar(str, cfg.node_arstr, /* helpbuf: */ NULL);
 				break;
 			case __COUNTER__:
 				i = cfg.node_misc & NM_CLOSENODEDAB ? 1:0;
@@ -246,15 +246,15 @@ void node_cfg()
 				              , "Keep Node File Open", uifcYesNoOpts);
 				if (i == 0 && cfg.node_misc & NM_CLOSENODEDAB) {
 					cfg.node_misc &= ~NM_CLOSENODEDAB;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (i == 1 && !(cfg.node_misc & NM_CLOSENODEDAB)) {
 					cfg.node_misc |= NM_CLOSENODEDAB;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case __COUNTER__:
-				fevent_cfg("Daily Event", &cfg.node_daily,
+				edit_fixed_event("Daily", cfg.node_daily_cmd, &cfg.node_daily_misc,
 				           "`Daily Event:`\n"
 				           "\n"
 				           "If you have an event that this node's terminal server should run every\n"

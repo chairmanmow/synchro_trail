@@ -254,7 +254,7 @@ static void append_dir_list(const char* parent, const char* dir, FILE* fp, int d
 	globfree(&g);
 }
 
-BOOL create_raw_dir_list(char* list_file)
+BOOL create_raw_dir_list(char* list_file, const char* parent)
 {
 	char  path[MAX_PATH + 1];
 	char  fname[MAX_PATH + 1] = "dirs.raw";
@@ -263,14 +263,15 @@ BOOL create_raw_dir_list(char* list_file)
 	bool  include_empty_dirs;
 	FILE* fp;
 
-	SAFECOPY(path, list_file);
-	if ((p = getfname(path)) != NULL) {
+	if (parent == NULL) {
+		SAFECOPY(path, list_file);
+		if ((p = getfname(path)) == NULL)
+			return FALSE;
 		SAFECOPY(fname, p);
 		*p = 0;
+		parent = path;
 	}
-	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Parent Directory", path, sizeof(path) - 1
-	               , K_EDIT) < 1)
-		return FALSE;
+
 	k = 1;
 	k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &k, 0, "Include Empty Directories", uifcYesNoOpts);
 	if (k < 0)
@@ -283,14 +284,13 @@ BOOL create_raw_dir_list(char* list_file)
 	if ((fp = fopen(list_file, "w")) == NULL) {
 		strcpy(list_file, fname);
 		if ((fp = fopen(list_file, "w")) == NULL) {
-			SAFEPRINTF2(path, "Create Failure (%u): %s", errno, list_file);
-			uifc.msg(path);
+			uifc.msgf("Create Failure (%u): %s", errno, list_file);
 			return FALSE;
 		}
 	}
-	backslash(path);
+
 	uifc.pop("Scanning Directories...");
-	append_dir_list(path, path, fp, /* depth: */ 0, /* max_depth: */ k, include_empty_dirs);
+	append_dir_list(parent, parent, fp, /* depth: */ 0, /* max_depth: */ k, include_empty_dirs);
 	uifc.pop(NULL);
 	fclose(fp);
 	return TRUE;
@@ -306,13 +306,64 @@ int dirs_in_lib(int libnum)
 	return total;
 }
 
+static bool permutate_sname(char* name)
+{
+	const char* set = " _-:.;/+|*=";
+
+	for(const char* s = set; *(s + 1) != '\0'; ++s) {
+		for(char* p = name; *p != '\0'; ++p) {
+			if (*p != *s)
+				continue;
+			*p = *(s + 1);
+			return true;
+		}
+	}
+	return false;
+}
+
+static char* find_last_fit(char* p, size_t maxlen)
+{
+	size_t len;
+
+	if (p == NULL)
+		return p;
+	/* skip first sub-dir(s) */
+	char* tp = p;
+	while (strlen(tp) > maxlen) {
+		FIND_CHAR(tp, '/');
+		SKIP_CHAR(tp, '/');
+	}
+	if (*tp != '\0')
+		p = tp;
+	if ((len = strlen(p)) > maxlen)
+		p += len - maxlen;
+	FIND_ALPHANUMERIC(p);
+	return p;
+}
+
+static bool get_parent(char* parent, bool required)
+{
+	char path[LEN_DIR + 2];
+
+	SAFECOPY(path, parent);
+	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Parent Directory", path, LEN_DIR, K_EDIT | K_FIND) < required)
+		return false;
+	if (*path != '\0' && !getdircase(path)) {
+		uifc.msgf("Directory doesn't exist: %s", path);
+		if (required)
+			return false;
+	}
+	strlcpy(parent, path, LEN_DIR);
+	return true;
+}
+
 void xfer_cfg()
 {
 	static int   libs_dflt, libs_bar, dflt, bar;
 	char         str[256], done = 0, *p;
 	char         path[MAX_PATH + 1];
 	char         tmp_code[MAX_PATH + 1];
-	int          file, j, k, q;
+	int          file, j, k;
 	int          i;
 	long         ported, added;
 	static lib_t savlib;
@@ -349,6 +400,12 @@ void xfer_cfg()
 		"caution.\n"
 	;
 
+	enum dirlist_type {
+		DIRLIST_CDROM,
+		DIRLIST_FIDO,
+		DIRLIST_RAW
+	};
+
 	while (1) {
 		for (i = 0; i < cfg.total_libs && i < MAX_OPTS; i++)
 			snprintf(opt[i], MAX_OPLN, "%-*s %5u", LEN_GLNAME, cfg.lib[i]->lname, dirs_in_lib(i));
@@ -377,7 +434,7 @@ void xfer_cfg()
 			"\n"
 			ADDFILES_HELP
 		;
-		i = uifc.list(j, 0, 0, 0, &libs_dflt, &libs_bar, "File Libraries                     Directories", opt);
+		i = uifc.list(j, 0, 0, 0, &libs_dflt, &libs_bar, "File Libraries                                         Directories", opt);
 		if ((signed)i == -1) {
 			j = save_changes(WIN_MID);
 			if (j == -1)
@@ -455,7 +512,9 @@ void xfer_cfg()
 								sprintf(tmp, "%sdirs/", cfg.data_dir);
 							else
 								strcpy(tmp, cfg.dir[j]->data_dir);
+							uifc.pop("Deleting %s/%s ...", tmp, str);
 							delfiles(tmp, str, /* keep: */ 0);
+							uifc.pop(NULL);
 						}
 					}
 				}
@@ -493,7 +552,7 @@ void xfer_cfg()
 			cfg.total_libs--;
 			for (i = libnum; i < cfg.total_libs; i++)
 				cfg.lib[i] = cfg.lib[i + 1];
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		if (msk == MSK_COPY) {
@@ -508,7 +567,7 @@ void xfer_cfg()
 				if (cfg.dir[i]->lib == CUT_LIBNUM)
 					cfg.dir[i]->lib = libnum;
 			*cfg.lib[libnum] = savlib;
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		done = 0;
@@ -517,8 +576,11 @@ void xfer_cfg()
 			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Long Name", cfg.lib[libnum]->lname);
 			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Short Name", cfg.lib[libnum]->sname);
 			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Internal Code Prefix", cfg.lib[libnum]->code_prefix);
-			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Parent Directory"
-			         , cfg.lib[libnum]->parent_path);
+			if (cfg.lib[libnum]->parent_path[0] == '\0')
+				snprintf(str, sizeof str, "[%sdirs/]", cfg.data_dir);
+			else
+				SAFECOPY(str, cfg.lib[libnum]->parent_path);
+			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Parent Directory", str);
 			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Access Requirements"
 			         , cfg.lib[libnum]->arstr);
 			snprintf(opt[j++], MAX_OPLN, "%-27.27s%s", "Upload Requirements"
@@ -579,11 +641,13 @@ void xfer_cfg()
 					uifc.helpbuf = lib_short_name_help;
 					SAFECOPY(str, cfg.lib[libnum]->sname);
 					if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Name to use for Prompts"
-					               , str, LEN_GSNAME, K_EDIT | K_CHANGED) > 0) {
+					               , str, LEN_GSNAME, K_EDIT | K_CHANGED | K_FIND) > 0) {
 						if (libnum_is_valid(&cfg, getlibnum_from_name(&cfg, str)))
 							uifc.msg(strDuplicateLibName);
-						else
+						else {
 							SAFECOPY(cfg.lib[libnum]->sname, str);
+							uifc.changes = TRUE;
+						}
 					}
 					break;
 				case __COUNTER__:
@@ -592,7 +656,7 @@ void xfer_cfg()
 					SAFECOPY(code_prefix, cfg.lib[libnum]->code_prefix);
 					uifc.helpbuf = lib_code_prefix_help;
 					if (uifc.input(WIN_MID | WIN_SAV, 0, 17, "Internal Code Prefix"
-					               , code_prefix, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED) < 0)
+					               , code_prefix, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED | K_FIND) < 0)
 						continue;
 					if (code_prefix_exists(code_prefix))
 						uifc.msg(strDuplicateCodePrefix);
@@ -602,6 +666,7 @@ void xfer_cfg()
 							if (cfg.dir[j]->lib == libnum)
 								cfg.dir[j]->cfg_modified = true;
 						}
+						uifc.changes = TRUE;
 					} else {
 						uifc.helpbuf = invalid_code;
 						uifc.msg(strInvalidCodePrefix);
@@ -612,43 +677,41 @@ void xfer_cfg()
 					uifc.helpbuf =
 						"`Parent Directory:`\n"
 						"\n"
-						"This an optional path to be used as the physical \"parent\" directory for \n"
-						"all logical directories in this library.  This parent directory will be\n"
-						"used in combination with each directory's `Transfer File Path` to create\n"
-						"the full physical storage path for files in each directory.\n"
+						"This an optional path to be used as the default physical \"parent\"\n"
+						"for logical directories contained within this library.  This path\n"
+						"will be automatically prepended to each directory's `Actual File Path`\n"
+						"(when relative) to create a full/absolute physical storage path for\n"
+						"files in that directory.\n"
 						"\n"
 						"This option is convenient for adding libraries with many directories\n"
 						"that share a common parent directory (e.g. CD-ROMs) and gives you the\n"
-						"option of easily changing the common parent directory location later, if\n"
-						"desired.\n"
+						"option of easily changing the common parent path later, if desired.\n"
 						"\n"
-						"The parent directory is not used for directories with a full/absolute\n"
-						"`Transfer File Path` configured."
+						"The library's `Parent Directory` is not used for any directories of\n"
+						"the library that have been configured with an absolute (not relative)\n"
+						"`Actual File Path`."
 					;
-					if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Parent Directory"
-					               , cfg.lib[libnum]->parent_path, sizeof(cfg.lib[libnum]->parent_path) - 1, K_EDIT) > 0)
-						if (!getdircase(cfg.lib[libnum]->parent_path))
-							uifc.msg("Directory doesn't exist");
+					get_parent(cfg.lib[libnum]->parent_path, /* required: */ false);
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Library Access", cfg.lib[libnum]->sname);
-					getar(str, cfg.lib[libnum]->arstr);
+					getar(str, cfg.lib[libnum]->arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Library Upload", cfg.lib[libnum]->sname);
-					getar(str, cfg.lib[libnum]->ul_arstr);
+					getar(str, cfg.lib[libnum]->ul_arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Library Download", cfg.lib[libnum]->sname);
-					getar(str, cfg.lib[libnum]->dl_arstr);
+					getar(str, cfg.lib[libnum]->dl_arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Library Operator", cfg.lib[libnum]->sname);
-					getar(str, cfg.lib[libnum]->op_arstr);
+					getar(str, cfg.lib[libnum]->op_arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					sprintf(str, "%s Library Exemption", cfg.lib[libnum]->sname);
-					getar(str, cfg.lib[libnum]->ex_arstr);
+					getar(str, cfg.lib[libnum]->ex_arstr, /* helpbuf: */ NULL);
 					break;
 				case __COUNTER__:
 					uifc.helpbuf =
@@ -663,8 +726,8 @@ void xfer_cfg()
 						"\n"
 						"~ This is an experimental feature. ~"
 					;
-					if (cfg.lib[libnum]->parent_path[0] == '\0') {
-						uifc.msg("A parent directory must be specified to use this feature");
+					if (!isdir(cfg.lib[libnum]->parent_path)) {
+						uifc.msg("A valid parent directory must be specified to use this feature");
 						break;
 					}
 					j = (cfg.lib[libnum]->misc & LIB_DIRS) ? 0 : 1;
@@ -715,9 +778,7 @@ void xfer_cfg()
 					}
 					break;
 				case __COUNTER__:
-	#define DIRS_TXT_HELP_TEXT      "`DIRS.TXT` is a plain text file that includes all of the Synchronet\n" \
-			"configuration field values for each directory in the library.\n"
-	#define DIRS_CDR_HELP_TEXT      "`DIRS.TXT` is also a text file containing a list of directory names and\n" \
+	#define DIRS_CDR_HELP_TEXT      "`DIRS.TXT` is a text file containing a list of directory names and\n" \
 			"descriptions (one per line) included on CD-ROMs.\n" \
 			"A file of this format is sometimes named `DIRS.WIN` or `00_INDEX.TXT`.\n"
 	#define FILEGATE_ZXX_HELP_TEXT  "`FILEGATE.ZXX` is a plain text file in the old RAID/FILEBONE.NA format\n" \
@@ -725,10 +786,8 @@ void xfer_cfg()
 			"Distribution Network (e.g. Fidonet).\n"
 					k = 0;
 					ported = 0;
-					q = uifc.changes;
-					strcpy(opt[k++], "DIRS.TXT     (Synchronet)");
-					strcpy(opt[k++], "DIRS.TXT     (CD-ROM)");
-					strcpy(opt[k++], "FILEGATE.ZXX (Fido)");
+					strcpy(opt[k++], "CD-ROM    DIRS.TXT");
+					strcpy(opt[k++], "FidoNet   FILEGATE.ZXX");
 					opt[k][0] = 0;
 					uifc.helpbuf =
 						"`Export Area File Format:`\n"
@@ -736,38 +795,42 @@ void xfer_cfg()
 						"This menu allows you to choose the format of the area file you wish to\n"
 						"export to.\n"
 						"\n"
-						DIRS_TXT_HELP_TEXT
-						"\n"
 						DIRS_CDR_HELP_TEXT
 						"\n"
 						FILEGATE_ZXX_HELP_TEXT
 					;
-					k = 0;
-					k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &k, 0
+					static int export_cur;
+					k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &export_cur, 0
 					              , "Export Area File Format", opt);
 					if (k == -1)
 						break;
-					if (k == 0)
-						snprintf(str, sizeof str, "%sDIRS.TXT", cfg.ctrl_dir);
-					else if (k == 1) {
+					if (k == DIRLIST_CDROM) {
 						SAFECOPY(str, cfg.lib[libnum]->parent_path);
 						backslash(str);
 						SAFECAT(str, "DIRS.TXT");
 					}
-					else if (k == 2)
+					else if (k == DIRLIST_FIDO)
 						snprintf(str, sizeof str, "FILEGATE.ZXX");
-					if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Filename"
-					               , str, sizeof(str) - 1, K_EDIT) <= 0) {
-						uifc.changes = q;
+					uifc.helpbuf =
+						"`List File:`\n"
+						"\n"
+						"This is the path and filename of the list file to export.\n"
+						;
+					if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "List File"
+					               , str, sizeof(str) - 1, K_EDIT | K_FIND) <= 0) {
 						break;
 					}
-					if (fexist(str)) {
+					if (getdircase(str)) {
+						uifc.msgf("Directory exists: %s", str);
+						break;
+					}
+					if (fexistcase(str)) {
+						snprintf(tmp, sizeof tmp, "File exists: %s", str);
 						strcpy(opt[0], "Overwrite");
 						strcpy(opt[1], "Append");
 						opt[2][0] = 0;
 						j = 0;
-						j = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &j, 0
-						              , "File Exists", opt);
+						j = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &j, 0, tmp, opt);
 						if (j == -1)
 							break;
 						if (j == 0)
@@ -778,7 +841,7 @@ void xfer_cfg()
 					else
 						j = O_WRONLY | O_CREAT;
 					if ((stream = fnopen(&file, str, j | O_TEXT)) == NULL) {
-						uifc.msg("Open Failure");
+						uifc.msgf("Error %d opening %s", errno, str);
 						break;
 					}
 					uifc.pop("Exporting Areas...");
@@ -786,50 +849,17 @@ void xfer_cfg()
 						if (cfg.dir[j]->lib != libnum)
 							continue;
 						ported++;
-						if (k == 1) {
+						if (k == DIRLIST_CDROM)
 							fprintf(stream, "%-30s %s\n", cfg.dir[j]->path, cfg.dir[j]->lname);
-							continue;
-						}
-						if (k == 2) {
+						else if (k == DIRLIST_FIDO)
 							fprintf(stream, "Area %-*s  0     !      %s\n"
 							        , FIDO_AREATAG_LEN
 							        , dir_area_tag(&cfg, cfg.dir[j], str, sizeof(str)), cfg.dir[j]->lname);
-							continue;
-						}
-						fprintf(stream, "%s\n%s\n%s\n%s\n%s\n%s\n"
-						        "%s\n%s\n"
-						        , cfg.dir[j]->lname
-						        , cfg.dir[j]->sname
-						        , cfg.dir[j]->code_suffix
-						        , cfg.dir[j]->data_dir
-						        , cfg.dir[j]->arstr
-						        , cfg.dir[j]->ul_arstr
-						        , cfg.dir[j]->dl_arstr
-						        , cfg.dir[j]->op_arstr
-						        );
-						fprintf(stream, "%s\n%s\n%u\n%s\n%" PRIX32 "\n%u\n"
-						        "%u\n"
-						        , cfg.dir[j]->path
-						        , cfg.dir[j]->upload_sem
-						        , cfg.dir[j]->maxfiles
-						        , cfg.dir[j]->exts
-						        , cfg.dir[j]->misc
-						        , cfg.dir[j]->seqdev
-						        , cfg.dir[j]->sort
-						        );
-						fprintf(stream, "%s\n%u\n%u\n%u\n"
-						        , cfg.dir[j]->ex_arstr
-						        , cfg.dir[j]->maxage
-						        , cfg.dir[j]->up_pct
-						        , cfg.dir[j]->dn_pct
-						        );
-						fprintf(stream, "***END-OF-DIR***\n\n");
 					}
 					fclose(stream);
 					uifc.pop(NULL);
 					sprintf(str, "%lu File Areas Exported Successfully", ported);
 					uifc.msg(str);
-					uifc.changes = q;
 					break;
 
 				case __COUNTER__:
@@ -849,100 +879,133 @@ void xfer_cfg()
 						"The `Directory Listing...` option will automatically generate and import\n"
 						"the raw directory listing for you.\n"
 						"\n"
-						DIRS_TXT_HELP_TEXT
-						"\n"
 						DIRS_CDR_HELP_TEXT
 						"\n"
 						FILEGATE_ZXX_HELP_TEXT
 					;
-					strcpy(opt[k++], "DIRS.TXT     (Synchronet)");
-					strcpy(opt[k++], "DIRS.TXT     (CD-ROM)");
-					strcpy(opt[k++], "FILEGATE.ZXX (Fido)");
-					strcpy(opt[k++], "DIRS.RAW     (Raw)");
+					strcpy(opt[k++], "CD-ROM    DIRS.TXT, DIRS.WIN, 00_INDEX.TXT");
+					strcpy(opt[k++], "FidoNet   FILEGATE.ZXX");
+					strcpy(opt[k++], "Raw       DIRS.RAW");
 					strcpy(opt[k++], "Directory Listing...");
 					opt[k][0] = 0;
-					k = 0;
-					k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &k, 0
+					static int import_cur;
+					k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &import_cur, 0
 					              , "Import Area File Format", opt);
 					if (k == -1)
 						break;
-					if (k == 0)
-						sprintf(str, "%sDIRS.TXT", cfg.ctrl_dir);
-					else if (k == 1) {
-						SAFECOPY(str, cfg.lib[libnum]->parent_path);
-						backslash(str);
-						SAFECAT(str, "DIRS.TXT");
+					char parent_buf[MAX_PATH + 1];
+					SAFECOPY(parent_buf, cfg.lib[libnum]->parent_path);
+					char* parent = parent_buf;
+					uifc.helpbuf =
+						"`Parent Directory:`\n"
+						"\n"
+						"This path will be used as the common physical \"parent\" of the\n"
+						"directories to be imported from a directory list.  This path will be\n"
+						"automatically prepended to each imported directory's `Actual File Path`\n"
+						"(when relative) to create a full/absolute physical storage path for\n"
+						"files in that directory.\n"
+						"\n"
+						"This parent directory may be the same as the library's parent directory,\n"
+						"but it doesn't have to be.  If the imported list contains full paths\n"
+						"for the directories, then this parent path is not used.\n"
+						"\n"
+						"Although this parent path will be the default location of a list file\n"
+						"for import, you are not required to have the list file located in this\n"
+						"parent directory to import successfully.  You can specify any valid path\n"
+						"and filename for the list file when prompted.\n"
+					;
+					if (!get_parent(parent, /* required: */ true))
+						break;
+					if (cfg.lib[libnum]->parent_path[0] == '\0'
+						|| paths_are_same(parent, cfg.lib[libnum]->parent_path)) {
+						SAFECOPY(cfg.lib[libnum]->parent_path, parent);
+						parent = cfg.lib[libnum]->parent_path;
 					}
-					else if (k == 2)
+					// 'parent' should be properly (back)slash-terminated at this point
+					bool chk_dir_exist = true;
+					if (k == DIRLIST_CDROM) {
+						snprintf(str, sizeof str, "%sDIRS.WIN", parent);
+						if (!fexistcase(str))
+							snprintf(str, sizeof str, "%sDIRS.TXT", parent);
+						if (!fexistcase(str))
+							snprintf(str, sizeof str, "%s00_INDEX.TXT", parent);
+					}
+					else if (k == DIRLIST_FIDO) {
 						sprintf(str, "FILEGATE.ZXX");
-					else {
-						SAFECOPY(str, cfg.lib[libnum]->parent_path);
-						backslash(str);
-						SAFECAT(str, "dirs.raw");
-					}
-					if (k == 4) {
-						if (!create_raw_dir_list(str))
-							break;
+						chk_dir_exist = false;
 					} else {
-						if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Filename"
-						               , str, sizeof(str) - 1, K_EDIT) <= 0)
+						snprintf(str, sizeof str, "%sdirs.raw", parent);
+					}
+					if (k > DIRLIST_RAW) {
+						if (!create_raw_dir_list(str, parent))
 							break;
-						if (k == 3 && !fexistcase(str)) {
-							j = 0;
-							if (uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &j, 0
-							              , "File doesn't exist, create it?", uifcYesNoOpts) == 0)
-								create_raw_dir_list(str);
+						chk_dir_exist = false;
+					} else {
+						uifc.helpbuf =
+							"`List File:`\n"
+							"\n"
+							"This is the path and filename of the list file to import.  The format\n"
+							"of the list file must match the format selected in the previous menu.\n"
+							;
+						filename_prompt:
+						if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "List File", str, sizeof(str) - 1, K_EDIT) <= 0)
+							break;
+						if (!fexistcase(str)) {
+							if (k == DIRLIST_RAW) {
+								if (uifc.confirm("File doesn't exist, create it?")) {
+									create_raw_dir_list(str, parent);
+									chk_dir_exist = false;
+								} else
+									goto filename_prompt;
+							}
+							else  {
+								uifc.msgf("File does not exist: %s", str);
+								goto filename_prompt;
+							}
 						}
 					}
 					if ((stream = fnopen(&file, str, O_RDONLY)) == NULL) {
-						uifc.msg("Open Failure");
+						uifc.msgf("Error %d opening %s", errno, str);
 						break;
 					}
+					if (chk_dir_exist)
+						chk_dir_exist = uifc.confirm("Check for each directory's existence");
 					uifc.pop("Importing Areas...");
 					char duplicate_code[LEN_CODE + 1] = "";
 					uint duplicate_codes = 0;   // consecutive duplicate codes
-					while (!feof(stream) && cfg.total_dirs < MAX_DIRS) {
+					bool prompt_on_dupe = true;
+					int dir_count = dirs_in_lib(libnum);
+
+					while (!feof(stream) && dir_count + added < MAX_OPTS) {
 						if (!fgets(str, sizeof(str), stream))
 							break;
 						truncsp(str);
-						if (!str[0])
+						p = str;
+						SKIP_WHITESPACE(p);
+						if (*p == '\0')
 							continue;
+
 						tmpdir = cfg.lib[libnum]->dir_defaults;
 
-						p = str;
-						while (*p && *p <= ' ') p++;
-
-						if (k >= 3) { /* raw */
+						if (k >= DIRLIST_RAW) { /* raw */
 							int len = strlen(p);
 							if (len > LEN_DIR)
 								continue;
 							SAFECOPY(tmp_code, p);
 							SAFECOPY(tmpdir.path, p);
 							/* skip first sub-dir(s) */
-							char* tp = p;
-							while ((len = strlen(tp)) > LEN_SLNAME) {
-								FIND_CHAR(tp, '/');
-								SKIP_CHAR(tp, '/');
-							}
-							if (*tp != 0)
-								p = tp;
-							if ((len = strlen(p)) > LEN_SLNAME)
-								p += len - LEN_SLNAME;
-							SAFECOPY(tmpdir.lname, p);
-							/* skip first sub-dir(s) */
-							tp = p;
-							while ((len = strlen(tp)) > LEN_SSNAME) {
-								FIND_CHAR(tp, '/');
-								SKIP_CHAR(tp, '/');
-							}
-							if (*tp != 0)
-								p = tp;
-							if ((len = strlen(p)) > LEN_SSNAME)
-								p += len - LEN_SSNAME;
-							SAFECOPY(tmpdir.sname, p);
-							ported++;
+							char* tp = find_last_fit(p, LEN_SLNAME);
+							if (*tp == '\0')
+								SAFECOPY(tmpdir.lname, p);
+							else
+								SAFECOPY(tmpdir.lname, tp);
+							tp = find_last_fit(p, LEN_SSNAME);
+							if (*tp == '\0')
+								SAFECOPY(tmpdir.sname, p);
+							else
+								SAFECOPY(tmpdir.sname, tp);
 						}
-						else if (k == 2) {
+						else if (k == DIRLIST_FIDO) {
 							if (strnicmp(p, "AREA ", 5))
 								continue;
 							p += 5;
@@ -958,9 +1021,8 @@ void xfer_cfg()
 							SAFECOPY(tmpdir.sname, tmp_code);
 							SAFECOPY(tmpdir.area_tag, tmp_code);
 							SAFECOPY(tmpdir.lname, p);
-							ported++;
 						}
-						else if (k == 1) { // CD-ROM DIRS.TXT (DIRS.WIN) format
+						else if (k == DIRLIST_CDROM) { // CD-ROM DIRS.TXT (DIRS.WIN) format
 							while (*p == '/' || *p == '\\') p++;
 							char* tp = p + 1;
 							FIND_WHITESPACE(tp);
@@ -974,92 +1036,12 @@ void xfer_cfg()
 								*lastchar(p) = '\0';
 							SAFECOPY(tmp_code, getfname(p));
 							SAFECOPY(tmpdir.path, p);
-							SAFECOPY(tmpdir.sname, tmp_code);
-							SAFECOPY(tmpdir.lname, *tp == '\0' ? tmp_code : tp);
-							ported++;
-						}
-						else {
-							sprintf(tmpdir.lname, "%.*s", LEN_SLNAME, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.sname, "%.*s", LEN_SSNAME, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							SAFECOPY(tmp_code, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.data_dir, "%.*s", LEN_DIR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.arstr, "%.*s", LEN_ARSTR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.ul_arstr, "%.*s", LEN_ARSTR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.dl_arstr, "%.*s", LEN_ARSTR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.op_arstr, "%.*s", LEN_ARSTR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.path, "%.*s", LEN_DIR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.upload_sem, "%.*s", LEN_DIR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.maxfiles = atoi(str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.exts, "%.*s", 40, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.misc = ahtoul(str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.seqdev = atoi(str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.sort = atoi(str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							sprintf(tmpdir.ex_arstr, "%.*s", LEN_ARSTR, str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.maxage = atoi(str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.up_pct = atoi(str);
-							if (!fgets(str, sizeof(str), stream))
-								break;
-							truncsp(str);
-							tmpdir.dn_pct = atoi(str);
-
-							ported++;
-							while (!feof(stream)
-							       && strcmp(str, "***END-OF-DIR***")) {
-								if (!fgets(str, sizeof(str), stream))
-									break;
-								truncsp(str);
-							}
+							SAFECOPY(tmpdir.lname, *tp == '\0' ? p : tp);
+							tp = find_last_fit(p, LEN_SSNAME);
+							if (*tp == '\0')
+								SAFECOPY(tmpdir.sname, p);
+							else
+								SAFECOPY(tmpdir.sname, tp);
 						}
 
 						if (tmpdir.lname[0] == 0)
@@ -1069,34 +1051,43 @@ void xfer_cfg()
 
 						SAFECOPY(tmpdir.code_suffix, prep_code(tmp_code, cfg.lib[libnum]->code_prefix));
 
-						snprintf(path, sizeof path, "%s/%s", cfg.lib[libnum]->parent_path, tmpdir.path);
-						if (fexistcase(path)) {
-							SAFEPRINTF(str, "Not a dir: %s", path);
-							uifc.msg(str);
+						snprintf(path, sizeof path, "%s%s", parent, tmpdir.path);
+#ifdef _WIN32
+						REPLACE_CHARS(path, '/', '\\', p);
+#endif
+						if (chk_dir_exist && !getdircase(path)) {
+							if(!uifc.confirm("%s is not a directory. Continue?", path))
+								break;
 							continue;
 						}
-						if (getdircase(path))
-							SAFECOPY(tmpdir.path, path + strlen(cfg.lib[libnum]->parent_path) + 1);
-
+						if (parent == cfg.lib[libnum]->parent_path)
+							SAFECOPY(tmpdir.path, path + strlen(parent));
+						else
+							SAFECOPY(tmpdir.path, path);
 						int attempts = 0;   // attempts to generate a unique internal code
 						if (stricmp(tmpdir.code_suffix, duplicate_code) == 0)
 							attempts = ++duplicate_codes;
 						else
 							duplicate_codes = 0;
+						bool dupe_sname = false;
 						for (j = 0; j < cfg.total_dirs && attempts < (36 * 36 * 36); j++) {
 							if (cfg.dir[j]->lib == libnum) { /* same lib */
 								if (tmpdir.path[0]
 								    && strcmp(cfg.dir[j]->path, tmpdir.path) == 0)  /* same path? overwrite the dir entry */
 									break;
-								if (stricmp(cfg.dir[j]->sname, tmpdir.sname) == 0)
-									break;
+								dupe_sname = stricmp(cfg.dir[j]->sname, tmpdir.sname) == 0;
+								if (dupe_sname) {
+									if (!permutate_sname(tmpdir.sname))
+										break;
+									j = 0;
+									++attempts;
+									continue;
+								}
 							} else {
 								if ((cfg.lib[libnum]->code_prefix[0] || cfg.lib[cfg.dir[j]->lib]->code_prefix[0]))
 									continue;
 							}
 							if (stricmp(cfg.dir[j]->code_suffix, tmpdir.code_suffix) == 0) {
-								if (k < 1)   /* dirs.txt import (don't modify internal code) */
-									break;
 								if (attempts == 0)
 									SAFECOPY(duplicate_code, tmpdir.code_suffix);
 								int code_len = strlen(tmpdir.code_suffix);
@@ -1130,11 +1121,16 @@ void xfer_cfg()
 							}
 							*cfg.dir[j] = cfg.lib[libnum]->dir_defaults;
 							added++;
-						} else {
-							SAFEPRINTF(str, "Duplicate dir: %s", cfg.dir[j]->code_suffix);
-							uifc.msg(str);
+						} else if (prompt_on_dupe) {
+							if (dupe_sname) {
+								if (!uifc.confirm("Duplicate dir name '%s' detected. Continue?", cfg.dir[j]->sname))
+									break;
+							} else
+								if (!uifc.confirm("Duplicate dir code '%s' detected. Continue?", cfg.dir[j]->code_suffix))
+									break;
+							prompt_on_dupe = uifc.confirm("Continue to notify/prompt for each duplicate found?");
 						}
-						if (k == 2) {
+						if (k == DIRLIST_FIDO) {
 							SAFECOPY(cfg.dir[j]->code_suffix, tmpdir.code_suffix);
 							SAFECOPY(cfg.dir[j]->sname, tmpdir.sname);
 							SAFECOPY(cfg.dir[j]->lname, tmpdir.lname);
@@ -1146,7 +1142,8 @@ void xfer_cfg()
 							cfg.dir[j]->misc = tmpdir.misc;
 							cfg.total_dirs++;
 						}
-						uifc.changes = 1;
+						++ported;
+						uifc.changes = TRUE;
 					}
 					fclose(stream);
 					if (ported && cfg.lib[libnum]->sort)
@@ -1254,11 +1251,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Check for File Existence When Listing", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_FCHK)) {
 					dir->misc |= DIR_FCHK;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_FCHK)) {
 					dir->misc &= ~DIR_FCHK;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 1:
@@ -1280,7 +1277,7 @@ void dir_toggle_options(dir_t* dir)
 				              , uifcYesNoOpts);
 				if (n == 0) {
 					if (!dir->seqdev) {
-						uifc.changes = 1;
+						uifc.changes = TRUE;
 						strcpy(str, "1");
 					}
 					else
@@ -1292,7 +1289,7 @@ void dir_toggle_options(dir_t* dir)
 				}
 				else if (n == 1 && dir->seqdev) {
 					dir->seqdev = 0;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 2:
@@ -1307,11 +1304,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Force Content Ratings in Descriptions", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_RATE)) {
 					dir->misc |= DIR_RATE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_RATE)) {
 					dir->misc &= ~DIR_RATE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 3:
@@ -1327,11 +1324,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Include Upload Date in Descriptions", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_ULDATE)) {
 					dir->misc |= DIR_ULDATE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_ULDATE)) {
 					dir->misc &= ~DIR_ULDATE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 4:
@@ -1346,11 +1343,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Ask for Multiple File Numberings", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_MULT)) {
 					dir->misc |= DIR_MULT;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_MULT)) {
 					dir->misc &= ~DIR_MULT;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 5:
@@ -1365,11 +1362,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Search for Duplicate Filenames", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_DUPES)) {
 					dir->misc |= DIR_DUPES;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_DUPES)) {
 					dir->misc &= ~DIR_DUPES;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 6:
@@ -1389,11 +1386,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Search for New files", uifcYesNoOpts);
 				if (n == 0 && dir->misc & DIR_NOSCAN) {
 					dir->misc &= ~DIR_NOSCAN;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && !(dir->misc & DIR_NOSCAN)) {
 					dir->misc |= DIR_NOSCAN;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 7:
@@ -1409,11 +1406,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Search for Auto-ADDFILES", uifcYesNoOpts);
 				if (n == 0 && dir->misc & DIR_NOAUTO) {
 					dir->misc &= ~DIR_NOAUTO;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && !(dir->misc & DIR_NOAUTO)) {
 					dir->misc |= DIR_NOAUTO;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 8:
@@ -1429,11 +1426,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Import FILE_ID.DIZ and DESC.SDI", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_DIZ)) {
 					dir->misc |= DIR_DIZ;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_DIZ)) {
 					dir->misc &= ~DIR_DIZ;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 9:
@@ -1448,11 +1445,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Downloads are Free", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_FREE)) {
 					dir->misc |= DIR_FREE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_FREE)) {
 					dir->misc &= ~DIR_FREE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 10:
@@ -1467,11 +1464,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Free Download Time", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_TFREE)) {
 					dir->misc |= DIR_TFREE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_TFREE)) {
 					dir->misc &= ~DIR_TFREE;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 11:
@@ -1486,11 +1483,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Deduct Upload Time", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_ULTIME)) {
 					dir->misc |= DIR_ULTIME;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_ULTIME)) {
 					dir->misc &= ~DIR_ULTIME;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 12:
@@ -1505,11 +1502,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Give Credit for Uploads", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_CDTUL)) {
 					dir->misc |= DIR_CDTUL;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_CDTUL)) {
 					dir->misc &= ~DIR_CDTUL;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 13:
@@ -1524,11 +1521,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Give Uploader Credit for Downloads", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_CDTDL)) {
 					dir->misc |= DIR_CDTDL;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_CDTDL)) {
 					dir->misc &= ~DIR_CDTDL;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 14:
@@ -1543,11 +1540,11 @@ void dir_toggle_options(dir_t* dir)
 				              , "Credit Uploader with Minutes", uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_CDTMIN)) {
 					dir->misc |= DIR_CDTMIN;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && dir->misc & DIR_CDTMIN) {
 					dir->misc &= ~DIR_CDTMIN;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 15:
@@ -1562,10 +1559,10 @@ void dir_toggle_options(dir_t* dir)
 				              , "Send Download Notifications", uifcYesNoOpts);
 				if (n == 1 && !(dir->misc & DIR_QUIET)) {
 					dir->misc |= DIR_QUIET;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				} else if (n == 0 && dir->misc & DIR_QUIET) {
 					dir->misc &= ~DIR_QUIET;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 16:
@@ -1587,16 +1584,16 @@ void dir_toggle_options(dir_t* dir)
 				    != DIR_ANON) {
 					dir->misc |= DIR_ANON;
 					dir->misc &= ~DIR_AONLY;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && dir->misc & (DIR_ANON | DIR_AONLY)) {
 					dir->misc &= ~(DIR_ANON | DIR_AONLY);
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 2 && (dir->misc & (DIR_ANON | DIR_AONLY))
 				         != (DIR_ANON | DIR_AONLY)) {
 					dir->misc |= (DIR_ANON | DIR_AONLY);
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 17:
@@ -1614,11 +1611,11 @@ void dir_toggle_options(dir_t* dir)
 				              , uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_SINCEDL)) {
 					dir->misc |= DIR_SINCEDL;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_SINCEDL)) {
 					dir->misc &= ~DIR_SINCEDL;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 18:
@@ -1635,11 +1632,11 @@ void dir_toggle_options(dir_t* dir)
 				              , uifcYesNoOpts);
 				if (n == 0 && !(dir->misc & DIR_MOVENEW)) {
 					dir->misc |= DIR_MOVENEW;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				else if (n == 1 && (dir->misc & DIR_MOVENEW)) {
 					dir->misc &= ~DIR_MOVENEW;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 19:
@@ -1656,10 +1653,10 @@ void dir_toggle_options(dir_t* dir)
 				              , uifcYesNoOpts);
 				if (n == 1 && !(dir->misc & DIR_NOSTAT)) {
 					dir->misc |= DIR_NOSTAT;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				} else if (n == 0 && dir->misc & DIR_NOSTAT) {
 					dir->misc &= ~DIR_NOSTAT;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 20:
@@ -1680,11 +1677,11 @@ void dir_toggle_options(dir_t* dir)
 				if (n == 0 && dir->misc & DIR_NOHASH) {
 					dir->misc &= ~DIR_NOHASH;
 					dir->cfg_modified = true;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				} else if (n == 1 && !(dir->misc & DIR_NOHASH)) {
 					dir->misc |= DIR_NOHASH;
 					dir->cfg_modified = true;
-					uifc.changes = 1;
+					uifc.changes = TRUE;
 				}
 				break;
 			case 21:
@@ -1795,21 +1792,24 @@ void dir_cfg(int libnum)
 		"underlying database filenames used for that file area, so change these\n"
 		"values with caution."
 	;
-	char* dir_transfer_path_help =
-		"`Transfer File Path:`\n"
+	char* dir_actual_path_help =
+		"`Actual File Path:`\n"
 		"\n"
 		"This is the physical storage path for files uploaded-to and available\n"
-		"for download-from this directory.\n"
+		"for download-from this logical directory.\n"
 		"\n"
-		"If this setting is blank, the internal-code (lower-cased) is used as the\n"
-		"default directory name.\n"
+		"If this setting is blank, the directory's internal-code (lower-cased)\n"
+		"is used as the default directory name.\n"
 		"\n"
 		"If this value is not a full/absolute path, the parent directory will be\n"
 		"either the library's `Parent Directory` (if set) or the data directory\n"
-		"(e.g. ../data/dirs)\n"
+		"(e.g. ../data/dirs/)\n"
 		"\n"
 		ADDFILES_HELP
 	;
+
+	SAFECOPY(cfg.lib[libnum]->vdir, cfg.lib[libnum]->sname);
+	pathify(cfg.lib[libnum]->vdir);
 
 	while (1) {
 		if (uifc.changes && cfg.lib[libnum]->sort)
@@ -1890,8 +1890,8 @@ void dir_cfg(int libnum)
 			}
 			SAFECOPY(path, code);
 			strlwr(path);
-			uifc.helpbuf = dir_transfer_path_help;
-			uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Transfer Path", path, LEN_DIR, K_EDIT);
+			uifc.helpbuf = dir_actual_path_help;
+			uifc.input(WIN_MID | WIN_SAV, 0, 0, "Actual File Path (directory)", path, LEN_DIR, K_EDIT);
 
 			if (!new_dir(dirnum[i], libnum))
 				continue;
@@ -1902,7 +1902,7 @@ void dir_cfg(int libnum)
 			SAFECOPY(cfg.dir[dirnum[i]]->lname, str);
 			SAFECOPY(cfg.dir[dirnum[i]]->sname, str2);
 			SAFECOPY(cfg.dir[dirnum[i]]->path, path);
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		if (msk == MSK_DEL || msk == MSK_CUT) {
@@ -1929,8 +1929,11 @@ void dir_cfg(int libnum)
 					              , str2, uifcYesNoOpts);
 					if (j == -1)
 						continue;
-					if (j == 0)
+					if (j == 0) {
+						uifc.pop("Deleting ...");
 						delfiles(data_dir, str, /* keep: */ 0);
+						uifc.pop(NULL);
+					}
 				}
 			}
 			if (msk == MSK_CUT)
@@ -1939,7 +1942,7 @@ void dir_cfg(int libnum)
 			cfg.total_dirs--;
 			for (j = dirnum[i]; j < cfg.total_dirs; j++)
 				cfg.dir[j] = cfg.dir[j + 1];
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		if (msk == MSK_COPY) {
@@ -1951,7 +1954,7 @@ void dir_cfg(int libnum)
 				continue;
 			*cfg.dir[dirnum[i]] = savdir;
 			cfg.dir[dirnum[i]]->lib = libnum;
-			uifc.changes = 1;
+			uifc.changes = TRUE;
 			continue;
 		}
 		i = dirnum[dflt];
@@ -2004,11 +2007,11 @@ void dir_cfg(int libnum)
 					SAFECOPY(data_dir, cfg.dir[i]->data_dir);
 				prep_dir(data_dir, path, sizeof(path));
 			}
-			if (strcmp(path, cfg.dir[i]->path) == 0)
-				SAFECOPY(str, path);
+			if (paths_are_same(path, cfg.dir[i]->path))
+				SAFECOPY(str, cfg.dir[i]->path);
 			else
 				SAFEPRINTF(str, "[%s]", path);
-			snprintf(opt[n++], MAX_OPLN, "%-27.27s%s", "Transfer File Path", str);
+			snprintf(opt[n++], MAX_OPLN, "%-27.27s%s", "Actual File Path", str);
 			if (cfg.dir[i]->maxfiles)
 				sprintf(str, "%u", cfg.dir[i]->maxfiles);
 			else
@@ -2074,7 +2077,7 @@ void dir_cfg(int libnum)
 					uifc.helpbuf = dir_code_help;
 					SAFECOPY(str, cfg.dir[i]->code_suffix);
 					if (uifc.input(WIN_L2R | WIN_SAV, 0, 17, "Internal Code Suffix (unique)"
-					           , str, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED) < 1)
+					           , str, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED | K_FIND) < 1)
 						break;
 					SAFEPRINTF2(tmp, "%s%s", cfg.lib[cfg.dir[i]->lib]->code_prefix, str);
 					if (getdirnum(&cfg, tmp) >= 0)
@@ -2082,6 +2085,7 @@ void dir_cfg(int libnum)
 					else if (code_ok(str)) {
 						SAFECOPY(cfg.dir[i]->code_suffix, str);
 						cfg.dir[i]->cfg_modified = true;
+						uifc.changes = TRUE;
 					}
 					else {
 						uifc.helpbuf = invalid_code;
@@ -2149,27 +2153,27 @@ void dir_cfg(int libnum)
 					break;
 				case 5:
 					sprintf(str, "%s Access", cfg.dir[i]->sname);
-					getar(str, cfg.dir[i]->arstr);
+					getar(str, cfg.dir[i]->arstr, /* helpbuf: */ NULL);
 					break;
 				case 6:
 					sprintf(str, "%s Upload", cfg.dir[i]->sname);
-					getar(str, cfg.dir[i]->ul_arstr);
+					getar(str, cfg.dir[i]->ul_arstr, /* helpbuf: */ NULL);
 					break;
 				case 7:
 					sprintf(str, "%s Download", cfg.dir[i]->sname);
-					getar(str, cfg.dir[i]->dl_arstr);
+					getar(str, cfg.dir[i]->dl_arstr, /* helpbuf: */ NULL);
 					break;
 				case 8:
 					sprintf(str, "%s Operator", cfg.dir[i]->sname);
-					getar(str, cfg.dir[i]->op_arstr);
+					getar(str, cfg.dir[i]->op_arstr, /* helpbuf: */ NULL);
 					break;
 				case 9:
 					sprintf(str, "%s Exemption", cfg.dir[i]->sname);
-					getar(str, cfg.dir[i]->ex_arstr);
+					getar(str, cfg.dir[i]->ex_arstr, /* helpbuf: */ NULL);
 					break;
 				case 10:
-					uifc.helpbuf = dir_transfer_path_help;
-					uifc.input(WIN_L2R | WIN_SAV, 0, 17, "Transfer File Path"
+					uifc.helpbuf = dir_actual_path_help;
+					uifc.input(WIN_L2R | WIN_SAV, 0, 17, "Actual File Path (directory)"
 					           , cfg.dir[i]->path, sizeof(cfg.dir[i]->path) - 1, K_EDIT);
 					break;
 				case 11:
@@ -2389,7 +2393,7 @@ void dir_defaults_cfg(int libnum)
 					for (int j = 0; j < cfg.total_dirs; j++) {
 						if (cfg.dir[j]->lib != libnum)
 							continue;
-						uifc.changes = 1;
+						uifc.changes = TRUE;
 						cfg.dir[j]->misc        = dir->misc;
 						cfg.dir[j]->maxfiles    = dir->maxfiles;
 						cfg.dir[j]->maxage      = dir->maxage;

@@ -5,6 +5,18 @@ Revision History (change log)
 =============================
 Version  Date         Description
 -------  ----         -----------
+1.49     2026-02-27   Bug fix: Middle column color bleeding over into the column
+                      for # of items for areas with less than 10,000 items.
+                      Bug fix: The # items column right-aligns correctly and
+                      consistently (including areas with more than 1000 items)
+1.48     2025-12-31   The area choosers can now save the user's last chosen
+                      sub-board (for each message group) and file directory (for
+                      each file library); also, there's a new user setting to
+                      toggle whether to use the last-known sub-board/directory.
+1.47     2025-10-03   Mouse click hotspots in the key help lines. Some of the
+                      click hotspots have an issue that causes the chooser to
+                      exit out though - the full sequence for the key for those
+                      clicks (ESC + ...) might not be captured.
 1.46     2025-08-26   Replaced arrow keys in the key help line since some
                       terminals can't display them.
 1.45     2025-06-18   Added support for sorting, with a user configuration

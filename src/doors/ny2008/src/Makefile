@@ -4,13 +4,23 @@ SRC_ROOT	:=	../../..
 include ${SRC_ROOT}/build/Common.gmake
 
 ODOORS_SRC	:= $(SRC_ROOT)/odoors
+ifdef win
+ ODLIB	:=	$(ODOORS_SRC)/libs-Win$(win)
+ OBJS	+=	$(ODLIB)/ODoor.res
+ XLDFLAGS +=	-mwindows
+ XLIBS	+=	-lcomctl32
+else
+ ODLIB	:=	$(ODOORS_SRC)/libs-`uname`
+endif
+
 CFLAGS += $(CIOLIB-MT_CFLAGS) $(XPDEV-MT_CFLAGS)
-CFLAGS += -I$(ODOORS_SRC)
+CFLAGS += -I$(ODOORS_SRC) -DOD_WIN32_STATIC
 LDFLAGS += $(CIOLIB-MT_LDFLAGS) $(XPDEV-MT_LDFLAGS) -L${ODOORS_SRC}/libs-`uname`
 CPPFLAGS += $(CFLAGS)
+LIBS += $(ODLIB)/libODoors.a $(CIOLIB-MT_LIBS) $(XPDEV-MT_LIBS)
 
 $(NY2008) : $(OBJS)
-	$(CXX) $(CPPFLAGS) ${LDFLAGS} $(OBJS) -lODoors -o $(NY2008) $(CIOLIB-MT_LIBS) $(XPDEV-MT_LIBS)
+	$(CXX) $(CPPFLAGS) ${LDFLAGS} $(XLDFLAGS) $(OBJS) $(LIBS) $(XLIBS) -o $(NY2008)
 
 $(AEDIT) : $(AEDIT_OBJS)
 	$(CXX) $(CPPFLAGS) ${LDFLAGS} $(AEDIT_OBJS) -o $(AEDIT)
@@ -22,5 +32,5 @@ $(NYIBBS) : $(NYIBBS_OBJS)
 	$(CXX) $(CPPFLAGS) ${LDFLAGS} $(NYIBBS_OBJS) -o $(NYIBBS) $(XPDEV-MT_LIBS)
 
 $(NYEDIT) : $(NYEDIT_OBJS)
-	$(CXX) $(CPPFLAGS) ${LDFLAGS} $(NYEDIT_OBJS) -lODoors -o $(NYEDIT) $(CIOLIB-MT_LIBS) $(XPDEV-MT_LIBS)
+	$(CXX) $(CPPFLAGS) ${LDFLAGS} $(NYEDIT_OBJS) $(LIBS) $(XLIBS) -o $(NYEDIT)
 

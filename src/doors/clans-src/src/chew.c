@@ -1,0 +1,232 @@
+/* Chew -- Program to make .GUM encrypted files */
+
+/*
+ * Compression code taken from SIXPACK.C by Philip G. Gage.
+ * For original source code either do a search for sixpack.c
+ * or go here:
+ *
+ * http://www.ifi.uio.no/in383/src/ddj/sixpack/
+ *
+ */
+
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "platform.h"
+
+#include "defines.h"
+#include "gum.h"
+#include "parsing.h"
+#include "structs.h"
+
+#define MAX_TOKEN_CHARS 32
+#define CODE1           0x7D
+#define CODE2           0x1F
+
+#define MAX_FILENAME_LEN 13
+
+static void AddGUM(FILE *fpGUM, char *pszFileName);
+static void AddDir(FILE *fpGUM, char *pszDirName);
+
+static long TotalBytes = 0;
+
+int main(int argc, char **argv)
+{
+	FILE *fpGUM;
+	FILE *fpList;
+	FILE *fpAttr;
+	unsigned filemode;
+	char szLine[255], szFileName[PATH_SIZE], szGumName[PATH_SIZE], szFileList[PATH_SIZE];
+
+	if (argc == 3) {
+		strlcpy(szGumName, argv[1], sizeof(szGumName));
+		strlcpy(szFileList, argv[2], sizeof(szFileList));
+	}
+	else {
+		strlcpy(szGumName, "archive.gum", sizeof(szGumName));
+		strlcpy(szFileList, "files.lst", sizeof(szFileList));
+	}
+
+	//initialize();
+
+	printf("CHEW v0.01\n\nChewing to %s\n\n", szGumName);
+
+	fpGUM = fopen(szGumName, "wb");
+	if (!fpGUM) {
+		printf("Couldn't create %s file!\n", szGumName);
+		return(1);
+	}
+
+	fpList = fopen(szFileList, "r");
+	if (!fpList) {
+		fclose(fpGUM);
+		printf("Couldn't read listing file: %s\n", szFileList);
+		return(1);
+	}
+
+	fpAttr = fopen("UnixAttr.DAT", "wbx");
+	if (!fpAttr) {
+		fclose(fpList);
+		fclose(fpGUM);
+		printf("Couldn't create UnixAttr.DAT file\n");
+		return(1);
+	}
+
+	for (;;) {
+		if (fgets(szLine, 255, fpList) == NULL)
+			break;
+
+		GetToken(szLine, szFileName);
+
+		if (szFileName[0] == 0 || szFileName[0] == '#')
+			continue;
+
+		if (szFileName[0] == '/') {
+			// directory to create
+			AddDir(fpGUM, szFileName);
+			if (!plat_getmode(szFileName, &filemode))
+				filemode = 0755;
+			fprintf(fpAttr, "%o %s\n", filemode, szFileName+1);
+		}
+		else {
+			AddGUM(fpGUM, szFileName);
+			if (!plat_getmode(szFileName, &filemode))
+				filemode = 0644;
+			fprintf(fpAttr, "%o %s\n", filemode, szFileName);
+		}
+	}
+
+	fclose(fpAttr);
+	AddGUM(fpGUM, "UnixAttr.DAT");
+	plat_DeleteFile("UnixAttr.DAT");
+
+	fclose(fpGUM);
+	fclose(fpList);
+
+	return(0);
+}
+
+static void AddGUM(FILE *fpGUM, char *pszFileName)
+{
+	char szEncryptedName[PATH_SIZE];
+	char *pcFrom, *pcTo;
+	FILE *fpFromFile;
+	long lFileSize, Offset1, Offset2;
+	int32_t lCompressSize;
+	int32_t tmp32;
+	uint16_t date, time;
+	uint16_t tmp16;
+
+	ClearAll();
+
+	if (strlen(pszFileName) >= sizeof(szEncryptedName)) {
+		printf("\aFilename too long: \"%s\"\n", pszFileName);
+		exit(1);
+	}
+	memset(szEncryptedName, 0, sizeof(szEncryptedName));
+
+	/* encrypt the filename */
+	pcFrom = pszFileName;
+	pcTo = szEncryptedName;
+
+	printf("Adding file: %s ", pszFileName);
+
+	while (*pcFrom) {
+		*pcTo = *pcFrom ^ CODE1;
+		pcFrom++;
+		pcTo++;
+	}
+	*pcTo = 0;
+
+	/* write it to file */
+	if (strlen(pszFileName) < MAX_FILENAME_LEN)
+		fwrite(szEncryptedName, MAX_FILENAME_LEN, sizeof(char), fpGUM);
+	else {
+		char ch = CODE1;
+		fwrite(&ch, 1, sizeof(char), fpGUM);
+		fwrite(szEncryptedName, strlen(pszFileName), sizeof(char), fpGUM);
+		fwrite(&ch, 1, sizeof(char), fpGUM);
+	}
+
+	/* write filesize to psi file */
+	fpFromFile = fopen(pszFileName, "rb");
+	if (!fpFromFile) {
+		printf("\aCouldn't open \"%s\"\n", pszFileName);
+		exit(1);
+	}
+	fseek(fpFromFile, 0, SEEK_END);
+	lFileSize = ftell(fpFromFile);
+	if (lFileSize > INT32_MAX || lFileSize < 0) {
+		printf("\aftell(\"%s\") returned %ld\n", pszFileName, lFileSize);
+		exit(1);
+	}
+	//printf(" (%ld bytes) ", lFileSize);
+	fseek(fpFromFile, 0, SEEK_SET);
+	tmp32 = SWAP32S((int32_t)lFileSize);
+	fwrite(&tmp32, sizeof(tmp32), 1, fpGUM);
+
+	// record this offset since we come back later to write the compressed
+	// size
+	Offset1 = ftell(fpGUM);
+	tmp32 = 0;
+	fwrite(&tmp32, sizeof(tmp32), 1, fpGUM);
+
+	// write datestamp
+	plat_getftime(fpFromFile, &date, &time);
+	tmp16 = SWAP16(date);
+	fwrite(&tmp16, sizeof(tmp16), 1, fpGUM);
+	tmp16 = SWAP16(time);
+	fwrite(&tmp16, sizeof(tmp16), 1, fpGUM);
+
+	//=== encode here
+	encode(fpFromFile, fpGUM);
+	TotalBytes += bytes_out;
+	//=== end here
+
+	// we write the compressed size now
+	Offset2 = ftell(fpGUM);
+	fseek(fpGUM, Offset1, SEEK_SET);
+	if (bytes_out < 0 || bytes_out > INT32_MAX) {
+		printf("\abytes_out invalid for \"%s\" (%ld)\n", pszFileName, lFileSize);
+		exit(1);
+	}
+	lCompressSize = (int32_t)bytes_out;
+	tmp32 = SWAP32S(lCompressSize);
+	fwrite(&tmp32, sizeof(tmp32), 1, fpGUM);
+	fseek(fpGUM, Offset2, SEEK_SET);
+
+	bytes_in = 0;
+	bytes_out = 0;
+
+	fclose(fpFromFile);
+	printf("Done.\n");
+
+}
+
+static void AddDir(FILE *fpGUM, char *pszDirName)
+{
+	char szEncryptedName[MAX_FILENAME_LEN];
+	char *pcFrom, *pcTo;
+	int iTemp;
+
+	for (iTemp = 0; iTemp < MAX_FILENAME_LEN; iTemp++)
+		szEncryptedName[iTemp] = 0;
+
+	/* encrypt the filename */
+	pcFrom = pszDirName;
+	pcTo = szEncryptedName;
+
+	printf("Adding directory: %s\n", pszDirName);
+
+	while (*pcFrom) {
+		*pcTo = *pcFrom ^ CODE1;
+		pcFrom++;
+		pcTo++;
+	}
+	*pcTo = 0;
+
+	// write dir name to file as is
+	fwrite(szEncryptedName, sizeof(szEncryptedName), 1, fpGUM);
+}

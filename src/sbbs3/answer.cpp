@@ -32,7 +32,7 @@ sbbs_t::set_authresponse(bool activate_ssh)
 {
 	int status;
 
-	lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_AUTHRESPONSE", client_socket);
+	lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_AUTHRESPONSE", client_socket.load());
 	status = cryptSetAttribute(ssh_session, CRYPT_SESSINFO_AUTHRESPONSE, activate_ssh);
 	if (cryptStatusError(status)) {
 		log_crypt_error_status_sock(status, "setting auth response");
@@ -95,7 +95,7 @@ check_pubkey(scfg_t *cfg, ushort unum, char *pkey, size_t pksz)
 	return false;
 }
 
-bool sbbs_t::answer(bool* login_success)
+bool sbbs_t::answer()
 {
 	char      str[MAX_PATH + 1], str2[MAX_PATH + 1], c;
 	char      tmp[MAX_PATH];
@@ -105,7 +105,7 @@ bool sbbs_t::answer(bool* login_success)
 	char      path[MAX_PATH + 1];
 	int       i, l, in;
 	struct tm tm;
-	max_socket_inactivity = startup->max_login_inactivity;
+	max_socket_inactivity = startup->max_dumbterm_inactivity;
 	useron.number = 0;
 	answertime = logontime = starttime = now = time(NULL);
 	/* Caller ID string is client IP address, by default (may be overridden later) */
@@ -114,18 +114,15 @@ bool sbbs_t::answer(bool* login_success)
 	memset(&tm, 0, sizeof(tm));
 	localtime_r(&now, &tm);
 
-	safe_snprintf(str, sizeof(str), "%-6s  %s %s %02d %u            Node %3u"
+	llprintf("@", "%-6s  %s %s %02d %u            Node %3u"
 	              , tm_as_hhmm(&cfg, &tm, str2)
 	              , wday[tm.tm_wday]
 	              , mon[tm.tm_mon], tm.tm_mday, tm.tm_year + 1900, cfg.node_num);
-	logline("@ ", str);
 
-	safe_snprintf(str, sizeof(str), "%s  %s [%s]", connection, client_name, client_ipaddr);
-	logline("@+:", str);
+	llprintf("@+", "%s  %s [%s]", connection, client_name, client_ipaddr);
 
 	if (client_ident[0]) {
-		safe_snprintf(str, sizeof(str), "Identity: %s", client_ident);
-		logline("@*", str);
+		llprintf("@*", "Identity: %s", client_ident);
 	}
 
 	if (sys_status & SS_RLOGIN) {
@@ -172,19 +169,18 @@ bool sbbs_t::answer(bool* login_success)
 					for (i = 0; i < 3 && online; i++) {
 						if (stricmp(tmp, useron.pass)) {
 							if (cfg.sys_misc & SM_ECHO_PW)
-								safe_snprintf(str, sizeof(str), "(%04u)  %-25s  FAILED Password attempt: '%s'"
+								llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt: '%s'"
 								              , useron.number, useron.alias, tmp);
 							else
-								safe_snprintf(str, sizeof(str), "(%04u)  %-25s  FAILED Password attempt"
+								llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt"
 								              , useron.number, useron.alias);
-							logline(LOG_NOTICE, "+!", str);
 							badlogin(useron.alias, tmp);
 							rioctl(IOFI);       /* flush input buffer */
 							bputs(text[InvalidLogon]);
 							bputs(text[PasswordPrompt]);
-							console |= CON_R_ECHOX;
+							console |= CON_PASSWORD;
 							getstr(tmp, LEN_PASS * 2, K_UPPER | K_LOWPRIO | K_TAB);
-							console &= ~(CON_R_ECHOX | CON_L_ECHOX);
+							console &= ~CON_PASSWORD;
 						}
 						else {
 							if (user_is_sysop(&useron) && (cfg.sys_misc & SM_SYSPASSLOGIN) && (cfg.sys_misc & SM_R_SYSOP)) {
@@ -205,12 +201,11 @@ bool sbbs_t::answer(bool* login_success)
 					if (i) {
 						if (stricmp(tmp, useron.pass)) {
 							if (cfg.sys_misc & SM_ECHO_PW)
-								safe_snprintf(str, sizeof(str), "(%04u)  %-25s  FAILED Password attempt: '%s'"
+								llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt: '%s'"
 								              , useron.number, useron.alias, tmp);
 							else
-								safe_snprintf(str, sizeof(str), "(%04u)  %-25s  FAILED Password attempt"
+								llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt"
 								              , useron.number, useron.alias);
-							logline(LOG_NOTICE, "+!", str);
 							badlogin(useron.alias, tmp);
 							bputs(text[InvalidLogon]);
 						}
@@ -255,14 +250,14 @@ bool sbbs_t::answer(bool* login_success)
 		pthread_mutex_lock(&ssh_mutex);
 
 		if (startup->options & BBS_OPT_SSH_ANYAUTH) {
-			lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_ACTIVE", client_socket);
+			lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_ACTIVE", client_socket.load());
 			if (cryptStatusError(i = cryptSetAttribute(ssh_session, CRYPT_SESSINFO_ACTIVE, 1))) {
 				log_crypt_error_status_sock(i, "setting session active");
 				activate_ssh = false;
 				// TODO: Add private key here...
 				if (i == CRYPT_ENVELOPE_RESOURCE) {
 					activate_ssh = set_authresponse(true);
-					lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_ACTIVE", client_socket);
+					lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_ACTIVE", client_socket.load());
 					i = cryptSetAttribute(ssh_session, CRYPT_SESSINFO_ACTIVE, 1);
 					if (cryptStatusError(i)) {
 						log_crypt_error_status_sock(i, "setting session active");
@@ -270,19 +265,19 @@ bool sbbs_t::answer(bool* login_success)
 					}
 					else {
 						SetEvent(ssh_active);
-						lprintf(LOG_DEBUG, "%04d SSH SSH_ANYAUTH allowed presented credential", client_socket);
+						lprintf(LOG_DEBUG, "%04d SSH SSH_ANYAUTH allowed presented credential", client_socket.load());
 					}
 				}
 			}
 			else {
 				activate_ssh = true;
 				SetEvent(ssh_active);
-				lprintf(LOG_DEBUG, "%04d SSH SSH_ANYAUTH allowed with no credential", client_socket);
+				lprintf(LOG_DEBUG, "%04d SSH SSH_ANYAUTH allowed with no credential", client_socket.load());
 			}
 		}
 		else {
 			for (ssh_failed = 0; ssh_failed < 3; ssh_failed++) {
-				lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_ACTIVE", client_socket);
+				lprintf(LOG_DEBUG, "%04d SSH Setting attribute: SESSINFO_ACTIVE", client_socket.load());
 				if (cryptStatusError(i = cryptSetAttribute(ssh_session, CRYPT_SESSINFO_ACTIVE, 1))) {
 					log_crypt_error_status_sock(i, "setting session active");
 					activate_ssh = false;
@@ -311,7 +306,7 @@ bool sbbs_t::answer(bool* login_success)
 						free_crypt_attrstr(pubkey);
 						pubkey = get_binary_crypt_attribute(ssh_session, CRYPT_SESSINFO_PUBLICKEY, &pubkeysz);
 					}
-					lprintf(LOG_DEBUG, "%04d SSH login: '%s'", client_socket, rlogin_name);
+					lprintf(LOG_DEBUG, "%04d SSH login: '%s'", client_socket.load(), rlogin_name);
 				}
 				else {
 					rlogin_name[0] = 0;
@@ -324,42 +319,41 @@ bool sbbs_t::answer(bool* login_success)
 							if (check_pubkey(&cfg, useron.number, pubkey, pubkeysz)) {
 								SAFECOPY(rlogin_pass, tmp);
 								activate_ssh = set_authresponse(true);
-								lprintf(LOG_DEBUG, "%04d SSH Public key authentication successful", client_socket);
+								lprintf(LOG_DEBUG, "%04d SSH Public key authentication successful", client_socket.load());
 								ssh_failed--;
 							}
 							else {
-								lprintf(LOG_DEBUG, "%04d SSH Public key authentication failed", client_socket);
+								lprintf(LOG_DEBUG, "%04d SSH Public key authentication failed", client_socket.load());
 							}
 						}
 						else {
 							if (stricmp(tmp, useron.pass) == 0) {
 								SAFECOPY(rlogin_pass, tmp);
 								activate_ssh = set_authresponse(true);
-								lprintf(LOG_DEBUG, "%04d SSH password authentication successful", client_socket);
+								lprintf(LOG_DEBUG, "%04d SSH password authentication successful", client_socket.load());
 								ssh_failed--;
 							}
 							else if (ssh_failed) {
 								if (cfg.sys_misc & SM_ECHO_PW)
-									safe_snprintf(str, sizeof(str), "(%04u)  %-25s  FAILED Password attempt: '%s'"
+									llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt: '%s'"
 									              , useron.number, useron.alias, tmp);
 								else
-									safe_snprintf(str, sizeof(str), "(%04u)  %-25s  FAILED Password attempt"
+									llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt"
 									              , useron.number, useron.alias);
-								logline(LOG_NOTICE, "+!", str);
 								badlogin(useron.alias, tmp);
 								useron.number = 0;
 							}
 						}
 					}
 					else {
-						lprintf(LOG_NOTICE, "%04d SSH failed to read user data for %s", client_socket, rlogin_name);
+						lprintf(LOG_NOTICE, "%04d SSH failed to read user data for %s", client_socket.load(), rlogin_name);
 					}
 				}
 				else {
 					if (cfg.sys_misc & SM_ECHO_PW)
-						lprintf(LOG_NOTICE, "%04d SSH !UNKNOWN USER: '%s' (password: %s)", client_socket, rlogin_name, truncsp(tmp));
+						lprintf(LOG_NOTICE, "%04d SSH !UNKNOWN USER: '%s' (password: %s)", client_socket.load(), rlogin_name, truncsp(tmp));
 					else
-						lprintf(LOG_NOTICE, "%04d SSH !UNKNOWN USER: '%s'", client_socket, rlogin_name);
+						lprintf(LOG_NOTICE, "%04d SSH !UNKNOWN USER: '%s'", client_socket.load(), rlogin_name);
 					badlogin(rlogin_name, tmp);
 					// Enable SSH so we can create a new user...
 					activate_ssh = set_authresponse(true);
@@ -402,12 +396,12 @@ bool sbbs_t::answer(bool* login_success)
 						 *       I'll just use a five second interpacket gap for now.
 						 */
 						if (waits == 0)
-							lprintf(LOG_DEBUG, "%04d SSH [%s] waiting for channel type.", client_socket, client_ipaddr);
+							lprintf(LOG_DEBUG, "%04d SSH [%s] waiting for channel type.", client_socket.load(), client_ipaddr);
 						waits++;
 						SLEEP(10);
 						waits++;
 						if (waits > 500) {
-							lprintf(LOG_INFO, "%04d SSH [%s] TIMEOUT waiting for channel type.", client_socket, client_ipaddr);
+							lprintf(LOG_INFO, "%04d SSH [%s] TIMEOUT waiting for channel type.", client_socket.load(), client_ipaddr);
 							activate_ssh = false;
 							pthread_mutex_lock(&ssh_mutex);
 							break;
@@ -452,29 +446,28 @@ bool sbbs_t::answer(bool* login_success)
 								}
 								SAFECOPY(useron.connection, connection);
 								SAFECOPY(useron.ipaddr, client_ipaddr);
-								SAFECOPY(useron.comp, client_name);
+								SAFECOPY(useron.host, client_name);
 								useron.logons++;
 								putuserdat(&useron);
-								snprintf(str, sizeof(str), "(%04u)  %-25s  %s Logon"
+								llprintf("++", "(%04u)  %-25s  %s Logon"
 								         , useron.number, useron.alias, client.protocol);
-								logline("++", str);
 								max_socket_inactivity = startup->max_sftp_inactivity;
 							}
 							else {
-								lprintf(LOG_NOTICE, "%04d Trying to create new user over sftp, disconnecting.", client_socket);
+								lprintf(LOG_NOTICE, "%04d Trying to create new user over sftp, disconnecting.", client_socket.load());
 								badlogin(rlogin_name, rlogin_pass, "SSH", &client_addr, /* delay: */ false);
 								activate_ssh = false;
 							}
 						}
 						else {
-							lprintf(LOG_NOTICE, "%04d SSH [%s] active channel subsystem '%.*s' is not 'sftp' (or SFTP not allowed), disconnecting.", client_socket, client_ipaddr, tnamelen, tname);
+							lprintf(LOG_NOTICE, "%04d SSH [%s] active channel subsystem '%.*s' is not 'sftp' (or SFTP not allowed), disconnecting.", client_socket.load(), client_ipaddr, tnamelen, tname);
 							badlogin(rlogin_name, rlogin_pass, "SSH", &client_addr, /* delay: */ false);
 							// Fail because there's no session.
 							activate_ssh = false;
 						}
 					}
 					else {
-						lprintf(LOG_NOTICE, "%04d SSH [%s] active channel '%.*s' is not 'session' or 'subsystem', disconnecting.", client_socket, client_ipaddr, tnamelen, tname);
+						lprintf(LOG_NOTICE, "%04d SSH [%s] active channel '%.*s' is not 'session' or 'subsystem', disconnecting.", client_socket.load(), client_ipaddr, tnamelen, tname);
 						badlogin(rlogin_name, rlogin_pass, "SSH", &client_addr, /* delay: */ false);
 						// Fail because there's no session.
 						activate_ssh = false;
@@ -497,10 +490,10 @@ bool sbbs_t::answer(bool* login_success)
 		}
 		if (!activate_ssh) {
 			int status;
-			lprintf(LOG_NOTICE, "%04d SSH [%s] session establishment failed", client_socket, client_ipaddr);
+			lprintf(LOG_NOTICE, "%04d SSH [%s] session establishment failed", client_socket.load(), client_ipaddr);
 			if (cryptStatusError(status = cryptDestroySession(ssh_session))) {
 				lprintf(LOG_ERR, "%04d SSH ERROR %d destroying Cryptlib Session %d from %s line %d"
-				        , client_socket, status, ssh_session, __FILE__, __LINE__);
+				        , client_socket.load(), status, ssh_session, __FILE__, __LINE__);
 			}
 			ssh_mode = false;
 			pthread_mutex_unlock(&ssh_mutex);
@@ -510,11 +503,11 @@ bool sbbs_t::answer(bool* login_success)
 
 		if (cryptStatusOK(cryptGetAttribute(ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_WIDTH, &l)) && l > 0) {
 			term->cols = l;
-			lprintf(LOG_DEBUG, "%04d SSH [%s] height %d", client_socket, client.addr, term->cols);
+			lprintf(LOG_DEBUG, "%04d SSH [%s] height %d", client_socket.load(), client.addr, term->cols);
 		}
 		if (cryptStatusOK(cryptGetAttribute(ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_HEIGHT, &l)) && l > 0) {
 			term->rows = l;
-			lprintf(LOG_DEBUG, "%04d SSH [%s] height %d", client_socket, client.addr, term->rows);
+			lprintf(LOG_DEBUG, "%04d SSH [%s] height %d", client_socket.load(), client.addr, term->rows);
 		}
 		l = 0;
 		if (cryptStatusOK(cryptGetAttributeString(ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_TERMINAL, terminal, &l)) && l > 0) {
@@ -522,7 +515,7 @@ bool sbbs_t::answer(bool* login_success)
 				terminal[l] = 0;
 			else
 				terminal[sizeof(terminal) - 1] = 0;
-			lprintf(LOG_DEBUG, "%04d SSH [%s] term: %s", client_socket, client.addr, terminal);
+			lprintf(LOG_DEBUG, "%04d SSH [%s] term: %s", client_socket.load(), client.addr, terminal);
 		}
 		pthread_mutex_unlock(&ssh_mutex);
 
@@ -564,8 +557,8 @@ bool sbbs_t::answer(bool* login_success)
 							term->rows = telnet_rows;
 					}
 					if (telnet_terminal[0]) {
-						pthread_mutex_unlock(&input_thread_mutex);
 						SAFECOPY(terminal, telnet_terminal);
+						pthread_mutex_unlock(&input_thread_mutex);
 						break;
 					}
 					pthread_mutex_unlock(&input_thread_mutex);
@@ -586,9 +579,9 @@ bool sbbs_t::answer(bool* login_success)
 		}
 		if (autoterm & PETSCII) {
 			SAFECOPY(terminal, "PETSCII");
+			term->lncntr = 0;
 			cls();
-			term->center(str);
-			term_out("\r\n");
+			term->center(str, P_80COLS);
 		} else {    /* ANSI+ terminal detection */
 			/*
 			 * TODO: Once this merges, it would be good to split the "ANSI detection"
@@ -601,6 +594,7 @@ bool sbbs_t::answer(bool* login_success)
 			        "\x1b[0c"   /* Request CTerm version */
 			        "\x1b[255B" /* locate cursor as far down as possible */
 			        "\x1b[255C" /* locate cursor as far right as possible */
+			        "\x1b[30;40m" // black on black
 			        "\b_"       /* need a printable char at this location to actually move cursor */
 			        "\x1b[6n"   /* Get cursor position */
 			        "\x1b[u"    /* restore cursor position */
@@ -608,7 +602,7 @@ bool sbbs_t::answer(bool* login_success)
 			        "\r"        /* Move cursor left */
 			        "\xef\xbb\xbf"  // UTF-8 Zero-width non-breaking space
 			        "\x1b[6n"   /* Get cursor position (again) */
-			        "\x1b[0m_"  /* "Normal" colors */
+			        "\x1b[0m"   /* "Normal" colors */
 			        "\x1b[2J"   /* clear screen */
 			        "\x1b[H"    /* home cursor */
 			        "\xC"       /* clear screen (in case not ANSI) */
@@ -617,7 +611,7 @@ bool sbbs_t::answer(bool* login_success)
 			i = l = 0;
 			term->row = 0;
 			term->lncntr = 0;
-			term->center(str);
+			term->center(str, P_80COLS);
 
 			while (i++ < 50 && l < (int)sizeof(str) - 1) {     /* wait up to 5 seconds for response */
 				c = incom(100) & 0x7f;
@@ -719,15 +713,13 @@ bool sbbs_t::answer(bool* login_success)
 
 			if (telnet_cmds_received) {
 				if (stricmp(telnet_terminal, "sexpots") == 0) { /* dial-up connection (via SexPOTS) */
-					SAFEPRINTF2(str, "%s connection detected at %u bps", terminal, cur_rate);
-					logline("@S", str);
+					llprintf("@S", "%s connection detected at %u bps", terminal, cur_rate);
 					node_connection = (ushort)cur_rate;
 					SAFEPRINTF(connection, "%u", cur_rate);
 					SAFECOPY(cid, "Unknown");
 					SAFECOPY(client_name, "Unknown");
 					if (telnet_location[0]) {            /* Caller-ID info provided */
-						SAFEPRINTF(str, "CID: %s", telnet_location);
-						logline("@*", str);
+						llprintf("@*", "CID: %s", telnet_location);
 						SAFECOPY(cid, telnet_location);
 						truncstr(cid, " ");              /* Only include phone number in CID */
 						char* p = telnet_location;
@@ -744,12 +736,14 @@ bool sbbs_t::answer(bool* login_success)
 					if (telnet_location[0]) {            /* Telnet Location info provided */
 						lprintf(LOG_INFO, "Telnet Location: %s", telnet_location);
 						if (trashcan(telnet_location, "ip-silent")) {
+							pthread_mutex_unlock(&input_thread_mutex);
 							hangup();
 							return false;
 						}
 						if (trashcan(telnet_location, "ip")) {
+							pthread_mutex_unlock(&input_thread_mutex);
 							lprintf(LOG_NOTICE, "%04d %s !TELNET LOCATION BLOCKED in ip.can: %s"
-							        , client_socket, client.protocol, telnet_location);
+							        , client_socket.load(), client.protocol, telnet_location);
 							hangup();
 							return false;
 						}
@@ -757,7 +751,7 @@ bool sbbs_t::answer(bool* login_success)
 					}
 				}
 				if (telnet_speed) {
-					lprintf(LOG_INFO, "Telnet Speed: %u bps", telnet_speed);
+					lprintf(LOG_INFO, "Telnet Speed: %u bps", telnet_speed.load());
 					cur_rate = telnet_speed;
 					cur_cps = telnet_speed / 10;
 				}
@@ -779,7 +773,7 @@ bool sbbs_t::answer(bool* login_success)
 		}
 		lprintf(LOG_INFO, "terminal type: %ux%u %s %s", term->cols, term->rows, term_charset(autoterm), terminal);
 		SAFECOPY(client_ipaddr, cid);   /* Over-ride IP address with Caller-ID info */
-		SAFECOPY(useron.comp, client_name);
+		SAFECOPY(useron.host, client_name);
 	}
 
 	update_nodeterm();
@@ -792,28 +786,28 @@ bool sbbs_t::answer(bool* login_success)
 		    && !::trashcan(&cfg, rlogin_name, "name")) {
 			lprintf(LOG_INFO, "%s !UNKNOWN specified username: '%s', starting new user sign-up", client.protocol, rlogin_name);
 			bprintf("%s: %s\r\n", text[UNKNOWN_USER], rlogin_name);
-			newuser();
+			if (!newuser())
+				llprintf(LOG_NOTICE, "N-", "%s !New user registration canceled", client.protocol);
 		}
 
-		if (!useron.number) {    /* manual/regular logon */
+		if (autoterm != NO_EXASCII)
+			max_socket_inactivity = startup->max_login_inactivity;
+
+		if (!useron.number) {    /* manual/regular login */
 
 			/* Display ANSWER screen */
 			rioctl(IOSM | PAUSE);
 			sys_status |= SS_PAUSEON;
 			menu("../answer");  // Should use P_NOABORT ?
 			sys_status &= ~SS_PAUSEON;
-			exec_bin(cfg.login_mod, &main_csi);
-		} else  /* auto logon here */
+			if (online && (i = exec_mod("login", cfg.login_mod)) != 0)
+				lprintf(LOG_ERR, "Error %d executing login module", i);
+		} else  /* auto login here */
 			logon();
 	}
 
 	if (!useron.number)
 		hangup();
-	else {
-		if (useron.pass[0])
-			loginSuccess(startup->login_attempt_list, &client_addr);
-		*login_success = true;
-	}
 
 	if (!online)
 		return false;

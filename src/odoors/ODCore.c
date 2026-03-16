@@ -386,6 +386,9 @@ ODAPIDEF void ODCALL od_clear_keybuffer(void)
 
    OD_API_ENTRY();
 
+   /* Call the OpenDoors kernel function. */
+   CALL_KERNEL_IF_NEEDED();
+
    /* Empty any events in the common input event queue. */
    ODInQueueEmpty(hODInputQueue);
 
@@ -395,9 +398,6 @@ ODAPIDEF void ODCALL od_clear_keybuffer(void)
       /* ... then remove any items in the serial port inbound buffer. */
       ODComClearInbound(hSerialPort);
    }
-
-   /* Call the OpenDoors kernel function. */
-   CALL_KERNEL_IF_NEEDED();
 
    OD_API_EXIT();
 }
@@ -650,7 +650,7 @@ ODAPIDEF void ODCALL od_page(void)
    /* Use extended ASCII characters if operating in ANSI or AVATAR mode. */
    if(od_control.user_ansi || od_control.user_avatar)
    {
-      od_repeat('Ä',77);
+      od_repeat('\xc4',77);
    }
    else
    {

@@ -27,16 +27,9 @@
 /* This is the external programs (doors) section of the bbs                 */
 /* Return 1 if no externals available, 0 otherwise. 						*/
 /****************************************************************************/
-int sbbs_t::xtrn_sec(const char* section)
+void sbbs_t::xtrn_sec(const char* section)
 {
-	char str[MAX_PATH + 1];
-
-	if (cfg.xtrnsec_mod[0] == '\0') {
-		errormsg(WHERE, ERR_CHK, "xtrnsec_mod", 0);
-		return 1;
-	}
-	SAFEPRINTF2(str, "%s %s", cfg.xtrnsec_mod, section);
-	return exec_bin(str, &main_csi);
+	exec_mod("external program section", cfg.xtrnsec_mod, /* invoked */ nullptr, "%s", section);
 }
 
 const char *hungupstr = "\1n\1h%s\1n hung up on \1h%s\1n %s\r\n";
@@ -141,7 +134,6 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 	int32_t   l;
 	struct tm tm;
 	struct tm tl;
-	stats_t   stats;
 	uint max_files = user_downloads_per_day(&cfg, &useron);
 
 	char      node_dir[MAX_PATH + 1];
@@ -168,13 +160,15 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 		GetShortPathName(cfg.text_dir, text_dir, sizeof(text_dir));
 		GetShortPathName(cfg.temp_dir, temp_dir, sizeof(temp_dir));
 #elif defined(__linux__)
-		/* These drive mappings must match the Linux/DOSEMU patch in xtrn.cpp: */
-		SAFECOPY(node_dir, DOSEMU_NODE_DIR);
-		SAFECOPY(ctrl_dir, DOSEMU_CTRL_DIR);
-		SAFECOPY(data_dir, DOSEMU_DATA_DIR);
-		SAFECOPY(exec_dir, DOSEMU_EXEC_DIR);
-		SAFECOPY(text_dir, DOSEMU_TEXT_DIR);
-		SAFECOPY(temp_dir, DOSEMU_TEMP_DIR);
+		if (startup->usedosemu) {
+			/* These drive mappings must match the Linux/DOSEMU patch in xtrn.cpp: */
+			SAFECOPY(node_dir, DOSEMU_NODE_DIR);
+			SAFECOPY(ctrl_dir, DOSEMU_CTRL_DIR);
+			SAFECOPY(data_dir, DOSEMU_DATA_DIR);
+			SAFECOPY(exec_dir, DOSEMU_EXEC_DIR);
+			SAFECOPY(text_dir, DOSEMU_TEXT_DIR);
+			SAFECOPY(temp_dir, DOSEMU_TEMP_DIR);
+		}
 #endif
 	}
 
@@ -216,7 +210,7 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 		              , useron.level            /* User main level */
 		              , useron.level            /* User transfer level */
 		              , getbirthmmddyy(&cfg, '/', useron.birth, tmp, sizeof(tmp)) /* User birthday (MM/DD/YY) */
-		              , useron.sex ? useron.sex : '?' /* User sex (M/F) */
+		              , useron.gender ? useron.gender : '?' /* User gender (e.g. M, F) */
 		              , useron.number           /* User number */
 		              , useron.phone);          /* User phone number */
 		lfexpand(str, misc);
@@ -285,7 +279,7 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 		              , temp_dir
 		              , cfg.sys_id
 		              , cfg.node_misc
-		              , misc & (XTRN_STDIO | XTRN_CONIO) ? INVALID_SOCKET : client_socket_dup
+		              , misc & (XTRN_STDIO | XTRN_CONIO) ? INVALID_SOCKET : client_socket_dup.load()
 		              );
 		lfexpand(str, misc);
 		fwrite(str, strlen(str), 1, fp);
@@ -310,7 +304,7 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 		              , useron.name             /* User real name */
 		              , nulstr                  /* User call sign */
 		              , getage(&cfg, useron.birth) /* User age */
-		              , useron.sex ? useron.sex : '?'); /* User sex (M/F) */
+		              , useron.gender ? useron.gender : '?'); /* User gender (e.g. M, F) */
 		strupr(str);
 		lfexpand(str, misc);
 		fwrite(str, strlen(str), 1, fp);
@@ -553,7 +547,7 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 			errormsg(WHERE, ERR_OPEN, str, O_WRONLY | O_CREAT | O_TRUNC);
 			return;
 		}
-		getstats(&cfg, 0, &stats);
+		getstats_cached(&cfg, 0, &stats);
 		QBBS::exitinfo exitinfo{};
 		exitinfo.BaudRate = (uint16_t)dte_rate;
 		exitinfo.SysInfo.CallCount = stats.logons;
@@ -574,7 +568,7 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 			exitinfo.UserInfo.Attrib |= QBBS::USER_ATTRIB_MORE;
 		if (term->supports(ANSI))
 			exitinfo.UserInfo.Attrib |= QBBS::USER_ATTRIB_ANSI;
-		if (useron.sex == 'F')
+		if (useron.gender == 'F')
 			exitinfo.UserInfo.Attrib |= QBBS::USER_ATTRIB_FEMALE;
 		exitinfo.UserInfo.Flags = useron.flags1;
 		exitinfo.UserInfo.TimesPosted = useron.posts;
@@ -967,19 +961,18 @@ void sbbs_t::xtrndat(const char *name, const char *dropdir, uchar type, uint tle
 			return;
 		}
 
-		safe_snprintf(str, sizeof(str), "%d\n%d\n%u\n%s%c\n%d\n%s\n%s\n%d\n%d\n"
-		              "%d\n%d\n"
-		              , misc & (XTRN_STDIO | XTRN_CONIO) ? 0 /* Local */ : 2 /* Telnet */
-		, misc & (XTRN_STDIO | XTRN_CONIO) ? INVALID_SOCKET : client_socket_dup
-		, dte_rate
-		, VERSION_NOTICE, REVISION
-		, useron.number
-		, useron.name
-		, name
-		, useron.level
-		, tleft / 60
-		, term->supports(ANSI)
-		, cfg.node_num);
+		safe_snprintf(str, sizeof(str), "%d\n%d\n%u\n%s%c\n%d\n%s\n%s\n%d\n%d\n%d\n%d\n"
+			, misc & (XTRN_STDIO | XTRN_CONIO) ? 0 /* Local */ : 2 /* Telnet */
+			, misc & (XTRN_STDIO | XTRN_CONIO) ? INVALID_SOCKET : client_socket_dup.load()
+			, dte_rate
+			, VERSION_NOTICE, REVISION
+			, useron.number
+			, useron.name
+			, name
+			, useron.level
+			, tleft / 60
+			, term->supports(ANSI)
+			, cfg.node_num);
 		lfexpand(str, misc);
 		fwrite(str, strlen(str), 1, fp);
 		fclose(fp);
@@ -1194,8 +1187,7 @@ void sbbs_t::moduserdat(uint xtrnnum)
 		if (fgets(str, 81, stream)) {      /* additional minutes */
 			mod = atol(str);
 			if (mod) {
-				SAFEPRINTF(str, "Minute Adjustment: %s", ultoac(mod, tmp));
-				logline("*+", str);
+				llprintf("*+", "Minute Adjustment: %s", ultoac(mod, tmp));
 				useron.min = (uint32_t)adjustuserval(&cfg, &useron, USER_MIN, mod);
 			}
 		}
@@ -1266,7 +1258,7 @@ const char* sbbs_t::xtrn_dropdir(const xtrn_t* xtrn, char* buf, size_t maxlen)
 bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 {
 	char   str[256], path[MAX_PATH + 1], dropdir[MAX_PATH + 1], name[32], c;
-	uint   i;
+	int    i;
 	int    tleft, mode;
 	node_t node;
 	time_t start, end;
@@ -1286,12 +1278,9 @@ bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 		subtract_cdt(&cfg, &useron, cfg.xtrn[xtrnnum]->cost);
 	}
 
-	if (cfg.prextrn_mod[0] != '\0') {
-		SAFEPRINTF2(str, "%s %s", cfg.prextrn_mod, cfg.xtrn[xtrnnum]->code);
-		if (exec_bin(str, &main_csi) != 0) {
-			return false;
-		}
-	}
+	bool invoked;
+	if (exec_mod("pre external program execution", cfg.prextrn_mod, &invoked, "%s", cfg.xtrn[xtrnnum]->code) != 0 && invoked)
+		return false;
 
 	if (!(cfg.xtrn[xtrnnum]->misc & MULTIUSER)) {
 		for (i = 1; i <= cfg.sys_nodes; i++) {
@@ -1315,6 +1304,16 @@ bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 		}
 		if (i <= cfg.sys_nodes)
 			return false;
+	}
+
+	for (i = 0; i < cfg.total_events; ++i) {
+		if (strcmp(cfg.event[i]->xtrn, cfg.xtrn[xtrnnum]->code) != 0)
+			continue;
+		if (fexist(event_running_filename(str, sizeof str, i))) {
+			bprintf(text[NodeStatusEventLimbo], cfg.event[i]->node);
+			pause();
+			return false;
+		}
 	}
 
 	if (cfg.xtrn[xtrnnum]->misc & XTRN_TEMP_DIR)
@@ -1378,10 +1377,9 @@ bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 	xtrndat(name, dropdir, cfg.xtrn[xtrnnum]->type, tleft, cfg.xtrn[xtrnnum]->misc);
 	if (!online)
 		return false;
-	snprintf(str, sizeof(str), "running external %s: %s"
+	llprintf("X-", "Executing external %s: %s"
 	         , user_event ? "user event" : "program"
 	         , cfg.xtrn[xtrnnum]->name);
-	logline("X-", str);
 	if (cfg.xtrn[xtrnnum]->cmd[0] != '?' &&  cfg.xtrn[xtrnnum]->cmd[0] != '*' && logfile_fp != NULL) {
 		fclose(logfile_fp);
 		logfile_fp = NULL;
@@ -1426,6 +1424,7 @@ bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 	}
 
 	start = time(NULL);
+	auto saved_max_socket_inactivity = max_socket_inactivity.load();
 	if (cfg.xtrn[xtrnnum]->max_inactivity > 0)
 		max_socket_inactivity = cfg.xtrn[xtrnnum]->max_inactivity;
 
@@ -1445,7 +1444,8 @@ bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 		external(cmdstr(cfg.xtrn[xtrnnum]->clean, drop_file, startup_dir, NULL, mode)
 		         , mode & ~(EX_STDIN | EX_CONIO), cfg.xtrn[xtrnnum]->path);
 	}
-	max_socket_inactivity = startup->max_session_inactivity;
+	if (cfg.xtrn[xtrnnum]->max_inactivity > 0)
+		max_socket_inactivity = saved_max_socket_inactivity;
 	/* Re-open the logfile */
 	if (logfile_fp == NULL) {
 		SAFEPRINTF(str, "%snode.log", cfg.node_dir);
@@ -1482,10 +1482,7 @@ bool sbbs_t::exec_xtrn(uint xtrnnum, bool user_event)
 	if (cfg.xtrn[xtrnnum]->misc & XTRN_PAUSE)
 		pause();
 
-	if (cfg.postxtrn_mod[0] != '\0') {
-		SAFEPRINTF2(str, "%s %s", cfg.postxtrn_mod, cfg.xtrn[xtrnnum]->code);
-		exec_bin(str, &main_csi);
-	}
+	exec_mod("post external program execution", cfg.postxtrn_mod, /* invoked */nullptr, "%s", cfg.xtrn[xtrnnum]->code);
 
 	return true;
 }

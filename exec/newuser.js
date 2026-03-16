@@ -1,13 +1,11 @@
-// New user login module
+// New user logon (post registration) module
 
 load("sbbsdefs.js");
 
 const QWK_ID_PATTERN = /^[A-Z][\w|-]{1,7}$/;
 
 var options;
-options=load("modopts.js","newuser");
-if(!options)
-	options = {};
+options=load("modopts.js","newuser", {});
 
 qnet=false;
 
@@ -22,12 +20,12 @@ if(options.send_newuser_welcome)	// backwards compatibility hack
 
 console.clear();
 
-if(!user.address.length && user.number>1 && options.survey !== false) {
+if(bbs.online && !user.address.length && user.number>1 && options.survey !== false) {
 	print("\1y\1hWhere did you hear about this BBS?");
 	user.address=console.getstr(30,K_LINE);
 }
 
-if(options.ask_qnet) {
+if(bbs.online && options.ask_qnet) {
 	if(options.qnet_name==undefined)
 		options.qnet_name="DOVE-Net";
 	if(!console.noyes(format("\r\nIs this account to be used for QWK Networking (%s)\1b", options.qnet_name))) {
@@ -37,13 +35,15 @@ if(options.ask_qnet) {
 	}
 }
 
-if(!qnet && (options.avatar || options.avatar_file)) {
+if(!qnet && (options.avatar || options.avatar_file || options.avatar_identicon)) {
 	var avatar_lib = load({}, 'avatar_lib.js');
-	if(options.avatar_file)
+	if (options.avatar_identicon)
+		avatar_lib.set_identicon(user);
+	else if(options.avatar_file)
 		avatar_lib.import_file(user.number, options.avatar_file, options.avatar_offset);
 	else
 		avatar_lib.update_localuser(user.number, options.avatar);
-}	
+}
 
 function chk_qwk_id(str)
 {
@@ -63,12 +63,12 @@ function chk_qwk_id(str)
 	return(true);
 }
 
-if(qnet) {
+if(bbs.online && qnet) {
 	alias = user.alias.toUpperCase();
 	while(!chk_qwk_id(alias) && bbs.online) {
 		console.crlf();
-		printf("\1n\1g\1h o \1wYour logon name must match your BBS's QWK ID.\r\n");
-		printf("\1g o\1w Your logon name is currently \"\1y%s\1w\"\r\n\r\n"
+		printf("\1U o \1wYour logon name must match your BBS's QWK ID.\r\n");
+		printf("\1u o\1w Your logon name is currently \"\1y%s\1w\"\r\n\r\n"
 			,user.alias.toUpperCase());
 		printf("This is an invalid QWK ID. Your QWK ID MUST be ");
 		printf("between 2 and 8 characters in\r\n");
@@ -88,7 +88,7 @@ if(qnet) {
 	user.security.exemptions|=UFLAG_D;
 }
 
-if(options.ask_sysop 
+if(bbs.online && options.ask_sysop
 	&& !console.noyes("\r\n\1bAre you a sysop of a \1wSynchronet\1b BBS (unsure, hit '\1wN\1b')")) {
 	user.security.flags1|=UFLAG_S;
 	if(qnet) {

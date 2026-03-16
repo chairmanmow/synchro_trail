@@ -124,7 +124,7 @@ function show_subs(grp)
 function select_msg_area()
 {
 	if(usrgrps < 1)
-		return;
+		return false;
 	while(bbs.online) {
 		var j=0;
 		if(usrgrps > 1) {
@@ -133,7 +133,7 @@ function select_msg_area()
 			j=console.getnum(usrgrps);
 			console.clear_hotspots();
 			if(j==-1)
-				return;
+				return false;
 			if(!j)
 				j=bbs.curgrp;
 			else
@@ -145,7 +145,7 @@ function select_msg_area()
 		console.clear_hotspots();
 		if(i==-1) {
 			if(usrgrps==1)
-				return;
+				return false;
 			continue;
 		}
 		if(!i)
@@ -154,9 +154,9 @@ function select_msg_area()
 			i--;
 		bbs.curgrp=j;
 		bbs.cursub=i;
-		return;
+		return true;
 	}
-	return;
+	return false;
 }
 
 // List File Libraries
@@ -203,7 +203,7 @@ function select_file_area()
 {
 	var usrlibs = file_area.lib_list.length;
 	if(usrlibs < 1)
-		return;
+		return false;
 	while(bbs.online) {
 		var j=0;
 		if(usrlibs > 1) {
@@ -212,7 +212,7 @@ function select_file_area()
 			j=console.getnum(usrlibs);
 			console.clear_hotspots();
 			if(j==-1)
-				return;
+				return false;
 			if(!j)
 				j=bbs.curlib;
 			else
@@ -224,7 +224,7 @@ function select_file_area()
 		console.clear_hotspots();
 		if(i==-1) {
 			if(usrlibs==1)
-				return;
+				return false;
 			continue;
 		}
 		if(!i)
@@ -233,9 +233,9 @@ function select_file_area()
 			i--;
 		bbs.curlib=j;
 		bbs.curdir=i;
-		return;
+		return true;
 	}
-	return;
+	return false;
 }
 
 function main_info()
@@ -245,7 +245,7 @@ function main_info()
 			bbs.menu("maininfo");
 		bbs.nodesync();
 		console.print("\r\n\x01y\x01h"+ gettext("Info") + ": \x01n");
-		var key = console.getkeys("?QISVY\r");
+		var key = console.getkeys("?QISVY\r", 0);
 		bbs.log_key(key);
 		switch(key) {
 		case '?':
@@ -294,7 +294,7 @@ function file_info()
 			bbs.menu("xferinfo");
 		bbs.nodesync();
 		console.print("\r\n\x01y\x01h" + gettext("Info") + ": \x01n");
-		key=console.getkeys("?TYDUQ\r");
+		key=console.getkeys("?TYDUQ\r", 0);
 		bbs.log_key(key);
 
 		switch(key) {
@@ -330,7 +330,7 @@ function list_users()
 {
 	console.print("\r\n\x01c\x01h" + "List Users" + "\r\n");
 	console.mnemonics("\r\n~" + gettext("Logons Today") + ", ~" + gettext("Yesterday") + ", ~" + gettext("Sub-board") + ", " + gettext("or") + " ~@All@: ");
-	switch(console.getkeys("LSY\r" + console.all_key)) {
+	switch(console.getkeys("LSY\r" + console.all_key, 0)) {
 	case 'L':
 		bbs.list_logons();
 		break;
@@ -362,7 +362,7 @@ function view_file_info(mode)
 	var str=bbs.get_filespec();
 	if(!str)
 		return;
-	if(!bbs.list_file_info(file_area.lib_list[bbs.curlib].dir_list[bbs.curdir].number, str, mode)) {
+	if(!bbs.list_file_info(file_area.lib_list[bbs.curlib].dir_list[bbs.curdir].number, str, mode) && str != '*') {
 		var s=0;
 		console.putmsg(bbs.text(bbs.text.SearchingAllDirs));
 		for(var i=0; i<file_area.lib_list[bbs.curlib].dir_list.length; i++) {
@@ -397,7 +397,7 @@ function view_files()
 	var str=bbs.get_filespec();
 	if(!str)
 		return;
-	if(!bbs.list_files(file_area.lib_list[bbs.curlib].dir_list[bbs.curdir].number, str, FL_VIEW)) {
+	if(!bbs.list_files(file_area.lib_list[bbs.curlib].dir_list[bbs.curdir].number, str, FL_VIEW) && str != '*') {
 		console.putmsg(bbs.text(bbs.text.SearchingAllDirs));
 		for(var i=0; i<file_area.lib_list[bbs.curlib].dir_list.length; i++) {
 			if(i==bbs.curdir)
@@ -498,7 +498,7 @@ function logoff(fast)
 		if(prompt.length) {
 			if(console.yesno(prompt)) {
 				bbs.batch_download();
-				return; // hang-up is handled in bbs.batch_download()
+				return false; // hang-up is handled in bbs.batch_download()
 			}
 			if(!console.noyes(bbs.text(bbs.text.ClearDownloadQueueQ)))
 				if(bbs.batch_clear(/* upload_queue */false))
@@ -507,10 +507,11 @@ function logoff(fast)
 					alert("Failed to clear batch download queue!");
 		}
 	}
-	if(fast)
+	if(fast) {
 		bbs.hangup();
-	else
-		bbs.logoff(/* prompt: */true);
+		return true;
+	}
+	return bbs.logoff(/* prompt: */true);
 }
 
 function upload_file()
@@ -571,6 +572,162 @@ function download_user_files()
 	else {
 		if(!bbs.list_file_info(file_area.user_dir.number, FI_USERXFER))
 			console.print(bbs.text(bbs.text.NoFilesForYou));
+	}
+}
+
+// From email_sec.js
+function send_email()
+{
+	console.putmsg(bbs.text(bbs.text.Email));
+	var name = console.getstr(40, K_TRIM);
+	if(!name)
+		return false;
+	if(name.indexOf('@') > 0)
+		return bbs.netmail(name);
+	var number = bbs.finduser(name);
+	if(console.aborted)
+		return false;
+	if(!number)
+		number = system.matchuser(name);
+	if(!number && (msg_area.settings&MM_REALNAME))
+		number = system.matchuserdata(U_NAME, name);
+	if(number)
+		return bbs.email(number, WM_NONE);
+	console.putmsg(bbs.text(bbs.text.UnknownUser));
+	return false;
+}
+
+// From email_sec.js
+const NetmailAddressHistoryLength = 10;
+function send_netmail()
+{
+	var userprops = bbs.mods.userprops || load(bbs.mods.userprops = {}, "userprops.js");
+	var netmail = msg_area.fido_netmail_settings | msg_area.inet_netmail_settings;
+	const ini_section = "netmail sent";
+	console.crlf();
+	var wm_mode = WM_NONE;
+	if((netmail&NMAIL_FILE) && !console.noyes("Attach a file"))
+		wm_mode = WM_FILE;
+	if(console.aborted)
+		return false;
+	console.putmsg(bbs.text(bbs.text.EnterNetMailAddress));
+	var addr_list = userprops.get(ini_section, "address", []) || [];
+	var addr = console.getstr(256, K_LINE | K_TRIM, addr_list);
+	if(!addr || console.aborted)
+		return false;
+	if(bbs.netmail(addr.split(','), wm_mode)) {
+		var addr_idx = addr_list.indexOf(addr);
+		if(addr_idx >= 0)
+			addr_list.splice(addr_idx, 1);
+		addr_list.unshift(addr);
+		if(addr_list.length > NetmailAddressHistoryLength)
+			addr_list.length = NetmailAddressHistoryLength;
+		userprops.set(ini_section, "address", addr_list);
+		userprops.set(ini_section, "localtime", new Date().toString());
+		return true;
+	}
+	return false;
+}
+
+function send_feedback()
+{
+	return bbs.email(/* user # */1, bbs.text(bbs.text.ReFeedback));
+}
+
+function page_sysop()
+{
+	if(!bbs.page_sysop()
+		&& !deny(format(bbs.text(bbs.text.ChatWithGuruInsteadQ), system.guru || "The Guru")))
+		bbs.page_guru();
+}
+
+// From default.js
+function menu_loop()
+{
+	var last_str_cmd = "";
+
+	// The menu-display/command-prompt loop
+	while(bbs.online && !js.terminated) {
+		if(!(user.settings & USER_EXPERT)) {
+			if (menu.cls)
+				console.clear();
+			bbs.menu(menu.file);
+		}
+		if (menu.node_action !== undefined)
+			bbs.node_action = menu.node_action;
+		bbs.nodesync();
+		eval(menu.eval);
+		console.newline();
+		console.aborted = false;
+		console.putmsg(menu.prompt, P_SAVEATR);
+		var cmd = console.getkey(K_UPPER);
+		if(cmd > ' ')
+			console.print(cmd);
+		if(cmd == ';') {
+			cmd = console.getstr(100, K_LINEWRAP);
+			if(cmd == '!')
+				cmd = last_str_cmd;
+			load({}, "str_cmds.js", cmd);
+			last_str_cmd = cmd;
+			continue;
+		}
+		if(cmd == '/' && typeof menu.slash_num_input == "function") {
+			cmd = console.getkey(K_UPPER);
+			console.print(cmd);
+			if(cmd >= '1' && cmd <= '9') {
+				menu.slash_num_input(cmd);
+				continue;
+			}
+			cmd = '/' + cmd;
+		}
+		if(cmd >= '1' && cmd <= '9' && typeof menu.num_input == "function") {
+			menu.num_input(cmd);
+			continue;
+		}
+		if(cmd > ' ') {
+			bbs.log_key(cmd, /* comma: */true);
+		}
+		if(menu.nav[cmd]) {
+			if(menu.nav[cmd].eval)
+				eval(menu.nav[cmd].eval);
+			continue;
+		}
+		console.newline();
+		console.line_counter = 0;
+		if(cmd == help_key) {
+			if(user.settings & USER_EXPERT) {
+				if (menu.cls)
+					console.clear();
+				bbs.menu(menu.file);
+			}
+			continue;
+		}
+		var menu_cmd = menu.command[cmd];
+		if(!menu_cmd) {
+			console.print("\r\n\x01c\x01h" + gettext("Unrecognized command."));
+			if(user.settings & USER_EXPERT)
+				console.print("  " + gettext("Hit") + " '\x01i" + help_key + "\x01n\x01c\x01h' " + gettext("for a menu."));
+			console.print("  " + gettext("Type \x01y;help\x01c for more commands."));
+			console.newline();
+			continue;
+		}
+		if(menu_cmd.ars === undefined || bbs.compare_ars(menu_cmd.ars)) {
+			if(menu_cmd.msg)
+				console.print(menu_cmd.msg);
+			if(menu_cmd.eval)
+				eval(menu_cmd.eval);
+			if(menu_cmd.exec) {
+				var script = system.mods_dir + menu_cmd.exec;
+				if(!file_exists(script))
+					script = system.exec_dir + menu_cmd.exec;
+				if(menu_cmd.args)
+					js.exec.apply(null, [script, {}].concat(menu_cmd.args));
+				else
+					js.exec(script, {});
+			}
+		}
+		else if(menu_cmd.err)
+			console.print(menu_cmd.err);
 	}
 }
 

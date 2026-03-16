@@ -62,6 +62,10 @@ int sbbs_t::msgtoqwk(smbmsg_t* msg, FILE *qwk_fp, int mode, smb_t* smb
 	if (msg->subj != NULL)
 		SAFECOPY(subj, msghdr_field(msg, msg->subj, NULL, mode & QM_UTF8));
 
+	uint getmsgtxt_mode = GETMSGTXT_ALL;
+	if (!(mode & QM_MIME))  // Get just the plain-text portion of MIME-encoded messages
+		getmsgtxt_mode |= GETMSGTXT_PLAIN;
+
 	if (msg->hdr.type != SMB_MSG_TYPE_NORMAL) {
 		if (voting == NULL)
 			return -1;
@@ -232,19 +236,26 @@ int sbbs_t::msgtoqwk(smbmsg_t* msg, FILE *qwk_fp, int mode, smb_t* smb
 			fprintf(hdrs, "%s: %s\n", smb_hfieldtype(hfield_type), p);
 
 		/* RFC822 header fields: */
-		for (i = 0; i < msg->total_hfields; i++)
-			if (msg->hfield[i].type == RFC822HEADER)
-				fprintf(hdrs, "%s\n", truncsp_lines((char*)msg->hfield_dat[i]));
-
+		for (i = 0; i < msg->total_hfields; i++) {
+			if (msg->hfield[i].type == RFC822HEADER) {
+				char* p = (char*)msg->hfield_dat[i];
+				if (getmsgtxt_mode == GETMSGTXT_PLAIN) { // Strip MIME headers when we're doing the MIME decoding
+					if (strnicmp(p, "MIME-Version:", 13) == 0)
+						continue;
+					if (strnicmp(p, "Content-Type:", 13) == 0)
+						continue;
+					if (strnicmp(p, "Content-Transfer-Encoding:", 26) == 0)
+						continue;
+				}
+				fprintf(hdrs, "%s\n", truncsp_lines(p));
+			}
+		}
 		fprintf(hdrs, "Conference: %u\n", conf);
 
 		/* Blank line: */
 		fprintf(hdrs, "\n");
 	}
 
-	uint getmsgtxt_mode = GETMSGTXT_ALL;
-	if (!(mode & QM_TO_QNET))  // Get just the plain-text portion of MIME-encoded messages
-		getmsgtxt_mode |= GETMSGTXT_PLAIN;
 	buf = smb_getmsgtxt(smb, msg, getmsgtxt_mode);
 	if (!buf)
 		return -2;
@@ -258,7 +269,7 @@ int sbbs_t::msgtoqwk(smbmsg_t* msg, FILE *qwk_fp, int mode, smb_t* smb
 		} else
 			utf8_to_cp437_inplace(buf);
 	}
-	if (mode & QM_WORDWRAP) {
+	if ((mode & QM_WORDWRAP) && !(msg->hdr.auxattr & MSG_FIXED_FORMAT)) {
 		int   org_cols = msg->columns ? msg->columns : 80;
 		int   new_cols = useron.cols ? useron.cols : term->cols ? term->cols : 80;
 		char* wrapped = ::wordwrap(buf, new_cols - 1, org_cols - 1, /* handle_quotes */ true, is_utf8 ? P_UTF8 : 0);
@@ -481,6 +492,12 @@ int sbbs_t::msgtoqwk(smbmsg_t* msg, FILE *qwk_fp, int mode, smb_t* smb
 							break;
 						case '7':
 							SAFECOPY(str, ansi.attrstr(BG_LIGHTGRAY));
+							break;
+						case 'U':
+							SAFECOPY(str, ansi.attrstr(cfg.color[ch == 'u' ? clr_userlow : clr_userhigh]));
+							break;
+						case 'V':
+							SAFECOPY(str, ansi.attrstr(cfg.color[ch == 'v' ? clr_mnelow : clr_mnehigh]));
 							break;
 					}
 					if (str[0])

@@ -955,6 +955,13 @@ enum text {
 	,QWKControlCommand
 	,QWKBadControlCommand
 	,NoMoreDownloads
+	,ReadYourUnreadMailNowQ
+	,UserDownloadsToday
+	,WideModeIsNow
+	,SeekingFile
+	,SeekingFileDone
+	,SeekPrompt
+	,QWKSettingsMIME
 
 	,TOTAL_TEXT
 };

@@ -3,6 +3,7 @@
 
 #include <cryptlib.h>
 #include "gen_defs.h"
+#include "sbbs.h"
 #include "sockwrap.h"
 #include "multisock.h"
 
@@ -29,6 +30,10 @@ typedef struct
 	js_callback_t *js_cb;
 	int tls_minver;
 	JSObject *tls_psk;
+	bool tls_nameverify;
+	bool tls_disable_certverify;
+	bool tls_clientauth;
+	bool tls_enhanced_certcheck;
 } js_socket_private_t;
 
 #ifdef __cplusplus

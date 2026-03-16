@@ -15,9 +15,6 @@
 
 require("sbbsdefs.js", 'EX_STDIO');
 require("nodedefs.js", 'NODE_SYSP');
-var text = bbs.mods.text;
-if(!text)
-	text = bbs.mods.text = load({}, "text.js");
 var presence = bbs.mods.presence_lib;
 if(!presence)
 	presence = bbs.mods.presence_lib = load({}, "presence_lib.js");
@@ -66,8 +63,8 @@ function str_cmds(str)
 		help["AVAIL"] = "Toggle sysop chat availability";
 		if(str=="AVAIL") {
 			system.operator_available = !system.operator_available;
-			write(format(bbs.text(text.LiSysopIs)
-				, bbs.text(system.operator_available ? text.LiSysopAvailable : text.LiSysopNotAvailable)));
+			write(format(bbs.text(bbs.text.LiSysopIs)
+				, bbs.text(system.operator_available ? bbs.text.LiSysopAvailable : bbs.text.LiSysopNotAvailable)));
 			return;
 		}
 
@@ -75,21 +72,21 @@ function str_cmds(str)
 		if(str=="ERR") {
 			var errlog=system.logs_dir+"error.log";
 			if(file_exists(errlog)) {
-				write(bbs.text(text.ErrorLogHdr));
-				console.printfile(errlog);
+				write(bbs.text(bbs.text.ErrorLogHdr));
+				console.printfile(errlog, P_NOATCODES | P_SEEK);
 				console.aborted = false;
-				if(!console.noyes(bbs.text(text.DeleteErrorLogQ)))
+				if(!console.noyes(bbs.text(bbs.text.DeleteErrorLogQ)))
 					file_remove(errlog);
 			}
 			else {
-				write(format(bbs.text(text.FileDoesNotExist),errlog));
+				write(format(bbs.text(bbs.text.FileDoesNotExist),errlog));
 			}
 			for(i=0;i<system.nodes;i++) {
 				if(system.node_list[i].errors)
 					break;
 			}
 			if(i<system.nodes) {
-				if(!console.noyes(bbs.text(text.ClearErrCounter))) {
+				if(!console.noyes(bbs.text(bbs.text.ClearErrCounter))) {
 					for(i=0;i<system.nodes; i++) {
 						system.node_list[i].errors=0;
 					}
@@ -101,9 +98,9 @@ function str_cmds(str)
 		help["GURU"] = "Display and optionally clear current guru log";
 		if(str=="GURU") {
 			if(file_exists(system.logs_dir+"guru.log")) {
-				console.printfile(system.logs_dir+"guru.log");
+				console.printfile(system.logs_dir+"guru.log", P_NOATCODES | P_SEEK);
 				console.crlf();
-				if(!console.noyes(bbs.text(text.DeleteGuruLogQ)))
+				if(!console.noyes(bbs.text(bbs.text.DeleteGuruLogQ)))
 					file_remove(system.logs_dir+"guru.log");
 			}
 		}
@@ -119,7 +116,13 @@ function str_cmds(str)
 		if(word=="LIST" || word=="TYPE" || word=="CAT") {
 			if(bbs.check_syspass()) {
 				str=str.substr(4);
-				console.printfile(get_filename(str), word == "CAT" ? P_NOATCODES : P_CPM_EOF);
+				var pmode = (word == "CAT") ? P_NOATCODES : P_CPM_EOF;
+				if(word == "TYPE")
+					pmode |= P_OPENCLOSE;
+				else
+					pmode |= P_SEEK;
+				log("printing " + (str = get_filename(str)));
+				console.printfile(str, pmode);
 				return;
 			}
 		}
@@ -154,7 +157,8 @@ function str_cmds(str)
 		if(word=="EDIT") {
 			if(bbs.check_syspass()) {
 				str=str.substr(4);
-				console.editfile(get_filename(str));
+				log("editing " + (str = get_filename(str)));
+				console.editfile(str);
 			}
 		}
 
@@ -162,7 +166,7 @@ function str_cmds(str)
 		if(str=="LOG") {
 			if(bbs.check_syspass()) {
 				str=system.logs_dir+strftime("logs/%m%d%y.log",time());
-				console.printfile(str);
+				console.printfile(str, P_NOATCODES);
 			}
 			return;
 		}
@@ -171,7 +175,7 @@ function str_cmds(str)
 		if(str=="YLOG") {
 			if(bbs.check_syspass()) {
 				str=system.logs_dir+strftime("logs/%m%d%y.log",time()-24*60*60);
-				console.printfile(str);
+				console.printfile(str, P_NOATCODES);
 			}
 			return;
 		}
@@ -278,7 +282,7 @@ function str_cmds(str)
 			if(!i) i=bbs.node_num;
 			i--;
 			if(i<0 || i>=system.nodes)
-				write("\r\n\001h\001rInvalid Node!");
+				write("\r\n\x01h\x01rInvalid Node!");
 			else {
 				if(system.node_list[i].status==NODE_WFC)
 					system.node_list[i].status=NODE_OFFLINE;
@@ -296,7 +300,7 @@ function str_cmds(str)
 			if(!i) i=bbs.node_num;
 			i--;
 			if(i<0 || i>=system.nodes)
-				write("\r\n\001h\001rInvalid Node!");
+				write("\r\n\x01h\x01rInvalid Node!");
 			else {
 				system.node_list[i].misc^=NODE_RRUN;
 				display_node(i+1);
@@ -345,7 +349,7 @@ function str_cmds(str)
 
 		help["MAIL"] = "Read all mail currently in the mail base";
 		if(str=="MAIL") {
-			bbs.read_mail(MAIL_ALL);
+			bbs.read_mail(MAIL_ALL, /* list msgs: */false);
 			return;
 		}
 
@@ -388,7 +392,7 @@ function str_cmds(str)
 						js.exec('mqtt_spy.js', this, parseInt(get_nodenum(str)));
 					else
 						bbs.spy(parseInt(get_nodenum(str)));
-					write("\1n\r\nSpy session complete.\r\n");
+					write("\x01n\r\nSpy session complete.\r\n");
 				}
 				catch (e) {}
 			}
@@ -576,7 +580,7 @@ function str_cmds(str)
 					k+=l;
 				}
 				if(k>1)
-					printf(bbs.text(text.NFilesListed),k);
+					printf(bbs.text(bbs.text.NFilesListed),k);
 				return;
 			}
 		}
@@ -592,7 +596,7 @@ function str_cmds(str)
 					return;
 			}
 			if(!file_exists(str)) {
-				write(bbs.text(text.FileNotFound));
+				write(bbs.text(bbs.text.FileNotFound));
 				return;
 			}
 			if(!bbs.check_syspass())
@@ -652,7 +656,7 @@ function str_cmds(str)
 			if(!i) i=bbs.node_num;
 			i--;
 			if(i<0 || i>=system.nodes)
-				write("\r\n\001h\001rInvalid Node!");
+				write("\r\n\x01h\x01rInvalid Node!");
 			else {
 				system.node_list[i].misc^=NODE_LOCK;
 				display_node(i+1);
@@ -670,7 +674,7 @@ function str_cmds(str)
 			if(!i) i=bbs.node_num;
 			i--;
 			if(i<0 || i>=system.nodes)
-				write("\r\n\001h\001rInvalid Node!");
+				write("\r\n\x01h\x01rInvalid Node!");
 			else {
 				system.node_list[i].misc^=NODE_INTR;
 				display_node(i+1);
@@ -705,14 +709,14 @@ function str_cmds(str)
 			var plan=format("%suser/%04d.plan",system.data_dir,user.number);
 			if(file_exists(plan)) {
 				if(console.yesno("Display current .plan"))
-					console.printfile(plan);
+					console.printfile(plan, P_NOATCODES);
 				if(!console.noyes("Delete current .plan"))
 					file_remove(plan);
 			}
 			if(console.yesno("Edit/Create .plan")) {
 				console.editfile(plan);
 				if(file_exists(plan))
-					console.printfile(plan);
+					console.printfile(plan, P_NOATCODES);
 			}
 		}
 
@@ -725,7 +729,7 @@ function str_cmds(str)
 			userSigFilename += ".sig";
 			if (file_exists(userSigFilename)) {
 				if (console.yesno(bbs.text(bbs.text.ViewSignatureQ)))
-					console.printfile(userSigFilename);
+					console.printfile(userSigFilename, P_NOATCODES);
 			}
 			if (console.yesno(bbs.text(bbs.text.CreateEditSignatureQ)))
 				console.editfile(userSigFilename);
@@ -750,7 +754,7 @@ function str_cmds(str)
 				var sub = grp.sub_list[s];
 				if(sub.name.toLowerCase().indexOf(str) >= 0
 					|| sub.description.toLowerCase().indexOf(str) >= 0) {
-					writeln(format("\1n[\1h%u\1n] %-15s [\1h%2u\1n] %s"
+					writeln(format("\x01n[\x01h%u\x01n] %-15s [\x01h%2u\x01n] %s"
 						,g + 1, grp.name
 						,s + 1, sub.description));
 					}
@@ -768,7 +772,7 @@ function str_cmds(str)
 				var dir = lib.dir_list[s];
 				if(dir.name.toLowerCase().indexOf(str) >= 0
 					|| dir.description.toLowerCase().indexOf(str) >= 0) {
-					writeln(format("\1n[\1h%u\1n] %-15s [\1h%2u\1n] %s"
+					writeln(format("\x01n[\x01h%u\x01n] %-15s [\x01h%2u\x01n] %s"
 						,g + 1, lib.name
 						,s + 1, dir.description));
 					}

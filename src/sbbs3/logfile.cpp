@@ -74,9 +74,9 @@ bool sbbs_t::hacklog(const char* prot, const char* text)
 	return ::hacklog(&cfg, mqtt, prot, useron.alias, text, client_name, &client_addr);
 }
 
-extern "C" bool spamlog(scfg_t* cfg, struct mqtt* mqtt, char* prot, char* action
-                        , char* reason, char* host, char* ip_addr
-                        , char* to, char* from)
+extern "C" bool spamlog(scfg_t* cfg, struct mqtt* mqtt, const char* prot, const char* action
+                        , const char* reason, const char* host, const char* ip_addr
+                        , const char* to, const char* from)
 {
 	char   to_user[256];
 	char   tstr[64];
@@ -232,6 +232,21 @@ void sbbs_t::llprintf(int level, const char* code, const char *fmt, ...)
 	TERMINATE(sbuf);
 	va_end(argptr);
 	logline(level, code, sbuf);
+}
+
+/****************************************************************************/
+/* Writes INFO-level formatted string on it's own line in node.log			*/
+/****************************************************************************/
+void sbbs_t::llprintf(const char* code, const char *fmt, ...)
+{
+	va_list argptr;
+	char    sbuf[1024];
+
+	va_start(argptr, fmt);
+	vsnprintf(sbuf, sizeof sbuf, fmt, argptr);
+	TERMINATE(sbuf);
+	va_end(argptr);
+	logline(code, sbuf);
 }
 
 /****************************************************************************/

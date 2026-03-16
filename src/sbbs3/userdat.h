@@ -31,9 +31,12 @@
 #include "dllexport.h"
 #include "userfields.h"
 
+#define USER_MAX_NUM			1000000 // arbitrarily chosen sane limit
 #define USER_DATA_FILENAME      "user.tab"
 #define USER_RECORD_LINE_LEN    1000                    // includes LF terminator
 #define USER_RECORD_LEN         (USER_RECORD_LINE_LEN - 1)  // does not include LF
+#define USER_INDEX_FILENAME     "name.dat"
+#define USER_INDEX_RECORD_LEN   (LEN_ALIAS + 2)
 
 // API function return values
 #define USER_SUCCESS            0
@@ -53,21 +56,24 @@ extern "C" {
 #endif
 
 DLLEXPORT char* userdat_filename(scfg_t*, char*, size_t);
-DLLEXPORT char* msgptrs_filename(scfg_t*, unsigned user_number, char*, size_t);
+DLLEXPORT char* useridx_filename(scfg_t*, char*, size_t);
+DLLEXPORT char* msgptrs_filename(scfg_t*, int user_number, char*, size_t);
 DLLEXPORT int   openuserdat(scfg_t*, bool for_modify);
-DLLEXPORT bool  seekuserdat(int file, unsigned user_number);
+DLLEXPORT bool  seekuserdat(int file, int user_number);
 DLLEXPORT int   closeuserdat(int file);
-DLLEXPORT int   readuserdat(scfg_t*, unsigned user_number, char* userdat, size_t, int file, bool leave_locked);
+DLLEXPORT int   readuserdat(scfg_t*, int user_number, char* userdat, size_t, int file, bool leave_locked);
 DLLEXPORT int   parseuserdat(scfg_t*, char* userdat, user_t*, char* fields[]);
 DLLEXPORT int   getuserdat(scfg_t*, user_t*);   // Fill user_t with user data
 DLLEXPORT int   fgetuserdat(scfg_t*, user_t*, int file);
+DLLEXPORT int   fputuserdat(scfg_t*, user_t*, int file);
 DLLEXPORT bool  format_userdat(scfg_t*, user_t*, char userdat[]);
-DLLEXPORT bool  lockuserdat(int file, unsigned user_number);
-DLLEXPORT bool  unlockuserdat(int file, unsigned user_number);
+DLLEXPORT bool  lockuserdat(int file, int user_number);
+DLLEXPORT bool  unlockuserdat(int file, int user_number);
 DLLEXPORT int   putuserdat(scfg_t*, user_t*);   // Put user_t into user file
 DLLEXPORT int   newuserdat(scfg_t*, user_t*);   // Create new user in user file
-DLLEXPORT int   newuserdefaults(scfg_t*, user_t*);
-DLLEXPORT uint  matchuser(scfg_t*, const char *str, bool sysop_alias); // Checks for a username match
+DLLEXPORT void  newuserdefaults(scfg_t*, user_t*);
+DLLEXPORT void  newsysop(scfg_t*, user_t*);
+DLLEXPORT int   matchuser(scfg_t*, const char *str, bool sysop_alias); // Checks for a username match
 DLLEXPORT bool  matchusername(scfg_t*, const char* name, const char* compare);
 DLLEXPORT char* alias(scfg_t*, const char* name, char* buf);
 DLLEXPORT int   putusername(scfg_t*, int number, const char* name);
@@ -88,6 +94,7 @@ DLLEXPORT char* parse_birthdate(scfg_t*, const char* birthdate, char* out, size_
 DLLEXPORT char* format_birthdate(scfg_t*, const char* birthdate, char* out, size_t);
 DLLEXPORT char* birthdate_format(scfg_t*, char* buf, size_t);
 DLLEXPORT char* birthdate_template(scfg_t*, char* buf, size_t);
+DLLEXPORT bool  birthdate_is_valid(scfg_t*, const char* birthdate);
 DLLEXPORT char* username(scfg_t*, int usernumber, char * str);
 DLLEXPORT char* usermailaddr(scfg_t*, char* addr, const char* name);
 DLLEXPORT void  smtp_netmailaddr(scfg_t*, smbmsg_t*, char* name, size_t namelen, char* addr, size_t addrlen);
@@ -101,7 +108,7 @@ DLLEXPORT char* node_activity(scfg_t*, node_t* node, char* str, size_t size, int
 DLLEXPORT char* node_vstatus(scfg_t*, node_t* node, char* str, size_t size);
 DLLEXPORT char* nodestatus(scfg_t*, node_t* node, char* buf, size_t buflen, int num);
 DLLEXPORT void  printnodedat(scfg_t*, uint number, node_t* node);
-DLLEXPORT int   user_is_online(scfg_t*, uint usernumber);
+DLLEXPORT int   user_is_online(scfg_t*, int usernumber);
 DLLEXPORT void  packchatpass(char *pass, node_t* node);
 DLLEXPORT char* unpackchatpass(char *pass, node_t* node);
 DLLEXPORT char* readsmsg(scfg_t*, int usernumber);
@@ -115,13 +122,14 @@ DLLEXPORT bool  set_node_interrupt(scfg_t*, int node_num, bool);
 DLLEXPORT bool  set_node_down(scfg_t*, int node_num, bool);
 DLLEXPORT bool  set_node_rerun(scfg_t*, int node_num, bool);
 DLLEXPORT bool  set_node_status(scfg_t*, int node_num, enum node_status);
-DLLEXPORT bool set_node_misc(scfg_t*, int node_num, uint);
-DLLEXPORT bool set_node_errors(scfg_t*, int node_num, uint);
+DLLEXPORT bool  set_node_misc(scfg_t*, int node_num, uint);
+DLLEXPORT bool  set_node_errors(scfg_t*, int node_num, uint);
+DLLEXPORT bool  xtrn_is_running(scfg_t*, int xtrn_num);
 
-DLLEXPORT uint  finduserstr(scfg_t*, uint usernumber, enum user_field, const char *str
+DLLEXPORT int  finduserstr(scfg_t*, int usernumber, enum user_field, const char *str
                             , bool del, bool next, void (*progress)(void*, int, int), void* cbdata);
 
-DLLEXPORT uint  find_login_id(scfg_t*, const char* user_id);
+DLLEXPORT int  find_login_id(scfg_t*, const char* user_id);
 
 DLLEXPORT bool  chk_ar(scfg_t*, uchar* str, user_t*, client_t*); /* checks access requirements */
 DLLEXPORT bool  chk_ars(scfg_t*, char* str, user_t*, client_t*);
@@ -149,7 +157,7 @@ DLLEXPORT int   putuserqwk(scfg_t*, int usernumber, uint32_t value);
 DLLEXPORT uint64_t adjustuserval(scfg_t*, user_t*, enum user_field, int64_t value);
 DLLEXPORT bool  writeuserfields(scfg_t*, char* field[], int file);
 DLLEXPORT int   loginuserdat(scfg_t*, user_t*, client_t* client, bool use_prot, char* save_ars);
-DLLEXPORT bool  logoutuserdat(scfg_t*, user_t*, time_t now, time_t logontime);
+DLLEXPORT int   logoutuserdat(scfg_t*, user_t*, time_t logontime);
 DLLEXPORT void  resetdailyuserdat(scfg_t*, user_t*, bool write);
 DLLEXPORT void  subtract_cdt(scfg_t*, user_t*, uint64_t amt);
 DLLEXPORT uint64_t user_available_credits(user_t*);
@@ -164,8 +172,9 @@ DLLEXPORT bool  user_can_read_sub(scfg_t*, int subnum, user_t*, client_t* client
 DLLEXPORT bool  user_can_post(scfg_t*, int subnum, user_t*, client_t* client, uint* reason);
 DLLEXPORT bool  user_can_upload(scfg_t*, int dirnum, user_t*, client_t* client, uint* reason);
 DLLEXPORT bool  user_can_download(scfg_t*, int dirnum, user_t*, client_t* client, uint* reason);
-DLLEXPORT bool  user_can_send_mail(scfg_t*, enum smb_net_type, uint usernumber, user_t*, uint* reason);
+DLLEXPORT bool  user_can_send_mail(scfg_t*, enum smb_net_type, int usernumber, user_t*, uint* reason);
 DLLEXPORT bool  user_is_nobody(user_t*);
+DLLEXPORT bool  user_is_active(user_t*);
 DLLEXPORT bool  user_is_guest(user_t*);
 DLLEXPORT bool  user_is_sysop(user_t*);
 DLLEXPORT bool  user_is_subop(scfg_t*, int subnum, user_t*, client_t* client);
@@ -183,12 +192,14 @@ enum parsed_vpath {
 DLLEXPORT enum parsed_vpath parse_vpath(scfg_t*, const char* vpath, int* libnum, int* dirnum, char** filename);
 
 /* user .ini file access */
-DLLEXPORT bool  user_get_property(scfg_t*, unsigned user_number, const char* section, const char* key, char* value, size_t maxlen);
-DLLEXPORT bool  user_set_property(scfg_t*, unsigned user_number, const char* section, const char* key, const char* value);
-DLLEXPORT bool user_set_time_property(scfg_t*, unsigned user_number, const char* section, const char* key, time_t);
+DLLEXPORT bool  user_get_property(scfg_t*, int user_number, const char* section, const char* key, char* value, size_t maxlen);
+DLLEXPORT bool  user_set_property(scfg_t*, int user_number, const char* section, const char* key, const char* value);
+DLLEXPORT bool  user_set_time_property(scfg_t*, int user_number, const char* section, const char* key, time_t);
+DLLEXPORT bool  user_get_bool_property(scfg_t*, int user_number, const char* section, const char* key, bool dflt);
+DLLEXPORT bool  user_set_bool_property(scfg_t*, int user_number, const char* section, const char* key, bool value);
 
 /* New-message-scan pointer functions: */
-DLLEXPORT bool newmsgs(smb_t*, time_t);
+DLLEXPORT bool  newmsgs(smb_t*, time_t);
 DLLEXPORT bool  getmsgptrs(scfg_t*, user_t*, subscan_t*, void (*progress)(void*, int, int), void* cbdata);
 DLLEXPORT bool  putmsgptrs(scfg_t*, user_t*, subscan_t*);
 DLLEXPORT bool  putmsgptrs_fp(scfg_t*, user_t*, subscan_t*, FILE*);
@@ -208,7 +219,7 @@ DLLEXPORT bool  user_adjust_minutes(scfg_t*, user_t*, long amount);
 DLLEXPORT time_t gettimeleft(scfg_t*, user_t*, time_t starttime);
 
 DLLEXPORT bool  check_pass(scfg_t*, const char *passwd, user_t* user, bool unique, int* reason);
-DLLEXPORT bool  check_name(scfg_t*, const char* name);
+DLLEXPORT bool  check_name(scfg_t*, const char* name, bool unique);
 DLLEXPORT bool  check_realname(scfg_t*, const char* name);
 DLLEXPORT bool  sysop_available(scfg_t*);
 DLLEXPORT bool  set_sysop_availability(scfg_t*, bool available);

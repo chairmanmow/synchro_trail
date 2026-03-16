@@ -145,7 +145,7 @@ aspect_reverse(int *x, int *y, int scrnwidth, int scrnheight, int aspect_width, 
 		width = scrnwidth * (*x / scrnwidth);
 		if (width < scrnwidth)
 			width = scrnwidth;
-		height = scrnheight * (*x / scrnheight);
+		height = scrnheight * (*y / scrnheight);
 		if (height < scrnheight)
 			height = scrnheight;
 		return;
@@ -167,7 +167,7 @@ aspect_reverse(int *x, int *y, int scrnwidth, int scrnheight, int aspect_width, 
 	}
 	else if (cheight > height) {
 		// Height controls
-		height = scrnheight * (*x / scrnheight);
+		height = scrnheight * (*y / scrnheight);
 		if (height < scrnheight)
 			height = scrnheight;
 
@@ -942,19 +942,18 @@ multiply_scale(uint32_t const* src, uint32_t* dst, const int width, const int he
 {
 	int x, y;
 	int mx, my;
-	uint32_t const* slstart;
+	const int row_bytes = width * xmult * sizeof(uint32_t);
 
 	for (y = 0; y < height; y++) {
-		slstart = src;
-		for (my = 0; my < ymult; my++) {
-			src = slstart;
-			for (x = 0; x < width; x++) {
-				for (mx = 0; mx < xmult; mx++) {
-					*dst = *src;
-					dst++;
-				}
-				src++;
-			}
+		uint32_t *row_start = dst;
+		for (x = 0; x < width; x++) {
+			for (mx = 0; mx < xmult; mx++)
+				*dst++ = *src;
+			src++;
+		}
+		for (my = 1; my < ymult; my++) {
+			memcpy(dst, row_start, row_bytes);
+			dst += width * xmult;
 		}
 	}
 }

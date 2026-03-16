@@ -1,0 +1,842 @@
+/*
+
+The Clans BBS Door Game
+Copyright (C) 1997-2002 Allen Ussher
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.
+*/
+
+#include <ctype.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+#include "platform.h"
+
+#include "alliance.h"
+#include "console.h"
+#include "myopen.h"
+#include "parsing.h"
+#include "random.h"
+#include "readcfg.h"
+#include "structs.h"
+#include "video.h"
+
+#define MAX_OPTION      13
+
+/* reset types */
+#define RESET_LOCAL     1   // normal reset -- local, NO ibbs junk
+#define RESET_JOINIBBS  2   // joining an IBBS league game
+#define RESET_LC        3   // leaguewide reset by LC
+
+#define FIGHTSPERDAY    12
+#define CLANCOMBATADAY  5
+
+
+static void ResetMenu(void);
+
+static void EditOption(int16_t WhichOption);
+static void DosHelp(char *Topic, char *File);
+
+static void GoReset(struct ResetData *ResetData, int16_t Option);
+
+static void News_AddNews(char *szString);
+static void News_CreateTodayNews(void);
+
+static void CreateVillageDat(struct ResetData *ResetData);
+
+static void UpdateOption(int16_t Option);
+
+static struct ResetData ResetData;
+
+static char szTodaysDate[11];
+
+
+int main(void)
+{
+	time_t now = time(NULL);
+	struct tm tm = *localtime(&now);
+
+	Video_Init();
+	Config_Init(0, NULL);
+
+	if (tm.tm_mon > 11 || tm.tm_mon < 0)
+		System_Error("Invalid Month");
+	else if (tm.tm_mday > 31 || tm.tm_mday < 1)
+		System_Error("Invalid Day");
+	else if (tm.tm_year > 8099 || tm.tm_year < 125)
+		System_Error("Invalid Year");
+	snprintf(szTodaysDate, sizeof(szTodaysDate), "%02d/%02d/%4d", tm.tm_mon + 1, tm.tm_mday,
+			tm.tm_year + 1900);
+
+	// load up config
+
+	ResetMenu();
+	Video_Close();
+	return (0);
+}
+
+static void ResetMenu(void)
+{
+	int8_t CurOption = 0;
+	int  cInput;
+	int8_t OldOption = -1;
+	bool Quit = false, DidReset = false, InterBBS = false;
+
+	/* clear all */
+	textattr(7);
+	clrscr();
+	ShowTextCursor(false);
+
+	/* show options */
+	qputs(" |03Reset for The Clans " VERSION, 0,0);
+	qputs("|09- |01---------------------------------------------------------------------------",0,1);
+	xputs(" Game start date", 0, 2);
+	xputs(" Last date to join game", 0, 3);
+	xputs(" Village Name", 0, 4);
+
+	xputs(" Allow interBBS clan travel", 0, 5);
+	xputs(" Days before lost troops/clans return", 0, 6);
+	xputs(" Allow clan empires", 0, 7);
+	xputs(" Mine fights per day", 0, 8);
+	xputs(" Clan fights per day", 0, 9);
+
+	xputs(" Max. Permanent Clan Members", 0, 10);
+	xputs(" Days of Protection for new users", 0, 11);
+
+	xputs(" Reset local game with these settings", 0, 12);
+	xputs(" Join a league", 0, 13);
+	xputs(" Leaguewide reset with these settings", 0, 14);
+	xputs(" Abort reset", 0, 15);
+	qputs("|01--------------------------------------------------------------------------- |09-",0,16);
+
+	qputs("|09 Press the up and down keys to navigate.", 0, 17);
+
+	/* init defaults */
+	strlcpy(ResetData.szDateGameStart, szTodaysDate, sizeof(ResetData.szDateGameStart));
+	strlcpy(ResetData.szLastJoinDate, "12/16/2199", sizeof(ResetData.szLastJoinDate));
+	strlcpy(ResetData.szVillageName, "The Village", sizeof(ResetData.szVillageName));
+	ResetData.InterBBSGame = Config.InterBBS;
+	ResetData.LeagueWide = false;
+	ResetData.InProgress = false;
+	ResetData.ClanTravel = true;
+	ResetData.LostDays = 3;
+	ResetData.ClanEmpires = true;
+	ResetData.MineFights = FIGHTSPERDAY;
+	ResetData.ClanFights = CLANCOMBATADAY;
+	ResetData.DaysOfProtection = 4;
+	ResetData.MaxPermanentMembers = 4;
+
+	ColorArea(0,2+MAX_OPTION, 39, 2+MAX_OPTION, 7);
+	gotoxy(2, CurOption+3);
+
+	/* dehilight all options */
+	ColorArea(39,2, 76, 15, 15);    // choices on the right side
+
+	ColorArea(0, 2, 39, MAX_OPTION+2, 7);
+
+	/* dehilight options which can't be activated */
+	if (!Config.InterBBS) {
+		ColorArea(0,13, 76, 14,  8);
+	}
+	else if (Config.BBSID != 1) {
+		// not LC, can't use leaguewide reset option
+		ColorArea(0,14, 76, 14, 8);
+		ColorArea(0,12, 39, 12, 8);
+	}
+	else {
+		// LC's BBS AND IBBS set
+		ColorArea(0,12, 39, 13, 8);
+	}
+
+	textattr(15);
+	/* show data */
+	UpdateOption(0);
+	UpdateOption(1);
+	UpdateOption(2);
+	UpdateOption(3);
+	UpdateOption(4);
+	UpdateOption(5);
+	UpdateOption(6);
+	UpdateOption(7);
+	UpdateOption(8);
+	UpdateOption(9);
+
+	while (!Quit) {
+		if (OldOption != CurOption) {
+			if (OldOption != -1)
+				ColorArea(0, OldOption + 2, 39, OldOption + 2, 7);
+			OldOption = CurOption;
+			/* show which is highlighted */
+			ColorArea(0, CurOption + 2, 39, CurOption + 2, HILIGHT);
+			/* Unhighlight old option */
+		}
+
+		cInput = cio_getch();
+		if (cInput == 0 || cInput == 0xE0) {
+			cInput = cio_getch();
+			switch (cInput) {
+				case K_UP   :
+				case K_LEFT :
+					if (CurOption == 0)
+						CurOption = MAX_OPTION;
+					else
+						CurOption--;
+					if ((CurOption == (MAX_OPTION-1)) && (Config.BBSID != 1))
+						CurOption--;
+					if ((CurOption == (MAX_OPTION-2)) && ((Config.InterBBS == false) || (Config.BBSID == 1)))
+						CurOption--;
+					if ((CurOption == (MAX_OPTION-3)) && Config.InterBBS)
+						CurOption--;
+					break;
+				case K_DOWN :
+				case K_RIGHT:
+					if (CurOption == MAX_OPTION)
+						CurOption = 0;
+					else
+						CurOption++;
+					if ((CurOption == (MAX_OPTION-3)) && Config.InterBBS)
+						CurOption++;
+					if ((CurOption == (MAX_OPTION-2)) && ((Config.InterBBS == false) || (Config.BBSID == 1)))
+						CurOption++;
+					if ((CurOption == (MAX_OPTION-1)) && (Config.BBSID != 1))
+						CurOption++;
+					break;
+				case K_HOME :
+				case K_PGUP :
+					CurOption = 0;
+					break;
+				case K_END :
+				case K_PGDN :
+					CurOption = MAX_OPTION;
+					break;
+			}
+		}
+		else if (cInput == 0x1B)
+			Quit = true;
+		else if (cInput == 13) {
+			if (Config.InterBBS == false && CurOption >= (MAX_OPTION-2) &&
+					CurOption < MAX_OPTION)
+				continue;
+			else if (Config.BBSID == 1 && Config.InterBBS && CurOption == (MAX_OPTION-2))
+				continue;
+			else if (Config.BBSID != 1 && CurOption == (MAX_OPTION-1)) {
+				continue;
+			}
+
+			if (CurOption == MAX_OPTION) {
+				Quit = true;
+				DidReset = false;
+			}
+			else if (CurOption == (MAX_OPTION-3)) {
+				void *screen_state;
+
+				// can't reset locally here
+				if (Config.InterBBS)
+					continue;
+
+				/* reset local now */
+				// ask one last time, are you sure?
+				screen_state = save_screen();
+				textattr(7);
+				clrscr();
+				if (!NoYes("|07Are you sure you wish to reset?")) {
+					restore_screen(screen_state);
+					break;
+				}
+
+				GoReset(&ResetData, RESET_LOCAL);
+				DidReset = true;
+				restore_screen(screen_state);
+				break;
+			}
+			else if (CurOption == (MAX_OPTION-2)) {
+				void *screen_state;
+				screen_state = save_screen();
+
+				// ask one last time, are you sure?
+				textattr(7);
+				clrscr();
+				if (!NoYes("|07Are you sure you are joining a league?")) {
+					restore_screen(screen_state);
+					break;
+				}
+				/* join league NOT in progress */
+				ResetData.LeagueWide = true;
+				ResetData.InProgress = false;
+				GoReset(&ResetData, RESET_JOINIBBS);
+				Quit = true;
+				DidReset = true;
+				InterBBS = true;
+				restore_screen(screen_state);
+			}
+			else if (CurOption == (MAX_OPTION-1)) {
+				void *screen_state;
+				screen_state = save_screen();
+				// ask one last time, are you sure?
+				textattr(7);
+				clrscr();
+				if (!NoYes("|07Are you sure you wish to reset the league?")) {
+					restore_screen(screen_state);
+					break;
+				}
+				/* leaguewide reset now */
+				ResetData.LeagueWide = true;
+				GoReset(&ResetData, RESET_LC);
+				Quit = true;
+				DidReset = true;
+				InterBBS = true;
+				restore_screen(screen_state);
+			}
+			else {
+				EditOption(CurOption);
+				textattr(15);
+				UpdateOption(CurOption);
+			}
+		}
+	}
+
+	textattr(7);
+	clrscr();
+
+	if (DidReset) {
+		qputs("|09> |07Your game has been reset.", 0,0);
+		if (InterBBS)
+			qputs("|09> |03You must now type |11CLANS /I |03to complete the IBBS reset.", 0,1);
+	}
+	else
+		qputs("|09> |07The game was not reset.  No changes were made.", 0,0);
+
+	textattr(7);
+	gotoxy(0,3);
+	ShowTextCursor(true);
+}
+
+static void EditOption(int16_t WhichOption)
+{
+	char *aszHelp[10] = {
+		"Date Game Starts",
+		"Last Join Date",
+		"Village Name",
+		"Clan Travel",
+		"Lost Troops",
+		"Clan Empires",
+		"Mine Fights",
+		"Clan Combat",
+		"Max Permanent Members",
+		"Days Of Protection"
+	};
+	int16_t Month, Day, Year;
+
+	/* save screen */
+	void *screen_state;
+	screen_state = save_screen();
+
+	textattr(7);
+	clrscr();
+
+	/* show help */
+	DosHelp(aszHelp[WhichOption], "/hlp/reset");
+
+
+	switch (WhichOption) {
+		case 0 :    /* dategame started */
+			gotoxy(0, 15);
+			Month = (int16_t)DosGetLong("|07Enter Month", atoi(ResetData.szDateGameStart), 12);
+			Day = (int16_t)DosGetLong("|07Enter Day", atoi(&ResetData.szDateGameStart[3]), 31);
+			Year = (int16_t)DosGetLong("|07Enter Year", atoi(&ResetData.szDateGameStart[6]), 2500);
+
+			snprintf(ResetData.szDateGameStart, sizeof(ResetData.szDateGameStart), "%02d/%02d/%4d", Month, Day, Year);
+			break;
+		case 1 :    /* last join date */
+			gotoxy(0, 15);
+			Month = (int16_t)DosGetLong("|07Enter Month", atoi(ResetData.szLastJoinDate), 12);
+			Day = (int16_t)DosGetLong("|07Enter Day", atoi(&ResetData.szLastJoinDate[3]), 31);
+			Year = (int16_t)DosGetLong("|07Enter Year", atoi(&ResetData.szLastJoinDate[6]), 2500);
+
+			snprintf(ResetData.szLastJoinDate, sizeof(ResetData.szLastJoinDate), "%02d/%02d/%4d", Month, Day, Year);
+			break;
+		case 2 :    /* village name */
+			gotoxy(0, 15);
+			zputs("|07Please enter the village name|08> |15");
+			DosGetStr(ResetData.szVillageName, 29, false);
+			break;
+		case 3 :    /* clan travel? */
+			gotoxy(0, 15);
+			ResetData.ClanTravel = ResetData.ClanTravel ? YesNo("|07Allow clans to travel?") : NoYes("|07Allow clans to travel?");
+			break;
+		case 4 :    /* days before lost troops return */
+			gotoxy(0, 15);
+			ResetData.LostDays = (int16_t)DosGetLong("|07Days before lost troops/clans returned?", ResetData.LostDays, 14);
+			break;
+		case 5 :    /* clan empires? */
+			gotoxy(0, 15);
+			ResetData.ClanEmpires = ResetData.ClanEmpires ? YesNo("|07Allow clans to create empires?") : NoYes("|07Allow clans to create empires?");
+			break;
+		case 6 :    /* mine fights */
+			gotoxy(0, 15);
+			ResetData.MineFights = (int16_t)DosGetLong("|07How many mine fights per day?", ResetData.MineFights, 50);
+			break;
+		case 7 :    /* clan combat */
+			gotoxy(0, 15);
+			ResetData.ClanFights = (int16_t)DosGetLong("|07How many clan fights per day?", ResetData.ClanFights, MAX_CLANCOMBAT);
+			break;
+		case 8 :    /* max permanent clan members */
+			gotoxy(0, 15);
+			ResetData.MaxPermanentMembers = (int16_t)DosGetLong("|07How many members?", ResetData.MaxPermanentMembers, 6);
+			if (ResetData.MaxPermanentMembers == 0)
+				ResetData.MaxPermanentMembers = 1;
+			break;
+		case 9:     /* days of protection */
+			gotoxy(0, 15);
+			ResetData.DaysOfProtection = (int16_t)DosGetLong("|07How many days?", ResetData.DaysOfProtection, 16);
+			break;
+	}
+
+	/* restore screen */
+	restore_screen(screen_state);
+}
+
+static void DosHelp(char *Topic, char *File)
+{
+	char *Lines[22], string[155];
+	int16_t cTemp, Found = false, CurLine, NumLines;
+	int32_t MaxBytes;
+	struct FileHeader FileHeader;
+	bool EndOfTopic = false;
+
+	qputs("|15", 0, 0);
+	qputs(Topic, 1, 0);
+	qputs("|09- |01---------------------------------------------------------------------------",0,1);
+
+	qputs("|01--------------------------------------------------------------------------- |09-",0,12);
+
+	MyOpen(File, "rt", &FileHeader);
+	if (!FileHeader.fp) {
+		qputs("|12Game help not found!\n", 0, 2);
+		return;
+	}
+
+	for (cTemp = 0; cTemp < 22; cTemp++)
+		Lines[cTemp] = malloc(255);
+
+	/* search for topic */
+	while (!Found) {
+		MaxBytes = (int32_t)(FileHeader.lEnd - ftell(FileHeader.fp) + EXTRABYTES);
+		if (MaxBytes > 154)
+			MaxBytes = 154;
+
+		if (fgets(string, MaxBytes, FileHeader.fp) == NULL) {
+			fclose(FileHeader.fp);
+			qputs("|12Game help not found!\n", 0, 2);
+			for (cTemp = 0; cTemp < 22; cTemp++)
+				free(Lines[cTemp]);
+			return;
+		}
+
+		if (string[0] == '^') {
+			/* get rid of \n */
+			if (string[ strlen(string) - 1] == '\n')
+				string[ strlen(string) - 1] = 0;
+			if (string[ strlen(string) - 1] == '\r')
+				string[ strlen(string) - 1] = 0;
+
+			/* see if topic is correct */
+			if (plat_stricmp(&string[1], Topic) == 0) {
+				Found = true;
+			}
+		}
+	}
+
+	while (EndOfTopic == false) {
+		/* read in up to 22 lines */
+		for (CurLine = 0; CurLine < 22; CurLine++) {
+			MaxBytes = (int32_t)(FileHeader.lEnd - ftell(FileHeader.fp) + EXTRABYTES);
+
+			if (MaxBytes > 254)
+				MaxBytes = 254;
+
+			if (MaxBytes == 1)
+				break;
+
+			fgets(Lines[CurLine], MaxBytes, FileHeader.fp);
+
+			if (Lines[CurLine][0] == '^') {
+				/* get rid of \n */
+				if (Lines[CurLine][ strlen(Lines[CurLine]) - 1] == '\n')
+					Lines[CurLine][ strlen(Lines[CurLine]) - 1] = 0;
+				if (Lines[CurLine][ strlen(Lines[CurLine]) - 1] == '\r')
+					Lines[CurLine][ strlen(Lines[CurLine]) - 1] = 0;
+
+				if (plat_stricmp(&Lines[CurLine][1], "END") == 0) {
+					EndOfTopic = true;
+					break;
+				}
+			}
+		}
+		NumLines = CurLine;
+
+		/* display it */
+		for (CurLine = 0; CurLine < NumLines; CurLine++) {
+			qputs(Lines[CurLine], 0, CurLine + 2);
+		}
+	}
+
+	fclose(FileHeader.fp);
+
+	for (cTemp = 0; cTemp < 22; cTemp++)
+		free(Lines[cTemp]);
+}
+
+static void
+GenerateGameID(char *ptr, size_t sz)
+{
+	time_t now = time(NULL);
+	struct tm tm = *localtime(&now);;
+
+	snprintf(ptr, sz, "%04d%02d%02d%02d%02d%02d", tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+static void GoReset(struct ResetData *ResetData, int16_t Option)
+{
+	FILE *fp;
+	struct game_data Game_Data = {0};
+
+	// Delete unwanted files here
+	plat_DeleteFile("clans.msj");
+	plat_DeleteFile("clans.pc");
+	plat_DeleteFile("disband.dat");
+	plat_DeleteFile("trades.dat");
+	plat_DeleteFile("public.txt");
+	plat_DeleteFile("pawn.dat");
+	plat_DeleteFile("clans.npx");
+
+	KillAlliances();
+
+	plat_DeleteFile("ally.dat");
+
+	// delete IBBS files
+	plat_DeleteFile("ibbs.dat");
+	plat_DeleteFile("ipscores.dat");
+	plat_DeleteFile("userlist.dat");
+	plat_DeleteFile("backup.dat");
+	plat_DeleteFile("leaving.dat");
+
+	if (Option == RESET_LOCAL) {
+		/*
+		 * reset local game, no IBBS
+		 */
+
+		// create new game.dat file
+		Game_Data.GameState = 1;
+		Game_Data.InterBBS = false;
+
+		strlcpy(Game_Data.szTodaysDate, szTodaysDate, sizeof(Game_Data.szTodaysDate));
+		strlcpy(Game_Data.szDateGameStart, ResetData->szDateGameStart, sizeof(Game_Data.szDateGameStart));
+		strlcpy(Game_Data.szLastJoinDate, ResetData->szLastJoinDate, sizeof(Game_Data.szLastJoinDate));
+
+		Game_Data.NextClanID = 0;
+		Game_Data.NextAllianceID = 0;
+
+		Game_Data.MaxPermanentMembers = ResetData->MaxPermanentMembers;
+		Game_Data.ClanEmpires = ResetData->ClanEmpires;
+		Game_Data.MineFights = ResetData->MineFights;
+		Game_Data.ClanFights = ResetData->ClanFights;
+		Game_Data.DaysOfProtection = ResetData->DaysOfProtection;
+
+		fp = fopen("game.dat", "wb");
+		if (!fp) {
+			System_Error("Failed to create game.dat");
+			return;
+		}
+		EncryptWrite_s(game_data, &Game_Data, fp, XOR_GAME);
+		fclose(fp);
+
+		// update news
+		plat_DeleteFile("yest.asc");
+		rename("today.asc", "yest.asc");
+		News_CreateTodayNews();
+		News_AddNews("|0A \xaf\xaf\xaf |0CThe game has been reset!\n\n");
+	}
+	else if (Option == RESET_JOINIBBS) {
+		// create new game.dat file
+		Game_Data.GameState = 2;
+		Game_Data.InterBBS = true;
+
+		GenerateGameID(Game_Data.GameID, sizeof(Game_Data.GameID));
+
+		strlcpy(Game_Data.szTodaysDate, szTodaysDate, sizeof(Game_Data.szTodaysDate));
+		strlcpy(Game_Data.szDateGameStart, ResetData->szDateGameStart, sizeof(Game_Data.szDateGameStart));
+		strlcpy(Game_Data.szLastJoinDate, ResetData->szLastJoinDate, sizeof(Game_Data.szLastJoinDate));
+
+		Game_Data.NextClanID = 0;
+		Game_Data.NextAllianceID = 0;
+		Game_Data.ClanTravel = ResetData->ClanTravel;
+		Game_Data.LostDays = ResetData->LostDays;
+
+		Game_Data.MaxPermanentMembers = ResetData->MaxPermanentMembers;
+		Game_Data.ClanEmpires = ResetData->ClanEmpires;
+		Game_Data.MineFights = ResetData->MineFights;
+		Game_Data.ClanFights = ResetData->ClanFights;
+		Game_Data.DaysOfProtection = ResetData->DaysOfProtection;
+
+		fp = fopen("game.dat", "wb");
+		if (!fp) {
+			System_Error("Failed to create game.dat");
+			return;
+		}
+		EncryptWrite_s(game_data, &Game_Data, fp, XOR_GAME);
+		fclose(fp);
+
+		// update news
+		plat_DeleteFile("yest.asc");
+		rename("today.asc", "yest.asc");
+		News_CreateTodayNews();
+		News_AddNews("|0A \xaf\xaf\xaf |0CThe game is waiting for LC OK.\n\n");
+
+	}
+	else if (Option == RESET_LC) {
+		// leaguewide reset
+
+		// REP: make sure only LC can do this somehow...
+
+		// create game.dat file
+		Game_Data.GameState = 1;
+		Game_Data.InterBBS = true;
+
+		GenerateGameID(Game_Data.GameID, sizeof(Game_Data.GameID));
+
+		strlcpy(Game_Data.szTodaysDate, szTodaysDate, sizeof(Game_Data.szTodaysDate));
+		strlcpy(Game_Data.szDateGameStart, ResetData->szDateGameStart, sizeof(Game_Data.szDateGameStart));
+		strlcpy(Game_Data.szLastJoinDate, ResetData->szLastJoinDate, sizeof(Game_Data.szLastJoinDate));
+
+		Game_Data.NextClanID = 0;
+		Game_Data.NextAllianceID = 0;
+		Game_Data.ClanTravel = ResetData->ClanTravel;
+		Game_Data.LostDays = ResetData->LostDays;
+
+		Game_Data.MaxPermanentMembers = ResetData->MaxPermanentMembers;
+		Game_Data.ClanEmpires = ResetData->ClanEmpires;
+		Game_Data.MineFights = ResetData->MineFights;
+		Game_Data.ClanFights = ResetData->ClanFights;
+		Game_Data.DaysOfProtection = ResetData->DaysOfProtection;
+
+		fp = fopen("game.dat", "wb");
+		if (!fp) {
+			System_Error("Failed to create game.dat");
+			return;
+		}
+		EncryptWrite_s(game_data, &Game_Data, fp, XOR_GAME);
+		fclose(fp);
+
+		// update news
+		plat_DeleteFile("yest.asc");
+		rename("today.asc", "yest.asc");
+		News_CreateTodayNews();
+		News_AddNews("|0A \xaf\xaf\xaf |0CThe game has been reset!\n\n");
+	}
+
+	// create new village data
+	CreateVillageDat(ResetData);
+}
+
+
+static void News_CreateTodayNews(void)
+{
+	/* this initializes the TODAY.ASC file */
+
+	char szString[128];
+
+	snprintf(szString, sizeof(szString), "|0CNews for |0B%s\n\n", szTodaysDate);
+	News_AddNews(szString);
+
+	/* give other info like increase in cost of etc. */
+}
+
+static void News_AddNews(char *szString)
+{
+	FILE *fpNewsFile;
+
+	/* open news file */
+	fpNewsFile = plat_fsopen("today.asc", "at", PLAT_SH_DENYRW);
+	if (fpNewsFile) {
+		/* add to it */
+		fputs(szString, fpNewsFile);
+		fclose(fpNewsFile);
+	}
+}
+
+void ClearFlags(uint8_t *Flags)
+{
+	int16_t iTemp;
+
+	for (iTemp = 0; iTemp < 8; iTemp++)
+		Flags[iTemp] = 0;
+}
+
+static void InitEmpire(struct empire *Empire, int16_t UserEmpire)
+{
+	int16_t iTemp;
+
+	if (UserEmpire)
+		Empire->Land = 100;
+	else
+		Empire->Land = 0;
+
+	Empire->Points = 0;
+
+	for (iTemp = 0; iTemp < MAX_BUILDINGS; iTemp++)
+		Empire->Buildings[iTemp] = 0;
+
+	Empire->WorkerEnergy = 100;
+
+	// deal with army
+	Empire->Army.Followers = 0;
+	Empire->Army.Footmen = 0;
+	Empire->Army.Axemen = 0;
+	Empire->Army.Knights = 0;
+	Empire->Army.Rating = 100;
+	Empire->Army.Level = 0;
+	Empire->SpiesToday = 0;
+	Empire->AttacksToday = 0;
+	Empire->LandDevelopedToday = 0;
+	Empire->Army.Strategy.AttackLength = 10;
+	Empire->Army.Strategy.DefendLength = 10;
+	Empire->Army.Strategy.LootLevel    = 0;
+	Empire->Army.Strategy.AttackIntensity = 50;
+	Empire->Army.Strategy.DefendIntensity = 50;
+}
+
+
+
+static void CreateVillageDat(struct ResetData *ResetData)
+{
+	FILE *fp;
+	struct village_data Village_Data = {
+		.ColorScheme = { 1, 9, 3, 1, 11, 7, 3, 2, 10, 2, 5, 3, 9, 5, 13, 1, 9, 15, 7, 0, 0, 8, 4, 1, 8, 1 },
+		.TownType = -1,
+	};
+
+	Village_Data.PublicMsgIndex = 1;
+	strlcpy(Village_Data.szName, ResetData->szVillageName, sizeof(Village_Data.szName));
+
+	Village_Data.TownType = -1;      /* unknown for now */
+	Village_Data.TaxRate = 0;      /* no taxes */
+	Village_Data.InterestRate = 0;   /* 0% interest rate */
+	Village_Data.GST = 0;        /* no gst */
+	Village_Data.Empire.VaultGold = 45000; /* some money to begin with */
+	Village_Data.ConscriptionRate = 10;
+
+	Village_Data.RulingClanId[0] = -1; /* no ruling clan yet */
+	Village_Data.RulingClanId[1] = -1;
+
+	Village_Data.szRulingClan[0] = 0;
+	Village_Data.RulingDays = 0;
+	Village_Data.GovtSystem = GS_DEMOCRACY;
+
+
+	Village_Data.MarketLevel = 0;      /* weaponshop level */
+	Village_Data.TrainingHallLevel = 0;
+	Village_Data.ChurchLevel = 0;
+	Village_Data.PawnLevel = 0;
+	Village_Data.WizardLevel = 0;
+
+	Village_Data.SetTaxToday = false;
+	Village_Data.SetInterestToday = false;
+	Village_Data.SetGSTToday = false;
+	Village_Data.SetConToday = false;
+
+	Village_Data.UpMarketToday = false;
+	Village_Data.UpTHallToday = false;
+	Village_Data.UpChurchToday = false;
+	Village_Data.UpPawnToday = false;
+	Village_Data.UpWizToday = false;
+	Village_Data.ShowEmpireStats = true;
+
+	ClearFlags(Village_Data.HFlags);
+	ClearFlags(Village_Data.GFlags);
+
+	InitEmpire(&Village_Data.Empire, false);
+	strlcpy(Village_Data.Empire.szName, Village_Data.szName, sizeof(Village_Data.Empire.szName));
+	Village_Data.Empire.Land = 500;      // village starts off with this
+	Village_Data.Empire.Buildings[B_BARRACKS] = 10;
+	Village_Data.Empire.Buildings[B_WALL] = 10;
+	Village_Data.Empire.Buildings[B_TOWER] = 5;
+	Village_Data.Empire.Buildings[B_STEELMILL] = 5;
+	Village_Data.Empire.Buildings[B_BUSINESS] = 10;
+	Village_Data.Empire.Army.Footmen = 100;
+	Village_Data.Empire.Army.Axemen = 25;
+
+	Village_Data.CostFluctuation = (int16_t)(5 - my_random(11));
+	Village_Data.MarketQuality = MQ_AVERAGE;
+
+	fp = fopen("village.dat", "wb");
+	if (!fp) {
+		System_Error("|04Failed to create village.dat");
+	}
+	else {
+		EncryptWrite_s(village_data, &Village_Data, fp, XOR_VILLAGE);
+		fclose(fp);
+	}
+}
+
+static void UpdateOption(int16_t Option)
+{
+	char szString[50];
+	switch (Option) {
+		case 0:
+			xputs(ResetData.szDateGameStart, 40, 2);
+			break;
+		case 1:
+			xputs(ResetData.szLastJoinDate, 40, 3);
+			break;
+		case 2:
+			xputs("                                        ", 40, 4);
+			xputs(ResetData.szVillageName, 40, 4);
+			break;
+		case 3:
+			if (ResetData.ClanTravel)
+				xputs("Yes", 40, 5);
+			else
+				xputs("No ", 40, 5);
+			break;
+		case 4:
+			snprintf(szString, sizeof(szString), "%-2d ", ResetData.LostDays);
+			xputs(szString, 40, 6);
+			break;
+		case 5:
+			if (ResetData.ClanEmpires)
+				xputs("Yes", 40, 7);
+			else
+				xputs("No ", 40, 7);
+			break;
+		case 6:
+			snprintf(szString, sizeof(szString), "%-2d ", ResetData.MineFights);
+			xputs(szString, 40, 8);
+			break;
+		case 7:
+			snprintf(szString, sizeof(szString), "%-2d ", ResetData.ClanFights);
+			xputs(szString, 40, 9);
+			break;
+		case 8:
+			snprintf(szString, sizeof(szString), "%-2d ", ResetData.MaxPermanentMembers);
+			xputs(szString, 40, 10);
+			break;
+		case 9:
+			snprintf(szString, sizeof(szString), "%-2d ", ResetData.DaysOfProtection);
+			xputs(szString, 40, 11);
+			break;
+	}
+}

@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: modem.c,v 1.32 2020/06/27 08:27:39 deuce Exp $ */
-
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -14,7 +12,7 @@
 #include "syncterm.h"
 #include "uifcinit.h"
 
-static COM_HANDLE com = COM_HANDLE_INVALID;
+static _Atomic(COM_HANDLE) com = COM_HANDLE_INVALID;
 static bool seven_bits = false;
 
 void
@@ -168,7 +166,8 @@ modem_connect(struct bbslist *bbs)
 		init_uifc(true, true);
 
 	if ((bbs->conn_type == CONN_TYPE_SERIAL) || (bbs->conn_type == CONN_TYPE_SERIAL_NORTS)) {
-		if ((com = comOpen(bbs->addr)) == COM_HANDLE_INVALID) {
+		com = comOpen(bbs->addr);
+		if (com == COM_HANDLE_INVALID) {
 			if (!bbs->hidepopups)
 				uifcmsg("Cannot Open Port", "`Cannot Open Port`\n\n"
 				    "Cannot open the specified serial device.\n");
@@ -221,7 +220,8 @@ modem_connect(struct bbslist *bbs)
 		}
 	}
 	else {
-		if ((com = comOpen(settings.mdm.device_name)) == COM_HANDLE_INVALID) {
+		com = comOpen(settings.mdm.device_name);
+		if (com == COM_HANDLE_INVALID) {
 			if (!bbs->hidepopups)
 				uifcmsg("Cannot Open Modem", "`Cannot Open Modem`\n\n"
 				    "Cannot open the specified modem device.\n");
@@ -440,7 +440,7 @@ modem_close(void)
 	oldcom = com;
 	com = COM_HANDLE_INVALID;
 	while (xp_fast_timer64() - start <= 10) {
-		if ((comGetModemStatus(com) & COM_DCD) == 0)
+		if ((comGetModemStatus(oldcom) & COM_DCD) == 0)
 			goto CLOSEIT;
 		SLEEP(1000);
 	}

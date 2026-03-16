@@ -38,10 +38,12 @@ const char* sbbs_t::parse_login(const char* str)
 	return str;
 }
 
+// -----------------------------------------------------------
+// Interactive user login, called from Baja or JS login module
+// -----------------------------------------------------------
 int sbbs_t::login(const char *username, const char *pw_prompt, const char* user_pw, const char* sys_pw)
 {
 	char str[128];
-	char tmp[512];
 	long useron_misc = useron.misc;
 
 	username = parse_login(username);
@@ -57,23 +59,22 @@ int sbbs_t::login(const char *username, const char *pw_prompt, const char* user_
 		if ((cfg.sys_login & LOGIN_PWPROMPT) && pw_prompt != NULL) {
 			SAFECOPY(useron.alias, username);
 			bputs(pw_prompt);
-			console |= CON_R_ECHOX;
+			console |= CON_PASSWORD;
 			getstr(str, LEN_PASS * 2, K_UPPER | K_LOWPRIO | K_TAB);
-			console &= ~(CON_R_ECHOX | CON_L_ECHOX);
+			// We don't care about the password in this case, we already know it's a bad user-ID
+			console &= ~CON_PASSWORD;
 			badlogin(useron.alias, str);
-			bputs(text[InvalidLogon]);  /* why does this always fail? */
+			bputs(text[InvalidLogon]);
 			if (cfg.sys_misc & SM_ECHO_PW)
-				snprintf(tmp, sizeof tmp, "(%04u)  %-25s  FAILED Password attempt: '%s'"
+				llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Login-ID attempt, Password: '%s'"
 				         , 0, useron.alias, str);
 			else
-				snprintf(tmp, sizeof tmp, "(%04u)  %-25s  FAILED Password attempt"
+				llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Login-ID attempt"
 				         , 0, useron.alias);
-			logline(LOG_NOTICE, "+!", tmp);
 		} else {
 			badlogin(username, NULL);
 			bputs(text[UnknownUser]);
-			snprintf(tmp, sizeof tmp, "Unknown User '%s'", username);
-			logline(LOG_NOTICE, "+!", tmp);
+			llprintf(LOG_NOTICE, "+!", "Unknown User '%s'", username);
 		}
 		useron.misc = useron_misc;
 		return LOGIC_FALSE;
@@ -90,9 +91,9 @@ int sbbs_t::login(const char *username, const char *pw_prompt, const char* user_
 		else {
 			if (pw_prompt != NULL)
 				bputs(pw_prompt);
-			console |= CON_R_ECHOX;
+			console |= CON_PASSWORD;
 			getstr(str, LEN_PASS * 2, K_UPPER | K_LOWPRIO | K_TAB);
-			console &= ~(CON_R_ECHOX | CON_L_ECHOX);
+			console &= ~CON_PASSWORD;
 		}
 		if (!online) {
 			useron.number = 0;
@@ -102,12 +103,11 @@ int sbbs_t::login(const char *username, const char *pw_prompt, const char* user_
 			badlogin(useron.alias, str);
 			bputs(text[InvalidLogon]);
 			if (cfg.sys_misc & SM_ECHO_PW)
-				snprintf(tmp, sizeof tmp, "(%04u)  %-25s  FAILED Password attempt: '%s' expected: '%s'"
+				llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt: '%s' expected: '%s'"
 				         , useron.number, useron.alias, str, useron.pass);
 			else
-				snprintf(tmp, sizeof tmp, "(%04u)  %-25s  FAILED Password attempt"
+				llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  FAILED Password attempt"
 				         , useron.number, useron.alias);
-			logline(LOG_NOTICE, "+!", tmp);
 			useron.number = 0;
 			useron.misc = useron_misc;
 			return LOGIC_FALSE;
@@ -120,10 +120,7 @@ int sbbs_t::login(const char *username, const char *pw_prompt, const char* user_
 		}
 	}
 
-#ifdef _WIN32
-	if (startup->sound.login[0] && !sound_muted(&cfg))
-		PlaySound(startup->sound.login, NULL, SND_ASYNC | SND_FILENAME);
-#endif
+	register_login();
 
 	return LOGIC_TRUE;
 }

@@ -430,15 +430,11 @@ int sbbs_t::scanposts(int subnum, int mode, const char *find)
 
 	action = NODE_RMSG;
 	cursubnum = subnum;   /* for ARS */
-	if (cfg.scanposts_mod[0] && !scanposts_inside) {
-		char cmdline[256];
 
-		scanposts_inside = true;
-		safe_snprintf(cmdline, sizeof(cmdline), "%s %s %u %s", cfg.scanposts_mod, cfg.sub[subnum]->code, mode, find);
-		i = exec_bin(cmdline, &main_csi);
-		scanposts_inside = false;
+	bool invoked;
+	i = exec_mod("scan messages", cfg.scanposts_mod, &invoked, "%s %u %s", cfg.sub[subnum]->code, mode, find);
+	if (invoked)
 		return i;
-	}
 	find_buf[0] = 0;
 	if (!chk_ar(cfg.sub[subnum]->read_ar, &useron, &client)) {
 		bprintf(text[CantReadSub]
@@ -700,7 +696,7 @@ int sbbs_t::scanposts(int subnum, int mode, const char *find)
 			if ((!stricmp(msg.to, useron.name) || !stricmp(msg.to, useron.alias)
 			     || (useron.number == 1 && !stricmp(msg.to, "sysop")
 			         && !msg.from_net.type))
-			    && !(msg.hdr.attr & MSG_READ)) {
+			    && !(msg.hdr.attr & MSG_READ) && !(sys_status & SS_ABORT)) {
 				if (msg.total_hfields)
 					smb_freemsgmem(&msg);
 				msg.total_hfields = 0;
@@ -924,9 +920,8 @@ int sbbs_t::scanposts(int subnum, int mode, const char *find)
 							errormsg(WHERE, ERR_WRITE, smb.file, i, smb.last_error);
 						smb_unlockmsghdr(&smb, &msg);
 						if (i == 0 && msg.idx.attr & MSG_DELETE) {
-							SAFEPRINTF2(str, "removed post from %s %s"
+							llprintf("P-", "removed post from %s %s"
 							            , cfg.grp[cfg.sub[subnum]->grp]->sname, cfg.sub[subnum]->lname);
-							logline("P-", str);
 							term->center(text[Deleted]);
 							if (!stricmp(cfg.sub[subnum]->misc & SUB_NAME
 							    ? useron.name : useron.alias, msg.from))
@@ -1001,13 +996,10 @@ int sbbs_t::scanposts(int subnum, int mode, const char *find)
 				break;
 			case 'L':   /* List messages */
 				domsg = 0;
-				if (cfg.listmsgs_mod[0]) {
-					char cmdline[256];
-
-					safe_snprintf(cmdline, sizeof(cmdline), "%s %s %u", cfg.listmsgs_mod, cfg.sub[subnum]->code, mode);
-					exec_bin(cmdline, &main_csi);
+				bool invoked;
+				exec_mod("list messages", cfg.listmsgs_mod, &invoked, "%s %u", cfg.sub[subnum]->code, mode);
+				if (invoked)
 					break;
-				}
 				if ((i64 = get_start_msgnum(&smb, 1)) < 0)
 					break;
 				i = (int)i64;
@@ -1305,7 +1297,7 @@ int sbbs_t::scanposts(int subnum, int mode, const char *find)
 							break;
 						case 'T':   /* Twit-list the sender */
 							domsg = false;
-							if (is_twit(&cfg, msg.from)) {
+							if (name_is_twit(&cfg, msg.from)) {
 								bprintf("\r\n%s is already twit-listed!\r\n", msg.from);
 								break;
 							}
@@ -1669,11 +1661,11 @@ int sbbs_t::listsub(int subnum, int mode, int start, const char* search)
 	int      lp_mode = LP_BYSELF;
 	post_t * post;
 
-	if ((mode & SCAN_INDEX) && cfg.listmsgs_mod[0]) {
-		char cmdline[256];
-
-		safe_snprintf(cmdline, sizeof(cmdline), "%s %s %u", cfg.listmsgs_mod, cfg.sub[subnum]->code, mode);
-		return exec_bin(cmdline, &main_csi);
+	if ((mode & SCAN_INDEX)) {
+		bool invoked;
+		i = exec_mod("list messages", cfg.listmsgs_mod, &invoked, "%s %u", cfg.sub[subnum]->code, mode);
+		if (invoked)
+			return i;
 	}
 
 	if ((i = smb_stack(&smb, SMB_STACK_PUSH)) != 0) {

@@ -48,20 +48,33 @@
 /* PLATFORM-SPECIFIC DEFINITIONS. */
 
 /* DLL specific defintions. */
-#ifdef OD_DLL
 #ifdef ODPLAT_WIN32
-#define OD_DLL_NAME "ODOORS62"
+#define OD_DLL_NAME "ODOORS63"
 #endif /* ODPLAT_WIN32 */
-#endif /* OD_DLL */
 
 /* Mutlithreading specific definitions. */
 #ifdef ODPLAT_WIN32
 #define OD_MULTITHREADED
 #endif /* ODPLAT_WIN32 */
 
+/* For pthreads, we need pthread_suspend_np(pthread_t) */
+#if defined(__FreeBSD__) || defined(__NetBSD__)
+/*
+ * Disable this for now... the thread suspend thing should be
+ * reworked to use standard primatives, and the ability/need
+ * to just murder a thread at an arbitrary place is gross.
+ */
+//#define OD_MULTITHREADED
+#endif
+
 /* Text mode specific definitions. */
-#if defined(ODPLAT_DOS) || defined(ODPLAT_NIX)
+#if defined(ODPLAT_DOS)
 #define OD_TEXTMODE
+#endif /* ODPLAT_DOS */
+
+/* Headless mode specific definitions. */
+#if defined(ODPLAT_NIX)
+#define OD_HEADLESS
 #endif /* ODPLAT_DOS */
 
 /* DOS specific definitions. */
@@ -107,25 +120,25 @@
 
 /* VERSION INFORMATION CONSTANTS. */
 #define OD_VER_SHORTNAME   "OpenDoors"
-#define OD_VER_STATUSLINE  "  OpenDoors 6.24 - (C) Copyright 1991-2001" \
+#define OD_VER_STATUSLINE  "  OpenDoors 6.30 - (C) Copyright 1991-2001" \
                            " by Brian Pirie                      "
-#define OD_VER_UNREG_STAT  "  OpenDoors 6.24  *WARNING* Unregistered Version" \
+#define OD_VER_UNREG_STAT  "  OpenDoors 6.30  *WARNING* Unregistered Version" \
                            " - Limit 1 month trial period! "
 
 #ifdef ODPLAT_DOS
-#define OD_VER_SIGNON      "[OpenDoors 6.24/DOS - " \
+#define OD_VER_SIGNON      "[OpenDoors 6.30/DOS - " \
                            "(C) Copyright 1991-2001 by Brian Pirie]\n\r"
-#define OD_VER_FULLNAME    "OpenDoors 6.24/DOS"
+#define OD_VER_FULLNAME    "OpenDoors 6.30/DOS"
 #endif /* ODPLAT_DOS */
 #ifdef ODPLAT_WIN32
-#define OD_VER_SIGNON      "[OpenDoors 6.24/Win32 - " \
+#define OD_VER_SIGNON      "[OpenDoors 6.30/Win32 - " \
                            "(C) Copyright 1991-2001 by Brian Pirie]\n\r"
-#define OD_VER_FULLNAME    "OpenDoors 6.24/Win32"
+#define OD_VER_FULLNAME    "OpenDoors 6.30/Win32"
 #endif /* ODPLAT_WIN32 */
 #ifdef ODPLAT_NIX
-#define OD_VER_SIGNON      "[OpenDoors 6.24/*nix - " \
+#define OD_VER_SIGNON      "[OpenDoors 6.30/*nix - " \
                            "(C) Copyright 1991-2001 by Brian Pirie]\n\r"
-#define OD_VER_FULLNAME    "OpenDoors 6.24/*nix"
+#define OD_VER_FULLNAME    "OpenDoors 6.30/*nix"
 #endif /* ODPLAT_NIX */
 
 
@@ -152,9 +165,11 @@
    __STR(__LINE__) "\n" #x,  OD_VER_FULLNAME " - Test condition failed", \
    MB_ICONSTOP | MB_OK); exit(1); }
 #else /* !ODPLAT_WIN32 */
+#include <stdio.h>
+#include <stdlib.h>
 #define ASSERT(x) if(!(x)) { puts(OD_VER_FULLNAME \
    " - Test condition failed:\n" __FILE__ ":" __STR(__LINE__) "\n" #x); \
-   exit(1); }
+   abort(); }
 #endif /* !ODPLAT_WIN32 */
 #else /* !OD_DEBUG */
 #define ASSERT(x)

@@ -273,6 +273,9 @@ extern int	thread_suid_broken;			/* NPTL is no longer broken */
 /***********************/
 /* Synchronet-specific */
 /***********************/
+#ifndef RINGBUF_EVENT
+ #define RINGBUF_EVENT
+#endif
 #include "startup.h"
 #ifdef __cplusplus
 	#include "threadwrap.h"	/* pthread_mutex_t */
@@ -391,6 +394,7 @@ typedef struct js_callback {
 	uint32_t		offline_counter;
 	int32			next_eid;
 	JSBool			auto_terminate;
+	bool			auto_terminated;
 	JSBool			keepGoing;
 	bool			bg;
 	bool			events_supported;
@@ -402,6 +406,7 @@ typedef struct js_callback {
 
 #include <atomic>
 #include <string>
+#include <vector>
 #include <unordered_map>
 
 class Terminal;
@@ -437,6 +442,32 @@ typedef struct sftp_filedes {
 	bool created;        // Basically indicates it's an "upload"
 } *sftp_filedescriptor_t;
 
+class cached_mail_count {
+	scfg_t* cfg;
+	user_t* user;
+	bool sent;
+	int attr;
+	int count{};
+	time_t last{};
+public:
+	cached_mail_count(scfg_t* cfg, user_t* user, bool sent, int attr)
+		: cfg(cfg)
+		, user(user)
+		, sent(sent)
+		, attr(attr)
+	{}
+	int get() {
+		if (last == 0 || difftime(time(nullptr), last) >= cfg->stats_interval) {
+			count = getmail(cfg, user->number, sent, attr);
+			last = time(nullptr);
+		}
+		return count;
+	}
+	void reset() {
+		last = 0;
+	}
+};
+
 class sbbs_t
 {
 
@@ -452,8 +483,8 @@ public:
 	bool	terminated = false;
 
 	client_t client{};
-	SOCKET	client_socket = INVALID_SOCKET;
-	SOCKET	client_socket_dup = INVALID_SOCKET;
+	std::atomic<SOCKET> client_socket{INVALID_SOCKET};
+	std::atomic<SOCKET> client_socket_dup{INVALID_SOCKET};
 	union xp_sockaddr	client_addr{};
 	char	client_name[128]{};
 	char	client_ident[128]{};
@@ -472,18 +503,18 @@ public:
 	sftp_dirdescriptor_t sftp_dirdes[NUM_SFTP_DIRDES] {};
 
 	std::atomic<bool> ssh_mode{false};
-	bool term_output_disabled{};
-	SOCKET passthru_socket=INVALID_SOCKET;
-	bool   passthru_socket_active = false;
+	std::atomic<bool> term_output_disabled{};
+	std::atomic<SOCKET> passthru_socket{INVALID_SOCKET};
+	std::atomic<bool> passthru_socket_active{false};
 	void   passthru_socket_activate(bool);
-	bool   passthru_thread_running = false;
+	std::atomic<bool> passthru_thread_running{false};
 
 	scfg_t	cfg{};
 	struct mqtt* mqtt = nullptr;
 	Terminal *term{nullptr};
 
 	int 	rioctl(ushort action); // remote i/o control
-	bool	rio_abortable = false;
+	std::atomic<bool> rio_abortable{false};
 
 	RingBuf	inbuf{};
 	RingBuf	outbuf{};
@@ -491,9 +522,9 @@ public:
 	bool	flush_output(int timeout) { return online && WaitForOutbufEmpty(timeout); }
 	HANDLE	input_thread=nullptr;
 	pthread_mutex_t	input_thread_mutex;
-	bool	input_thread_mutex_created = false;
+	std::atomic<bool> input_thread_mutex_created{false};
 	pthread_mutex_t	ssh_mutex;
-	bool	ssh_mutex_created = false;
+	std::atomic<bool> ssh_mutex_created{false};
 	xpevent_t ssh_active = nullptr;
 
 	#define OUTCOM_RETRY_DELAY		80		// milliseconds
@@ -523,19 +554,23 @@ public:
 	uchar	telnet_last_rxch = 0;
 	char	telnet_location[128]{};
 	char	telnet_terminal[TELNET_TERM_MAXLEN+1]{};
-	int 	telnet_rows = 0;
-	int		telnet_cols = 0;
-	int		telnet_speed = 0;
+	std::atomic<int> telnet_rows{0};
+	std::atomic<int> telnet_cols{0};
+	std::atomic<int> telnet_speed{0};
 
 	xpevent_t	telnet_ack_event;
 
 	time_t	event_time = 0;				// Time of next exclusive event
 	const char*	event_code = "";			// Internal code of next exclusive event
 	bool	is_event_thread = false;
-	bool	event_thread_running = false;
-    bool	output_thread_running = false;
-    bool	input_thread_running = false;
-	bool	terminate_output_thread = false;
+	std::atomic<bool> event_thread_running{false};
+	std::atomic<bool> output_thread_running{false};
+	std::atomic<bool> input_thread_running{false};
+	std::atomic<bool> terminate_output_thread{false};
+	char*	event_running_filename(char* str, size_t sz, int event) {
+		snprintf(str, sz, "%sevent.%s.running", cfg.data_dir, cfg.event[event]->code);
+		return str;
+	}
 
 	JSRuntime*		js_runtime = nullptr;
 	JSContext*		js_cx = nullptr;
@@ -563,6 +598,7 @@ public:
 #define SMB_STACK_POP	false
 	int 	smb_stack(smb_t* smb, bool push);
 
+	enum { user_not_logged_in, user_registering, user_logged_in, user_logged_on } user_login_state{};
 	bool	useron_is_guest() { return user_is_guest(&useron); }
 	bool	useron_is_sysop() { return user_is_sysop(&useron) || (sys_status & SS_TMPSYSOP); }
 
@@ -577,6 +613,9 @@ public:
 	int		node_ext = -1;	/* File handle for node.exb */
 	size_t	batup_total();
 	size_t	batdn_total();
+	int64_t	batdn_bytes();
+	int64_t	batdn_cost();
+	uint	batdn_time();
 
 	/********************************/
 	/* Text Configuration Variables */
@@ -607,18 +646,20 @@ public:
 	uint	dte_rate=0;		/* Current COM Port (DTE) Rate */
 	time_t 	getkey_last_activity=0;		/* User inactivity timeout reference */
 	uint 	timeleft_warn=0;/* low timeleft warning flag */
-	uint	socket_inactive=0;			// Socket inactivity counter (watchdog), in seconds, incremented by input_thread()
-	uint	max_socket_inactivity=0;	// Socket inactivity limit (in seconds), enforced by input_thread()
-	bool	socket_inactivity_warning_sent=false;
+	std::atomic<uint> socket_inactive{0}; // Socket inactivity counter (watchdog), in seconds, incremented by input_thread()
+	std::atomic<uint> max_socket_inactivity{0};	// Socket inactivity limit (in seconds), enforced by input_thread()
+	std::atomic<bool> socket_inactivity_warning_sent{false};
 	uint	curatr = LIGHTGRAY;     /* Last Attributes requested by attr() */
 	uint	attr_stack[64]{};	/* Saved attributes (stack) */
 	int 	attr_sp = 0;	/* Attribute stack pointer */
+	uint	saved_pcb_attr{LIGHTGRAY};
 	uint	mneattr_low = LIGHTGRAY;
 	uint	mneattr_high = LIGHTGRAY;
 	uint	mneattr_cmd = LIGHTGRAY;
 	uint	rainbow[LEN_RAINBOW + 1]{};
-	bool	rainbow_repeat = false;
+	bool	rainbow_wrap = true;
 	int		rainbow_index = -1;
+	int		rainbow_len() { int len = 0; for (len = 0; len < LEN_RAINBOW; ++len) if (rainbow[len] == 0) break; return len; }
 	bool	msghdr_tos = false;	/* Message header was displayed at Top of Screen */
 	int 	autoterm=0;		/* Auto-detected terminal type */
 	size_t	unicode_zerowidth=0;
@@ -633,10 +674,20 @@ public:
 			starttime=0,	/* Time stamp to use for time left calcs */
 			ns_time=0,		/* File new-scan time */
 			last_ns_time=0;	/* Most recent new-file-scan this call */
+	uint    timeon() { int result = (int)(time(&now) - logontime); if (result < 0) result = 0; return result; }
+	uint    timeused() { int result = (int)(time(&now) - starttime); if (result < 0) result = 0; return result; }
+	uint    useron_minutes_today() { return useron.ttoday + (timeon() / 60); }
+	uint    useron_minutes_total() { return useron.timeon + (timeon() / 60); }
 	uchar 	action = NODE_MAIN;		/* Current action of user */
-	int 	online = 0; 	/* Remote/Local or not online */
-	int 	sys_status = 0;	/* System Status */
+	std::atomic<int> online{0}; 	/* Remote/Local or not online */
+	std::atomic<int> sys_status{0};	/* System Status */
 	subscan_t* subscan = nullptr;	/* User sub configuration/scan info */
+
+	cached_mail_count mail_waiting{&cfg, &useron, false, 0};
+	cached_mail_count mail_read{&cfg, &useron, false, MSG_READ};
+	cached_mail_count mail_unread{&cfg, &useron, false, ~MSG_READ};
+	cached_mail_count mail_pending{&cfg, &useron, true, 0};
+	cached_mail_count spam_waiting{&cfg, &useron, false, MSG_SPAM};
 
 	int64_t	logon_ulb=0,	/* Upload Bytes This Call */
 			logon_dlb=0;	/* Download Bytes This Call */
@@ -672,6 +723,8 @@ public:
 	int		curdirnum = INVALID_DIR;	/* For ARS */
 	uint 	timeleft = 60 * 10;	/* Number of seconds user has left online */
 
+	int current_subnum() {	if (SMB_IS_OPEN(&smb)) return smb.subnum; return usrgrps ? usrsub[curgrp][cursub[curgrp]] : INVALID_SUB; }
+
 	char 	*comspec = nullptr;	/* Pointer to environment variable COMSPEC */
 	char 	cid[LEN_CID+1]{}; /* Caller ID (IP Address) of current caller */
 	char 	*noaccess_str = nullptr;	/* Why access was denied via ARS */
@@ -679,6 +732,7 @@ public:
 	int		errorlevel = 0;	/* Error level of external program */
 
 	csi_t	main_csi{};		/* Main Command Shell Image */
+	char    optext[256]{}; // See bbs.optext property and OPTEXT @-code
 
 	const smbmsg_t*	current_msg = nullptr;	/* For message header @-codes */
 	const char*	current_msg_subj = nullptr;
@@ -707,6 +761,12 @@ public:
 	int		exec_msg(csi_t *csi);
 	int		exec_file(csi_t *csi);
 	int		exec_bin(const char *mod, csi_t *csi, const char* startup_dir=NULL);
+	int		exec_mod(const char* name, struct loadable_module, bool* invoked = nullptr, const char* fmt = nullptr, ...)
+#if defined(__GNUC__)   // Catch printf-format errors
+    __attribute__ ((format (printf, 5, 6)))
+#endif
+	;
+	str_list_t mod_callstack{};
 	void	clearvars(csi_t *bin);
 	void	freevars(csi_t *bin);
 	char**	getstrvar(csi_t *bin, uint32_t name);
@@ -718,8 +778,12 @@ public:
 	bool	ftp_get(csi_t* csi, SOCKET ctrl_sock, char* src, char* dest, bool dir=false);
 	SOCKET	ftp_data_sock(csi_t* csi, SOCKET ctrl_sock, SOCKADDR_IN*);
 
-	bool	select_shell(void);
-	bool	select_editor(void);
+	bool	select_shell(user_t*);
+	bool	select_editor(user_t*);
+
+	bool	set_shell(int shell_index);
+	bool	set_shell(const char* code);
+	bool	set_editor(const char* code);
 
 	void	sys_info(void);
 	void	user_info(void);
@@ -808,6 +872,7 @@ public:
 	void	subinfo(int subnum);
 	void	dirinfo(int dirnum);
 	bool	trashcan(const char *insearch, const char *name, struct trash* trash = NULL);
+	void	trashcan_msg(const char* name);
 	void	time_bank(void);
 	bool	change_user(const char* username = nullptr);
 
@@ -826,6 +891,7 @@ public:
 	char*	msg_tmp_fname(int xedit, char* fname, size_t len);
 	bool	msgabort(bool clear = false);
 	void	clearabort();
+	void	email_sec();
 	bool	email(int usernumber, const char *top = NULL, const char *title = NULL
 				, int mode = WM_NONE, smb_t* resmb = NULL, smbmsg_t* remsg = NULL);
 	bool	forwardmsg(smb_t*, smbmsg_t*, const char* to, const char* subject = NULL, const char* comment = NULL);
@@ -869,8 +935,7 @@ public:
 	void	download_msg_attachments(smb_t*, smbmsg_t*, bool del, bool use_default_prot = false);
 
 	/* readmail.cpp */
-	int		readmail(uint usernumber, int which, int lm_mode = 0);
-	bool	readmail_inside = false;
+	int		readmail(uint usernumber, int which, int lm_mode = 0, bool listmsgs = true);
 	int		searchmail(mail_t*, int start, int msgss, int which, const char *search, const char* order);
 
 	/* bulkmail.cpp */
@@ -904,7 +969,8 @@ public:
 	;
 	int		outchar(char ch);				/* Output a char - check echo and emu.  */
 	int		cls() { return outchar(FF); }	// Clear the screen
-	bool	check_pause();			/* Check lncntr to and pause() if appropriate */
+	bool	pause_enabled();		// Check if screen pausing is enabled
+	bool	check_pause();			// Check line counter (lncntr) and pause() if appropriate
 	int		outcp(enum unicode_codepoint, char cp437_fallback);
 	int		outcp(enum unicode_codepoint, const char* cp437_fallback = NULL);
 	void	wide(const char*);
@@ -942,10 +1008,11 @@ public:
 	char	question[MAX_TEXTDAT_ITEM_LEN+1]{};
 	bool	yesno(const char *str, int mode = 0);
 	bool	noyes(const char *str, int mode = 0);
+	bool	confirm(const char* str, bool dflt, int mode = 0) { return dflt ? yesno(str, mode) : !noyes(str, mode); };
 	bool	pause_inside = false;
 	bool	pause(bool set_abort = true);
 	const char*	mnestr = nullptr;
-	void	mnemonics(const char *str);
+	void	mnemonics(const char *str, int mode = 0);
 
 	/* inkey.cpp */
 	bool last_inkey_was_esc{false}; // Used by auto-ANSI detection
@@ -965,12 +1032,15 @@ public:
 	uint	hot_attr = 0;		// Auto-Mouse hot-spot attribute (when non-zero)
 	bool	hungry_hotspots = true;
 
+	stats_t stats{}; // cached statistics
+
 	// Thread-safe std/socket errno description getters
 	char	strerror_buf[256]{};
 	const char* strerror(int errnum) { return safe_strerror(errnum, strerror_buf, sizeof strerror_buf); }
 	const char* socket_strerror(int errnum) { return ::socket_strerror(errnum, strerror_buf, sizeof strerror_buf); }
 
 	/* prntfile.cpp */
+	char*	fgetline(char* s, int size, int cols, FILE*, int mode);
 	bool	printfile(const char* fname, int mode, int org_cols = 0, JSObject* obj = NULL);
 	bool	printtail(const char* fname, int lines, int mode, int org_cols = 0, JSObject* obj = NULL);
 	bool	menu(const char *code, int mode = 0, JSObject* obj = NULL);
@@ -978,22 +1048,24 @@ public:
 	bool	menu_exists(const char *code, const char* ext=NULL, char* realpath=NULL);
 
 	int		uselect(bool add, uint n, const char *title, const char *item, const uchar *ar);
-	uint	uselect_total = 0, uselect_num[500]{};
+	struct uselect_item { std::string name; uint num; };
+	std::vector<uselect_item> uselect_items;
+	std::string uselect_title;
 
 	int		mselect(const char *title, str_list_t list, unsigned max_selections, const char* item_fmt, const char* selected_str, const char* unselected_str, const char* prompt_fmt);
 
 	void	redrwstr(char *strin, int i, int l, int mode);
 
 	/* atcodes.cpp */
-	int		show_atcode(const char *code, JSObject* obj = NULL);
-	const char*	atcode(const char* sp, char* str, size_t maxlen, int* pmode = NULL, bool centered = false, JSObject* obj = NULL);
+	int		show_atcode(const char *code, uint cols = 0, JSObject* obj = NULL);
+	const char*	atcode(const char* sp, char* str, size_t maxlen, int* pmode = NULL, bool centered = false, uint cols = 0, JSObject* obj = NULL);
 	const char* formatted_atcode(const char* sp, char* str, size_t maxlen);
 	char* expand_atcodes(const char* src, char* buf, size_t size, const smbmsg_t* msg = NULL);
 
 	/* getnode.cpp */
 	bool	getsmsg(int usernumber, bool clearline = false);
 	bool	getnmsg(bool clearline = false);
-	int		whos_online(bool listself);/* Lists active nodes, returns active nodes */
+	void	whos_online(bool listself); // Lists active nodes
 	void	nodelist(void);
 	bool	getnodeext(uint number, char * str);
 	bool	getnodedat(uint number, node_t * node, bool lock = false);
@@ -1016,19 +1088,21 @@ public:
 
 	/* answer.cpp */
 	bool    set_authresponse(bool activate_ssh);
-	bool	answer(bool* login_success);
+	bool	answer();
 
 	/* logon.ccp */
-	bool	logon(void);
+	bool	logon();
+	bool	logon_process();
 
 	/* logout.cpp */
-	void	logout(bool logged_in = true);
+	void	logout();
+	bool	logoff(bool prompt = false);
 
 	/* newuser.cpp */
 	bool	newuser(void);					/* Get new user							*/
 
 	/* text_sec.cpp */
-	int		text_sec(void);						/* Text sections */
+	void	text_sec(void);						/* Text sections */
 
 	/* readmsgs.cpp */
 	post_t* loadposts(uint32_t *posts, int subnum, uint ptr, int mode, uint *unvalidated_num, uint32_t* visible=NULL);
@@ -1074,9 +1148,9 @@ public:
     __attribute__ ((format (printf, 6, 7)))			// 1 is 'this'
 #endif
 	;
-	void	printstatslog(uint node);
 	uint	logonstats(void);
 	void	logoffstats(void);
+	void    register_login(void);
 	int		nopen(char *str, int access);
 	int		mv(const char *src, const char *dest, bool copy); /* fast file move/copy function */
 	bool	chksyspass(const char* sys_pw = NULL);
@@ -1084,7 +1158,7 @@ public:
 	bool	chk_ars(const char * str, user_t* user, client_t* client);
 	bool	ar_exp(const uchar ** ptrptr, user_t*, client_t*);
 	void	daily_maint(void);
-	bool	backup(const char* fname, int backup_level, bool rename);
+	int64_t	backup(const char* fname, int backup_level, bool rename);
 
 	/* upload.cpp */
 	bool	uploadfile(file_t* f);
@@ -1128,15 +1202,12 @@ public:
 	/* listfile.cpp */
 	bool	listfile(file_t*, int dirnum, const char *search, const char letter, size_t namelen);
 	int		listfiles(int dirnum, const char *filespec, FILE* tofile, int mode);
-	bool	listfiles_inside = false;
 	int		listfileinfo(int dirnum, const char *filespec, int mode);
-	bool	listfileinfo_inside = false;
 	void	listfiletofile(file_t*, FILE*);
 	int		batchflagprompt(smb_t*, file_t* bf[], uint row[], int total, int totalfiles);
 
 	/* bat_xfer.cpp */
 	void	batchmenu(void);
-	bool	batchmenu_inside = false;
 	void	batch_add_list(char *list);
 	bool	create_batchup_lst(void);
 	bool	create_batchdn_lst(bool native);
@@ -1161,7 +1232,7 @@ public:
 	char	term_env[256]{};
 
 	/* xtrn_sec.cpp */
-	int		xtrn_sec(const char* section = "");	/* The external program section  */
+	void	xtrn_sec(const char* section = "");	/* The external program section  */
 	void	xtrndat(const char* name, const char* dropdir, uchar type, uint tleft
 				,uint misc);
 	bool	exec_xtrn(uint xtrnnum, bool user_event = false);	/* Executes online external program */
@@ -1175,7 +1246,16 @@ public:
 	void	logch(char ch, bool comma);	/* Writes 'ch' to node log */
 	void	logline(const char *code,const char *str); /* Writes 'str' on it's own line in log (LOG_INFO level) */
 	void	logline(int level, const char *code,const char *str);
-	void	llprintf(int level, const char* code, const char *fmt, ...);
+	void	llprintf(int level, const char* code, const char *fmt, ...)
+#if defined(__GNUC__)   // Catch printf-format errors
+    __attribute__ ((format (printf, 4, 5)))			// 1 is 'this', 2 is 'level', 3 is 'code'
+#endif
+	;
+	void	llprintf(const char* code, const char *fmt, ...)
+#if defined(__GNUC__)   // Catch printf-format errors
+    __attribute__ ((format (printf, 3, 4)))			// 1 is 'this', 2 is 'code'
+#endif
+	;
 
 	bool	logofflist(void);              /* List of users logon activity */
 	bool	errormsg_inside = false;
@@ -1250,11 +1330,10 @@ public:
 	bool	purgeuser(int usernumber);
 
 	/* ver.cpp */
-	void	ver(void);
+	void	ver(int p_mode = P_CENTER | P_80COLS, bool verbose = false);
 
 	/* scansubs.cpp */
 	void	scansubs(int mode);
-	bool	scansubs_inside = false;
 	void	scanallsubs(int mode);
 	void	new_scan_cfg(uint misc);
 	void	new_scan_ptr_cfg(void);
@@ -1262,7 +1341,6 @@ public:
 	/* scandirs.cpp */
 	void	scanalldirs(int mode);
 	void	scandirs(int mode);
-	bool	scandirs_inside = false;
 
 	#define nosound()
 	#define checkline()
@@ -1305,8 +1383,11 @@ extern "C" {
 #endif
 
 	/* main.cpp */
+#ifdef SBBS
 	extern const char* nulstr;
 	extern const char* crlf;
+	extern int64_t uptime;
+#endif
 	DLLEXPORT int		sbbs_random(int);
 	DLLEXPORT void		sbbs_srand(void);
 	DLLEXPORT uint 		repeated_error(int line, const char* function);
@@ -1333,7 +1414,7 @@ extern "C" {
 	DLLEXPORT int		qwk_route(scfg_t*, const char *inaddr, char *fulladdr, size_t maxlen);
 
 	/* netmail.cpp */
-	DLLEXPORT bool		is_supported_netmail_addr(scfg_t*, const char* addr);
+	DLLEXPORT bool		netmail_addr_is_supported(scfg_t*, const char* addr);
 
 	/* con_out.cpp */
 	unsigned char		cp437_to_petscii(unsigned char);
@@ -1402,11 +1483,12 @@ extern "C" {
 													,scfg_t* cfg				/* common */
 													,scfg_t* node_cfg			/* node-specific */
 													,jsSyncMethodSpec* methods	/* global */
-													,time_t uptime				/* system */
-													,char* host_name			/* system */
-													,char* socklib_desc			/* system */
+													,int64_t uptime				/* system */
+													,const char* host_name		/* system */
+													,const char* socklib_desc	/* system */
 													,js_callback_t*				/* js */
 													,js_startup_t*				/* js */
+													,user_t* user				/* user */
 													,client_t* client			/* client */
 													,SOCKET client_socket		/* client */
 #ifdef USE_CRYPTLIB
@@ -1457,9 +1539,9 @@ extern "C" {
 
 	/* js_system.c */
 	DLLEXPORT JSObject* js_CreateSystemObject(JSContext* cx, JSObject* parent
-													,scfg_t* cfg, time_t uptime
-													,char* host_name
-													,char* socklib_desc
+													,scfg_t* cfg, int64_t uptime
+													,const char* host_name
+													,const char* socklib_desc
 													,struct mqtt*);
 	DLLEXPORT JSBool	js_CreateTextProperties(JSContext* cx, JSObject* parent);
 
@@ -1471,7 +1553,7 @@ extern "C" {
 	/* js_user.c */
 	DLLEXPORT JSObject*	js_CreateUserClass(JSContext* cx, JSObject* parent);
 	DLLEXPORT JSObject* js_CreateUserObject(JSContext* cx, JSObject* parent
-													,char* name, user_t* user, client_t* client, bool global_user, struct mqtt*);
+													,const char* name, user_t* user, client_t* client, bool global_user, struct mqtt*);
 	DLLEXPORT JSBool	js_CreateUserObjects(JSContext* cx, JSObject* parent, scfg_t* cfg
 													,user_t* user, client_t* client, const char* web_file_vpath_prefix
 													,subscan_t* subscan, struct mqtt*);
@@ -1501,10 +1583,10 @@ extern "C" {
 	DLLEXPORT JSObject* js_CreateSocketClass(JSContext* cx, JSObject* parent);
 #ifdef USE_CRYPTLIB
 	DLLEXPORT JSObject* js_CreateSocketObject(JSContext* cx, JSObject* parent
-													,char *name, SOCKET sock, CRYPT_CONTEXT session);
+													,const char *name, SOCKET sock, CRYPT_CONTEXT session);
 #endif
 	DLLEXPORT JSObject* js_CreateSocketObjectFromSet(JSContext* cx, JSObject* parent
-													,char *name, struct xpms_set *set);
+													,const char *name, struct xpms_set *set);
 
 	DLLEXPORT SOCKET	js_socket(JSContext *cx, jsval val);
 	DLLEXPORT int		js_polltimeout(JSContext* cx, jsval val);
@@ -1520,12 +1602,12 @@ extern "C" {
 	/* js_queue.c */
 	DLLEXPORT JSObject* js_CreateQueueClass(JSContext* cx, JSObject* parent);
 	DLLEXPORT JSObject* js_CreateQueueObject(JSContext* cx, JSObject* parent
-													,char *name, msg_queue_t* q);
+													,const char *name, msg_queue_t* q);
 	bool js_enqueue_value(JSContext *cx, msg_queue_t* q, jsval val, char* name);
 
 	/* js_file.c */
 	DLLEXPORT JSObject* js_CreateFileClass(JSContext* cx, JSObject* parent);
-	DLLEXPORT JSObject* js_CreateFileObject(JSContext* cx, JSObject* parent, char *name, int fd, const char* mode);
+	DLLEXPORT JSObject* js_CreateFileObject(JSContext* cx, JSObject* parent, const char *name, int fd, const char* mode);
 
 	/* js_archive.c */
 	DLLEXPORT JSObject* js_CreateArchiveClass(JSContext* cx, JSObject* parent, const str_list_t supported_formats);
@@ -1579,10 +1661,8 @@ extern "C" {
 	int		close_socket(SOCKET);
 	in_addr_t resolve_ip(char *addr);
 
-	char *	readtext(int *line, FILE *stream, int dflt);
-
 	/* ver.cpp */
-	char*	socklib_version(char* str, size_t, char* winsock_ver);
+	char*	socklib_version(char* str, size_t, const char* winsock_ver);
 
 	/* sortdir.cpp */
 	int		fnamecmp_a(char **str1, char **str2);	 /* for use with resort() */
@@ -1601,6 +1681,7 @@ extern "C" {
 #endif /* SBBS */
 
 extern char lastuseron[LEN_ALIAS+1];  /* Name of user last online */
+extern time_t laston_time;
 
 #ifdef __cplusplus
 }

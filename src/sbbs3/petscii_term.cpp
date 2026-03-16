@@ -253,14 +253,18 @@ bool PETSCII_Terminal::restore_cursor_pos() {
 
 void PETSCII_Terminal::carriage_return()
 {
+	lastcrcol = column;
 	cursor_left(column);
 }
 
 void PETSCII_Terminal::line_feed(unsigned count)
 {
 	// Like cursor_down() but scrolls...
-	for (unsigned i = 0; i < count; i++)
+	for (unsigned i = 0; i < count; i++) {
 		sbbs->term_out(PETSCII_DOWN);
+		if (sbbs->line_delay)
+			SLEEP(sbbs->line_delay);
+	}
 }
 
 void PETSCII_Terminal::backspace(unsigned int count)
@@ -269,10 +273,17 @@ void PETSCII_Terminal::backspace(unsigned int count)
 		sbbs->term_out(PETSCII_DELETE);
 }
 
-void PETSCII_Terminal::newline(unsigned count)
+void PETSCII_Terminal::newline(unsigned count, bool no_bg_attr)
 {
-	sbbs->term_out('\r');
-	sbbs->check_pause();
+	int saved_attr = curatr;
+	if (no_bg_attr && (curatr & BG_LIGHTGRAY)) { // Don't allow background colors to bleed when scrolling
+		sbbs->attr(LIGHTGRAY);
+	}
+	for (unsigned i = 0; i < count; i++) {
+		sbbs->term_out('\r');
+		sbbs->check_pause();
+	}
+	sbbs->attr(saved_attr);
 }
 
 void PETSCII_Terminal::clearscreen()
@@ -297,10 +308,13 @@ void PETSCII_Terminal::cleartoeos()
 
 void PETSCII_Terminal::cleartoeol()
 {
+	unsigned c = column;
 	unsigned s;
 	s = column;
-	while (++s <= cols && sbbs->online)
-		sbbs->term_out(" \x14");
+	while (++s < cols && sbbs->online)
+		sbbs->term_out(" ");
+	while (column > c)
+		cursor_left();
 }
 
 void PETSCII_Terminal::clearline()
@@ -409,7 +423,7 @@ bool PETSCII_Terminal::parse_output(char ch)
 			inc_row();
 			set_column();
 			if (curatr & 0xf0)
-				curatr = (curatr & ~0xff) | ((curatr & 0xf0) >> 4);
+				curatr = ((curatr & 0xf0) >> 4);
 			return true;
 		case 14: // Lower-case
 			return true;

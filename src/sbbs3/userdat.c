@@ -38,7 +38,7 @@
 #include "dat_rec.h"
 
 #define VALID_CFG(cfg)  (cfg != NULL && cfg->size == sizeof(scfg_t))
-#define VALID_USER_NUMBER(n) ((n) >= 1)
+#define VALID_USER_NUMBER(n) ((n) >= 1 && (n) <= USER_MAX_NUM)
 #define VALID_USER_FIELD(n) ((n) >= 0 && (n) < USER_FIELD_COUNT)
 
 #define USER_FIELD_SEPARATOR '\t'
@@ -52,7 +52,13 @@ char* userdat_filename(scfg_t* cfg, char* path, size_t size)
 	return path;
 }
 
-char* msgptrs_filename(scfg_t* cfg, unsigned user_number, char* path, size_t size)
+char* useridx_filename(scfg_t* cfg, char* path, size_t size)
+{
+	safe_snprintf(path, size, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
+	return path;
+}
+
+char* msgptrs_filename(scfg_t* cfg, int user_number, char* path, size_t size)
 {
 	safe_snprintf(path, size, "%suser/%4.4u.subs", cfg->data_dir, user_number);
 	return path;
@@ -76,7 +82,7 @@ void split_userdat(char *userdat, char* field[])
 /* Makes dots and underscores synonymous with spaces for comparisons		*/
 /* Returns the number of the perfect matched username or 0 if no match		*/
 /****************************************************************************/
-uint matchuser(scfg_t* cfg, const char *name, bool sysop_alias)
+int matchuser(scfg_t* cfg, const char *name, bool sysop_alias)
 {
 	int   file, c;
 	char  dat[LEN_ALIAS + 2];
@@ -91,7 +97,7 @@ uint matchuser(scfg_t* cfg, const char *name, bool sysop_alias)
 	    (!stricmp(name, "SYSOP") || !stricmp(name, "POSTMASTER") || !stricmp(name, cfg->sys_id)))
 		return 1;
 
-	SAFEPRINTF(str, "%suser/name.dat", cfg->data_dir);
+	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
 	if ((stream = fnopen(&file, str, O_RDONLY)) == NULL)
 		return 0;
 	length = filelength(file);
@@ -152,7 +158,7 @@ bool matchusername(scfg_t* cfg, const char* name, const char* comp)
 // Given a login-ID (user number, alias, or real name), return the user
 // number or 0 on failure
 /****************************************************************************/
-uint find_login_id(scfg_t* cfg, const char* user_id)
+int find_login_id(scfg_t* cfg, const char* user_id)
 {
 	uint usernum;
 
@@ -312,17 +318,19 @@ int closeuserdat(int file)
 	return close(file);
 }
 
-off_t userdatoffset(unsigned user_number)
+off_t userdatoffset(int user_number)
 {
 	return (user_number - 1) * USER_RECORD_LINE_LEN;
 }
 
-bool seekuserdat(int file, unsigned user_number)
+bool seekuserdat(int file, int user_number)
 {
+	if (!VALID_USER_NUMBER(user_number))
+		return false;
 	return lseek(file, userdatoffset(user_number), SEEK_SET) == userdatoffset(user_number);
 }
 
-bool lockuserdat(int file, unsigned user_number)
+bool lockuserdat(int file, int user_number)
 {
 	if (!VALID_USER_NUMBER(user_number))
 		return false;
@@ -331,12 +339,12 @@ bool lockuserdat(int file, unsigned user_number)
 	unsigned attempt = 0;
 	while (attempt < LOOP_USERDAT && lock(file, offset, USER_RECORD_LINE_LEN) == -1) {
 		attempt++;
-		FILE_RETRY_DELAY(attempt);
+		FILE_RETRY_DELAY(attempt, LOCK_RETRY_DELAY);
 	}
 	return attempt < LOOP_USERDAT;
 }
 
-bool unlockuserdat(int file, unsigned user_number)
+bool unlockuserdat(int file, int user_number)
 {
 	if (!VALID_USER_NUMBER(user_number))
 		return false;
@@ -349,7 +357,7 @@ bool unlockuserdat(int file, unsigned user_number)
 /* buffer of USER_RECORD_LINE_LEN in size.									*/
 /* Returns 0 on success.													*/
 /****************************************************************************/
-int readuserdat(scfg_t* cfg, unsigned user_number, char* userdat, size_t size, int infile, bool leave_locked)
+int readuserdat(scfg_t* cfg, int user_number, char* userdat, size_t size, int infile, bool leave_locked)
 {
 	int file;
 
@@ -364,7 +372,7 @@ int readuserdat(scfg_t* cfg, unsigned user_number, char* userdat, size_t size, i
 			return USER_OPEN_ERROR;
 	}
 
-	if (user_number > (unsigned)(filelength(file) / USER_RECORD_LINE_LEN)) {
+	if (user_number > filelength(file) / USER_RECORD_LINE_LEN) {
 		if (file != infile)
 			close(file);
 		return USER_INVALID_NUM;    /* no such user record */
@@ -426,7 +434,7 @@ static time32_t parse_usertime(const char* str)
 /****************************************************************************/
 int parseuserdat(scfg_t* cfg, char *userdat, user_t *user, char* field[])
 {
-	unsigned user_number;
+	int user_number;
 
 	if (user == NULL)
 		return USER_INVALID_ARG;
@@ -451,14 +459,14 @@ int parseuserdat(scfg_t* cfg, char *userdat, user_t *user, char* field[])
 	SAFECOPY(user->lang, field[USER_LANG]);
 	SAFECOPY(user->note, field[USER_NOTE]);
 	SAFECOPY(user->ipaddr, field[USER_IPADDR]);
-	SAFECOPY(user->comp, field[USER_HOST]);
+	SAFECOPY(user->host, field[USER_HOST]);
 	SAFECOPY(user->netmail, field[USER_NETMAIL]);
 	SAFECOPY(user->address, field[USER_ADDRESS]);
 	SAFECOPY(user->location, field[USER_LOCATION]);
 	SAFECOPY(user->zipcode, field[USER_ZIPCODE]);
 	SAFECOPY(user->phone, field[USER_PHONE]);
 	SAFECOPY(user->birth, field[USER_BIRTH]);
-	user->sex = *field[USER_GENDER];
+	user->gender = *field[USER_GENDER];
 	SAFECOPY(user->comment, field[USER_COMMENT]);
 	SAFECOPY(user->connection, field[USER_CONNECTION]);
 
@@ -599,7 +607,7 @@ static void dirtyuserdat(scfg_t* cfg, uint usernumber)
 /****************************************************************************/
 /* Returns first node number user is using or 0 if none						*/
 /****************************************************************************/
-int user_is_online(scfg_t* cfg, uint usernumber)
+int user_is_online(scfg_t* cfg, int usernumber)
 {
 	int    i;
 	int    file = -1;
@@ -740,14 +748,14 @@ bool format_userdat(scfg_t* cfg, user_t* user, char userdat[])
 	                   , user->handle
 	                   , user->note
 	                   , user->ipaddr
-	                   , user->comp
+	                   , user->host
 	                   , user->netmail
 	                   , user->address
 	                   , user->location
 	                   , user->zipcode
 	                   , user->phone
 	                   , user->birth
-	                   , user->sex ? user->sex : '?'
+	                   , user->gender ? user->gender : '?'
 	                   , user->comment
 	                   , user->connection
 	                   , user->misc
@@ -813,12 +821,10 @@ bool format_userdat(scfg_t* cfg, user_t* user, char userdat[])
 }
 
 /****************************************************************************/
-/* Writes into user.number's slot in userbase data in structure 'user'      */
-/* Called from functions newuser, useredit and main                         */
+/* Writes user data to (locked) user record in open userbase file			*/
 /****************************************************************************/
-int putuserdat(scfg_t* cfg, user_t* user)
+int fputuserdat(scfg_t* cfg, user_t* user, int file)
 {
-	int  file;
 	char userdat[USER_RECORD_LINE_LEN];
 
 	if (user == NULL)
@@ -830,38 +836,50 @@ int putuserdat(scfg_t* cfg, user_t* user)
 	if (!format_userdat(cfg, user, userdat))
 		return USER_FORMAT_ERROR;
 
-	if ((file = openuserdat(cfg, /* for_modify: */ true)) < 0)
-		return USER_OPEN_ERROR;
-
-	if (filelength(file) < ((off_t)user->number - 1) * USER_RECORD_LINE_LEN) {
-		close(file);
+	if (filelength(file) < ((off_t)user->number - 1) * USER_RECORD_LINE_LEN)
 		return USER_INVALID_NUM;
-	}
 
-	if (!seekuserdat(file, user->number)) {
-		close(file);
+	if (!seekuserdat(file, user->number))
 		return USER_SEEK_ERROR;
-	}
-	if (!lockuserdat(file, user->number)) {
-		close(file);
-		return USER_LOCK_ERROR;
-	}
 
-	if (write(file, userdat, sizeof(userdat)) != sizeof(userdat)) {
-		unlockuserdat(file, user->number);
-		close(file);
+	if (write(file, userdat, sizeof(userdat)) != sizeof(userdat))
 		return USER_WRITE_ERROR;
-	}
-	unlockuserdat(file, user->number);
-	close(file);
-	dirtyuserdat(cfg, user->number);
 
 	return USER_SUCCESS;
 }
 
 /****************************************************************************/
+/* Writes into user.number's slot in userbase data in structure 'user'      */
+/****************************************************************************/
+int putuserdat(scfg_t* cfg, user_t* user)
+{
+	int  result;
+	int  file;
+
+	if (user == NULL)
+		return USER_INVALID_ARG;
+
+	if (!VALID_CFG(cfg) || !VALID_USER_NUMBER(user->number))
+		return USER_INVALID_ARG;
+
+	if ((file = openuserdat(cfg, /* for_modify: */ true)) < 0)
+		return USER_OPEN_ERROR;
+
+	if (!lockuserdat(file, user->number)) {
+		close(file);
+		return USER_LOCK_ERROR;
+	}
+	result = fputuserdat(cfg, user, file);
+
+	unlockuserdat(file, user->number);
+	close(file);
+	dirtyuserdat(cfg, user->number);
+
+	return result;
+}
+
+/****************************************************************************/
 /* Returns the username in 'str' that corresponds to the 'usernumber'       */
-/* Called from functions everywhere                                         */
 /****************************************************************************/
 char* username(scfg_t* cfg, int usernumber, char *name)
 {
@@ -876,7 +894,7 @@ char* username(scfg_t* cfg, int usernumber, char *name)
 		name[0] = 0;
 		return name;
 	}
-	SAFEPRINTF(str, "%suser/name.dat", cfg->data_dir);
+	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
 	if (flength(str) < 1L) {
 		name[0] = 0;
 		return name;
@@ -917,7 +935,7 @@ int putusername(scfg_t* cfg, int number, const char *name)
 	if (!VALID_CFG(cfg) || name == NULL || !VALID_USER_NUMBER(number))
 		return USER_INVALID_ARG;
 
-	SAFEPRINTF(str, "%suser/name.dat", cfg->data_dir);
+	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
 	if ((file = nopen(str, O_RDWR | O_CREAT)) == -1)
 		return USER_OPEN_ERROR;
 	length = filelength(file);
@@ -995,6 +1013,8 @@ enum birth_field { BIRTH_YEAR, BIRTH_MONTH, BIRTH_DAY };
 
 static int split_birthdate(int value, enum birth_field field)
 {
+	if (value < 1)
+		return 0;
 	switch (field) {
 		case BIRTH_YEAR:
 			if (value < 10000)
@@ -1087,6 +1107,23 @@ int getbirthday(scfg_t* cfg, const char* birth)
 	return int_range(parse_birthdate_field(cfg, birth, BIRTH_DAY), 1, 31);
 }
 
+bool birthdate_is_valid(scfg_t* cfg, const char* birth)
+{
+	int year = getbirthyear(cfg, birth);
+	int month = parse_birthdate_field(cfg, birth, BIRTH_MONTH);
+	int day = parse_birthdate_field(cfg, birth, BIRTH_DAY);
+	if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31)
+		return false;
+	static const int days_in_month[] = {
+		31, 28, 31, 30, 31, 30,
+		31, 31, 30, 31, 30, 31
+	};
+	// Adjust for leap years
+	if (month == 2 && (year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)))
+		return day <= 29;
+	return day <= days_in_month[month - 1];
+}
+
 // Always returns string in MM/DD/YY format
 char* getbirthmmddyy(scfg_t* cfg, char sep, const char* birth, char* buf, size_t max)
 {
@@ -1150,7 +1187,7 @@ int getage(scfg_t* cfg, const char *birth)
 	if (!VALID_CFG(cfg) || birth == NULL)
 		return 0;
 
-	if (!atoi(birth) || !atoi(birth + 3))  /* Invalid */
+	if (!birthdate_is_valid(cfg, birth))
 		return 0;
 
 	now = time(NULL);
@@ -1162,8 +1199,6 @@ int getage(scfg_t* cfg, const char *birth)
 	int age = (1900 + tm.tm_year) - year;
 	int mon = getbirthmonth(cfg, birth);
 	int day = getbirthday(cfg, birth);
-	if (mon < 1 || mon > 12 || day < 1 || day > 31)
-		return 0;
 	if (mon > tm.tm_mon || (mon == tm.tm_mon && day > tm.tm_mday))
 		age--;
 	return age;
@@ -1299,7 +1334,7 @@ int getnodedat(scfg_t* cfg, uint number, node_t *node, bool lockit, int* fdp)
 	if (filelength(file) >= (long)(number * sizeof(node_t))) {
 		for (count = 0; count < LOOP_NODEDAB; count++) {
 			if (count > 0)
-				FILE_RETRY_DELAY(count + 1);
+				FILE_RETRY_DELAY(count + 1, LOCK_RETRY_DELAY);
 			if (!seeknodedat(file, number)) {
 				result = USER_SEEK_ERROR;
 				continue;
@@ -1355,7 +1390,7 @@ int putnodedat(scfg_t* cfg, uint number, node_t* node, bool closeit, int file)
 			result = USER_SUCCESS;
 			break;
 		}
-		FILE_RETRY_DELAY(attempts + 1);
+		FILE_RETRY_DELAY(attempts + 1, LOCK_RETRY_DELAY);
 	}
 	unlock(file, nodedatoffset(number), sizeof(node_t));
 	if (closeit)
@@ -1605,9 +1640,11 @@ char* node_vstatus(scfg_t* cfg, node_t* node, char* str, size_t size)
 
 char* node_activity(scfg_t* cfg, node_t* node, char* str, size_t size, int num)
 {
-	int    xtrnnum;
 	int    gurunum;
 	user_t user = {0};
+
+	if (num < 1 || num > cfg->sys_nodes)
+		return cfg->text != NULL ? cfg->text[InvalidNode] : "Invalid node";
 
 	if (node->misc & NODE_EXT) {
 		getnodeext(cfg, num, str); // note assuming sizeof str is >= 128
@@ -1632,24 +1669,45 @@ char* node_activity(scfg_t* cfg, node_t* node, char* str, size_t size, int num)
 		case NODE_AMSG:
 			return cfg->text != NULL ? cfg->text[NodeActivityAutoMsg] : "posting auto-message";
 		case NODE_XTRN:
+		{
+			char  path[MAX_PATH + 1];
+			char  value[INI_MAX_VALUE_LEN] = "";
+			int   xtrnnum = -1;
+			char* xtrncode = NULL;
+
 			if (node->aux == 0)
 				return cfg->text != NULL ? cfg->text[NodeActivityXtrnMenu] : "at external program menu";
-			user.number = node->useron;
-			getuserdat(cfg, &user);
-			xtrnnum = getxtrnnum(cfg, user.curxtrn);
+
+			snprintf(path, sizeof path, "%sstatus.ini", cfg->node_path[num - 1]);
+			FILE* fp = iniOpenFile(path, /* modify: */ false);
+			if (fp != NULL) {
+				xtrncode = iniReadExistingString(fp, ROOT_SECTION, "xtrn", NULL, value);
+				iniCloseFile(fp);
+			}
+			if (xtrncode != NULL)
+				xtrnnum = getxtrnnum(cfg, xtrncode);
+			if (!xtrnnum_is_valid(cfg, xtrnnum)) {
+				user.number = node->useron;
+				if (getuserdat(cfg, &user) == USER_SUCCESS
+					&& !user_is_guest(&user)) // Multiple simultaneous logons supported, can't rely on user.curxtrn
+					xtrnnum = getxtrnnum(cfg, xtrncode = user.curxtrn);
+				else
+					xtrnnum = node->aux - 1;
+			}
 			if (xtrnnum_is_valid(cfg, xtrnnum))
-				snprintf(str, size, "%s %s"
-				         , cfg->text != NULL ? cfg->text[NodeActivityRunningXtrn] : "running"
-				         , cfg->xtrn[xtrnnum]->name);
-			else if (*user.curxtrn != '\0')
 				snprintf(str, size, "%s external program %s"
 				         , cfg->text != NULL ? cfg->text[NodeActivityRunningXtrn] : "running"
-				         , user.curxtrn);
+				         , cfg->xtrn[xtrnnum]->name);
+			else if (xtrncode != NULL)
+				snprintf(str, size, "%s external program %s"
+				         , cfg->text != NULL ? cfg->text[NodeActivityRunningXtrn] : "running"
+				         , xtrncode);
 			else
 				snprintf(str, size, "%s external program #%d"
 				         , cfg->text != NULL ? cfg->text[NodeActivityRunningXtrn] : "running"
 				         , node->aux);
 			break;
+		}
 		case NODE_DFLT:
 			return cfg->text != NULL ? cfg->text[NodeActivitySettings] : "changing defaults";
 		case NODE_XFER:
@@ -1825,12 +1883,12 @@ void printnodedat(scfg_t* cfg, uint number, node_t* node)
 }
 
 /****************************************************************************/
-uint finduserstr(scfg_t* cfg, uint usernumber, enum user_field fnum
+int finduserstr(scfg_t* cfg, int usernumber, enum user_field fnum
                  , const char* str, bool del, bool next, void (*progress)(void*, int, int), void* cbdata)
 {
 	int  file;
 	int  unum;
-	uint found = 0;
+	int found = 0;
 
 	if (!VALID_CFG(cfg) || str == NULL)
 		return 0;
@@ -1904,6 +1962,28 @@ int putsmsg(scfg_t* cfg, int usernumber, char *strin)
 	}
 	CLOSE_OPEN_FILE(file);
 	return USER_SUCCESS;
+}
+
+bool xtrn_is_running(scfg_t* cfg, int xtrnnum)
+{
+	int    i;
+	int    file = -1;
+	node_t node;
+	bool   result = false;
+
+	if (!xtrnnum_is_valid(cfg, xtrnnum))
+		return false;
+	for (i = 1; i <= cfg->sys_nodes && !result; ++i) {
+		if (getnodedat(cfg, i, &node, /* lockit: */false, &file) != 0)
+			continue;
+		if (node.status != NODE_INUSE && node.status != NODE_QUIET)
+			continue;
+		if (node.action == NODE_XTRN && node.aux == (xtrnnum + 1))
+			result = true;
+	}
+	CLOSE_OPEN_FILE(file);
+
+	return result;
 }
 
 /****************************************************************************/
@@ -2243,7 +2323,7 @@ static bool ar_exp(scfg_t* cfg, uchar **ptrptr, user_t* user, client_t* client)
 				#endif
 				break;
 			case AR_ACTIVE:
-				if (user == NULL || user->misc & (DELETED | INACTIVE))
+				if (user == NULL || !user_is_active(user))
 					result = not;
 				else
 					result = !not;
@@ -2318,7 +2398,7 @@ static bool ar_exp(scfg_t* cfg, uchar **ptrptr, user_t* user, client_t* client)
 			case AR_USER:
 				if (user == NULL
 				    || (equal && user->number != i)
-				    || (!equal && user->number < i))
+				    || (!equal && user->number < (int)i))
 					result = not;
 				else
 					result = !not;
@@ -2589,7 +2669,7 @@ static bool ar_exp(scfg_t* cfg, uchar **ptrptr, user_t* user, client_t* client)
 					result = !not;
 				break;
 			case AR_SEX:
-				if (user == NULL || user->sex != n)
+				if (user == NULL || user->gender != n)
 					result = not;
 				else
 					result = !not;
@@ -2622,7 +2702,7 @@ static bool ar_exp(scfg_t* cfg, uchar **ptrptr, user_t* user, client_t* client)
 				if (client != NULL)
 					p = client->host;
 				else if (user != NULL)
-					p = user->comp;
+					p = user->host;
 				else
 					p = NULL;
 				if (!findstr_in_string(p, (char*)*ptrptr))
@@ -2663,6 +2743,43 @@ static bool ar_exp(scfg_t* cfg, uchar **ptrptr, user_t* user, client_t* client)
 			case AR_COLS:
 				result = !not;
 				break;
+			case AR_PROP:
+			{
+				char tmp[128];
+				char* section = ROOT_SECTION;
+				SKIP_CHAR((*ptrptr), ':'); // Allow leading colon to be consist with @PROP:section:key@ syntax
+				if (*(*ptrptr) == '[') { // [section]key
+					(*ptrptr)++;
+					i = 0;
+					while (**ptrptr != '\0' && **ptrptr != ']' && i < sizeof(tmp) - 1)
+						tmp[i++] = *(*ptrptr)++;
+					tmp[i] = '\0';
+					if (**ptrptr == ']') {
+						(*ptrptr)++;
+						section = tmp;
+						SKIP_WHITESPACE(*ptrptr);
+					}
+				}
+				else if (strchr((char *)(*ptrptr), ':') != NULL) { // [section:]key
+					i = 0;
+					while (**ptrptr != '\0' && **ptrptr != ':' && i < sizeof(tmp) - 1)
+						tmp[i++] = *(*ptrptr)++;
+					tmp[i] = '\0';
+					if (**ptrptr != '\0') {
+						(*ptrptr)++;
+						section = tmp;
+						SKIP_WHITESPACE(*ptrptr);
+					}
+				}
+				SKIP_CHAR((*ptrptr), ':');
+				if (!user_get_bool_property(cfg, user->number, section, (char*)*ptrptr, false))
+					result = not;
+				else
+					result = !not;
+				while (*(*ptrptr))
+					(*ptrptr)++;
+				break;
+			}
 		}
 	}
 	return result;
@@ -3008,7 +3125,7 @@ void subtract_cdt(scfg_t* cfg, user_t* user, uint64_t amt)
 			mod = amt - user->freecdt;   /* free credits */
 			putuserstr(cfg, user->number, USER_FREECDT, "0");
 			user->freecdt = 0;
-			user->cdt = adjustuserval(cfg, user, USER_FREECDT, -mod);
+			user->cdt = adjustuserval(cfg, user, USER_CDT, -mod);
 		} else {                          /* subtract just free credits */
 			user->freecdt -= amt;
 			putuserstr(cfg, user->number, USER_FREECDT, _ui64toa(user->freecdt, tmp, 10));
@@ -3212,7 +3329,7 @@ int loginuserdat(scfg_t* cfg, user_t* user, client_t* client, bool use_prot, cha
 	if (client != NULL) {
 		if (use_prot)
 			SAFECOPY(user->connection, client->protocol);
-		SAFECOPY(user->comp, client->host);
+		SAFECOPY(user->host, client->host);
 		SAFECOPY(user->ipaddr, client->addr);
 	}
 	user->logontime = time32(NULL);
@@ -3224,26 +3341,41 @@ int loginuserdat(scfg_t* cfg, user_t* user, client_t* client, bool use_prot, cha
 
 /****************************************************************************/
 /****************************************************************************/
-bool logoutuserdat(scfg_t* cfg, user_t* user, time_t now, time_t logontime)
+int logoutuserdat(scfg_t* cfg, user_t* user, time_t logontime)
 {
-	char      str[128];
-	time_t    tused;
+	char      userdat[USER_RECORD_LEN + 1];
+	int       file;
+	int       result;
 
 	if (user == NULL)
-		return false;
+		return USER_INVALID_ARG;
 
-	if (now == 0)
-		now = time(NULL);
+	if ((file = openuserdat(cfg, /* for_modify: */ true)) < 0)
+		return USER_OPEN_ERROR;
 
-	tused = (now - logontime) / 60;
-	user->tlast = (uint)tused;
+	if ((result = readuserdat(cfg, user->number, userdat, sizeof(userdat), file, /* leave_locked: */ true)) != USER_SUCCESS) {
+		close(file);
+		return result;
+	}
+	if ((result = parseuserdat(cfg, userdat, user, NULL)) == USER_SUCCESS) {
+		user->laston = time32(NULL);
+		if (user->laston > logontime)
+			user->tlast = (uint)(user->laston - logontime) / 60;
+		else
+			user->tlast = 0;
+		if (user->timeon + user->tlast >= user->timeon)
+			user->timeon += user->tlast;
+		else
+			user->timeon = UINT_MAX;
+		if (user->ttoday + user->tlast >= user->ttoday)
+			user->ttoday += user->tlast;
+		else
+			user->ttoday = UINT_MAX;
+		result = fputuserdat(cfg, user, file);
+	}
+	close(file);
 
-	putuserdatetime(cfg, user->number, USER_LASTON, (time32_t)now);
-	putuserstr(cfg, user->number, USER_TLAST, ultoa(user->tlast, str, 10));
-	adjustuserval(cfg, user, USER_TIMEON, user->tlast);
-	adjustuserval(cfg, user, USER_TTODAY, user->tlast);
-
-	return true;
+	return result;
 }
 
 /****************************************************************************/
@@ -3425,11 +3557,11 @@ char* alias(scfg_t* cfg, const char* name, char* buf)
 	return p;
 }
 
-int newuserdefaults(scfg_t* cfg, user_t* user)
+void newuserdefaults(scfg_t* cfg, user_t* user)
 {
 	int i;
 
-	user->sex = ' ';
+	user->gender = ' ';
 
 	/* statistics */
 	user->firston = user->laston = user->pwmod = time32(NULL);
@@ -3469,8 +3601,16 @@ int newuserdefaults(scfg_t* cfg, user_t* user)
 			break;
 	if (i < cfg->total_xedits)
 		user->xedit = i + 1;
+}
 
-	return 0;
+void newsysop(scfg_t* cfg, user_t* user)
+{
+	user->level = 99;
+	user->exempt = user->flags1 = user->flags2 = 0xffffffffUL;
+	user->flags3 = user->flags4 = 0xffffffffUL;
+	user->rest = 0L;
+	SAFECOPY(user->alias, cfg->sys_op);
+	SAFECOPY(user->location, cfg->sys_location);
 }
 
 int newuserdat(scfg_t* cfg, user_t* user)
@@ -3489,7 +3629,7 @@ int newuserdat(scfg_t* cfg, user_t* user)
 	if (!VALID_CFG(cfg) || user == NULL)
 		return USER_INVALID_ARG;
 
-	SAFEPRINTF(str, "%suser/name.dat", cfg->data_dir);
+	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
 	if (fexist(str)) {
 		if ((stream = fnopen(&file, str, O_RDONLY)) == NULL) {
 			return USER_OPEN_ERROR;
@@ -3588,14 +3728,14 @@ size_t user_field_len(enum user_field fnum)
 		case USER_HANDLE:   return sizeof(user.handle) - 1;
 		case USER_NOTE:     return sizeof(user.note) - 1;
 		case USER_IPADDR:   return sizeof(user.ipaddr) - 1;
-		case USER_HOST:     return sizeof(user.comp) - 1;
+		case USER_HOST:     return sizeof(user.host) - 1;
 		case USER_NETMAIL:  return sizeof(user.netmail) - 1;
 		case USER_ADDRESS:  return sizeof(user.address) - 1;
 		case USER_LOCATION: return sizeof(user.location) - 1;
 		case USER_ZIPCODE:  return sizeof(user.zipcode) - 1;
 		case USER_PHONE:    return sizeof(user.phone) - 1;
 		case USER_BIRTH:    return sizeof(user.birth) - 1;
-		case USER_GENDER:   return sizeof(user.sex);
+		case USER_GENDER:   return sizeof(user.gender);
 		case USER_COMMENT:  return sizeof(user.comment) - 1;
 		case USER_CONNECTION: return sizeof(user.connection) - 1;
 
@@ -3670,15 +3810,13 @@ size_t user_field_len(enum user_field fnum)
 /****************************************************************************/
 bool user_can_access_grp(scfg_t* cfg, int grpnum, user_t* user, client_t* client)
 {
-	uint count = 0;
-
 	for (int subnum = 0; subnum < cfg->total_subs; ++subnum) {
 		if (cfg->sub[subnum]->grp != grpnum)
 			continue;
 		if (user_can_access_sub(cfg, subnum, user, client)) // checks grp's AR already
-			count++;
+			return true;
 	}
-	return count >= 1; // User has access to one or more sub-boards of group
+	return false; // User does not have access to any sub-boards of group
 }
 
 /****************************************************************************/
@@ -3744,15 +3882,13 @@ bool user_can_post(scfg_t* cfg, int subnum, user_t* user, client_t* client, uint
 /****************************************************************************/
 bool user_can_access_lib(scfg_t* cfg, int libnum, user_t* user, client_t* client)
 {
-	uint count = 0;
-
 	for (int dirnum = 0; dirnum < cfg->total_dirs; dirnum++) {
 		if (cfg->dir[dirnum]->lib != libnum)
 			continue;
 		if (user_can_access_dir(cfg, dirnum, user, client)) // checks lib's AR already
-			count++;
+			return true;
 	}
-	return count >= 1; // User has access to one or more directories of library
+	return false; // User does not have access to any directories of library
 }
 
 /****************************************************************************/
@@ -3877,7 +4013,7 @@ uint user_downloads_per_day(scfg_t* cfg, user_t* user)
 /* 'reason' is an (optional) pointer to a text.dat item number				*/
 /* usernumber==0 for netmail												*/
 /****************************************************************************/
-bool user_can_send_mail(scfg_t* cfg, enum smb_net_type net_type, uint usernumber, user_t* user, uint* reason)
+bool user_can_send_mail(scfg_t* cfg, enum smb_net_type net_type, int usernumber, user_t* user, uint* reason)
 {
 	if (reason != NULL)
 		*reason = R_Email;
@@ -3914,6 +4050,16 @@ bool user_is_nobody(user_t* user)
 	if (user == NULL)
 		return true;
 	return user->number == 0;
+}
+
+/****************************************************************************/
+/* Determine if the specified user is an active account						*/
+/****************************************************************************/
+bool user_is_active(user_t* user)
+{
+	if (user == NULL)
+		return false;
+	return (user->misc & (DELETED | INACTIVE)) == 0;
 }
 
 /****************************************************************************/
@@ -4039,23 +4185,29 @@ time_t gettimeleft(scfg_t* cfg, user_t* user, time_t starttime)
 /*************************************************************************/
 /* Check a supplied name/alias and see if it's valid by our standards.   */
 /*************************************************************************/
-bool check_name(scfg_t* cfg, const char* name)
+bool check_name(scfg_t* cfg, const char* name, bool unique)
 {
 	char   tmp[512];
 	size_t len;
 
 	if (name == NULL)
 		return false;
-
+	if (str_has_ctrl(name))
+		return false;
+	if ((cfg->uq & UQ_NOEXASC) && !str_is_ascii(name))
+		return false;
 	len = strlen(name);
 	if (len < 1)
 		return false;
-	if (name[0] <= ' '              /* begins with white-space? */
-	    || name[len - 1] <= ' '       /* ends with white-space */
+	if (strstr(name, "  ") != NULL) /* double spaces */
+		return false;
+	if (unique && matchuser(cfg, name, true /* sysop_alias */))
+		return false;
+	if ((uchar)name[0] <= ' '              /* begins with white-space? */
+	    || (uchar)name[len - 1] <= ' '     /* ends with white-space */
 	    || !IS_ALPHA(name[0])
 	    || !stricmp(name, cfg->sys_id)
 	    || strchr(name, 0xff)
-	    || matchuser(cfg, name, true /* sysop_alias */)
 	    || trashcan(cfg, name, "name")
 	    || alias(cfg, name, tmp) != name
 	    )
@@ -4068,12 +4220,29 @@ bool check_name(scfg_t* cfg, const char* name)
 /*************************************************************************/
 bool check_realname(scfg_t* cfg, const char* name)
 {
+	size_t len;
 	if (name == NULL)
 		return false;
-	if (name[0] == 0)
+	len = strlen(name);
+	if (len < 2)
 		return false;
-
-	return (uchar)name[0] < 0x7f && name[1] && IS_ALPHA(name[0]) && strchr(name, ' ');
+	if ((uchar)name[0] <= ' ' || (uchar)name[len - 1] <= ' ')
+		return false;
+	if (str_has_ctrl(name))
+		return false;
+	if ((cfg->uq & UQ_NOEXASC) && !str_is_ascii(name))
+		return false;
+	if (!(cfg->uq & UQ_NOSPACEREQ) && strchr(name, ' ') == NULL)
+		return false;
+	if (strstr(name, "  ") != NULL) /* double spaces */
+		return false;
+	if (!IS_ALPHA(name[0]))
+		return false;
+	if (strchr(name, 0xff))
+		return false;
+	if (trashcan(cfg, name, "name"))
+		return false;
+	return true;
 }
 
 /****************************************************************************/
@@ -4314,7 +4483,6 @@ ulong loginFailure(link_list_t* list, const union xp_sockaddr* addr, const char*
 ulong loginBanned(scfg_t* cfg, link_list_t* list, SOCKET sock, const char* host_name
                   , struct login_attempt_settings settings, login_attempt_t* details)
 {
-	char              ip_addr[128];
 	char              name[(LEN_ALIAS * 2) + 1];
 	list_node_t*      node;
 	login_attempt_t*  attempt;
@@ -4323,9 +4491,6 @@ ulong loginBanned(scfg_t* cfg, link_list_t* list, SOCKET sock, const char* host_
 	union xp_sockaddr client_addr;
 	union xp_sockaddr server_addr;
 	socklen_t         addr_len;
-	char              exempt[MAX_PATH + 1];
-
-	SAFEPRINTF2(exempt, "%s%s", cfg->ctrl_dir, strIpFilterExemptConfigFile);
 
 	if (list == NULL)
 		return 0;
@@ -4340,10 +4505,6 @@ ulong loginBanned(scfg_t* cfg, link_list_t* list, SOCKET sock, const char* host_
 
 	/* Don't ban connections from the server back to itself */
 	if (inet_addrmatch(&server_addr, &client_addr))
-		return 0;
-
-	if (inet_addrtop(&client_addr, ip_addr, sizeof(ip_addr)) != NULL
-	    && find2strs(ip_addr, host_name, exempt, NULL))
 		return 0;
 
 	if (!listLock(list))
@@ -4640,7 +4801,7 @@ bool set_sound_muted(scfg_t* scfg, bool muted)
 /* user .ini file get/set functions */
 /************************************/
 
-static FILE* user_ini_open(scfg_t* scfg, unsigned user_number, bool for_modify)
+static FILE* user_ini_open(scfg_t* scfg, int user_number, bool for_modify)
 {
 	char path[MAX_PATH + 1];
 
@@ -4648,54 +4809,129 @@ static FILE* user_ini_open(scfg_t* scfg, unsigned user_number, bool for_modify)
 	return iniOpenFile(path, for_modify);
 }
 
-bool user_get_property(scfg_t* scfg, unsigned user_number, const char* section, const char* key, char* value, size_t maxlen)
+bool user_get_property(scfg_t* scfg, int user_number, const char* section, const char* key, char* value, size_t maxlen)
 {
 	FILE* fp;
 	char  buf[INI_MAX_VALUE_LEN];
+	char  keystr[INI_MAX_VALUE_LEN];
 
 	fp = user_ini_open(scfg, user_number, /* for_modify: */ false);
 	if (fp == NULL)
 		return false;
-	char* result = iniReadValue(fp, section, key, NULL, buf);
+	if (section != NULL) {
+		section = strdup(section);
+		c_unescape_printable((char*)section);
+	}
+	SAFECOPY(keystr, key);
+	c_unescape_printable(keystr);
+
+	char* result = iniReadValue(fp, section, keystr, NULL, buf);
 	if (result != NULL)
 		safe_snprintf(value, maxlen, "%s", result);
 	iniCloseFile(fp);
+	free((char*)section);
 	return result != NULL;
 }
 
-bool user_set_property(scfg_t* scfg, unsigned user_number, const char* section, const char* key, const char* value)
+bool user_set_property(scfg_t* scfg, int user_number, const char* section, const char* key, const char* value)
 {
 	FILE*      fp;
 	str_list_t ini;
+	char       keystr[INI_MAX_VALUE_LEN];
 
 	fp = user_ini_open(scfg, user_number, /* for_modify: */ true);
 	if (fp == NULL)
 		return false;
+	if (section != NULL) {
+		section = strdup(section);
+		c_unescape_printable((char*)section);
+	}
+	SAFECOPY(keystr, key);
+	c_unescape_printable(keystr);
+
 	ini = iniReadFile(fp);
 	ini_style_t ini_style = { .key_prefix = "\t", .section_separator = "", .value_separator = " = " };
-	char*       result = iniSetValue(&ini, section, key, value, &ini_style);
+	char* result = iniSetValue(&ini, section, keystr, value, &ini_style);
 	iniWriteFile(fp, ini);
 	iniFreeStringList(ini);
 	iniCloseFile(fp);
+	free((char*)section);
 	return result != NULL;
 }
 
-bool user_set_time_property(scfg_t* scfg, unsigned user_number, const char* section, const char* key, time_t value)
+bool user_set_time_property(scfg_t* scfg, int user_number, const char* section, const char* key, time_t value)
 {
 	FILE*      fp;
 	str_list_t ini;
+	char       keystr[INI_MAX_VALUE_LEN];
 
 	fp = user_ini_open(scfg, user_number, /* for_modify: */ true);
 	if (fp == NULL)
 		return false;
+	if (section != NULL) {
+		section = strdup(section);
+		c_unescape_printable((char*)section);
+	}
+	SAFECOPY(keystr, key);
+	c_unescape_printable(keystr);
+
 	ini = iniReadFile(fp);
 	ini_style_t ini_style = { .key_prefix = "\t", .section_separator = "", .value_separator = " = " };
-	char*       result = iniSetDateTime(&ini, section, key, /* include_time */ true, value, &ini_style);
+	char* result = iniSetDateTime(&ini, section, keystr, /* include_time */ true, value, &ini_style);
 	iniWriteFile(fp, ini);
 	iniFreeStringList(ini);
 	iniCloseFile(fp);
+	free((char*)section);
 	return result != NULL;
 }
+
+bool user_get_bool_property(scfg_t* scfg, int user_number, const char* section, const char* key, bool deflt)
+{
+	FILE* fp;
+	char  keystr[INI_MAX_VALUE_LEN];
+
+	fp = user_ini_open(scfg, user_number, /* for_modify: */ false);
+	if (fp == NULL)
+		return deflt;
+	if (section != NULL) {
+		section = strdup(section);
+		c_unescape_printable((char*)section);
+	}
+	SAFECOPY(keystr, key);
+	c_unescape_printable(keystr);
+
+	bool result = iniReadBool(fp, section, key, deflt);
+	iniCloseFile(fp);
+	free((char*)section);
+	return result;
+}
+
+bool user_set_bool_property(scfg_t* scfg, int user_number, const char* section, const char* key, bool value)
+{
+	FILE*      fp;
+	str_list_t ini;
+	char       keystr[INI_MAX_VALUE_LEN];
+
+	fp = user_ini_open(scfg, user_number, /* for_modify: */ true);
+	if (fp == NULL)
+		return false;
+	if (section != NULL) {
+		section = strdup(section);
+		c_unescape_printable((char*)section);
+	}
+	SAFECOPY(keystr, key);
+	c_unescape_printable(keystr);
+
+	ini = iniReadFile(fp);
+	ini_style_t ini_style = { .key_prefix = "\t", .section_separator = "", .value_separator = " = " };
+	char* result = iniSetBool(&ini, section, keystr, value, &ini_style);
+	iniWriteFile(fp, ini);
+	iniFreeStringList(ini);
+	iniCloseFile(fp);
+	free((char*)section);
+	return result != NULL;
+}
+
 
 #endif /* !NO_SOCKET_SUPPORT */
 

@@ -46,7 +46,7 @@ uint sbbs_t::finduser(const char* name, bool silent_failure)
 		if (buf[0] && strcmp(buf, "DELETED USER"))
 			return i;
 	}
-	SAFEPRINTF(path, "%suser/name.dat", cfg.data_dir);
+	SAFEPRINTF(path, "%suser/" USER_INDEX_FILENAME, cfg.data_dir);
 	if (flength(path) < 1L)
 		return 0;
 	if ((stream = fnopen(&file, path, O_RDONLY)) == NULL) {
@@ -233,17 +233,15 @@ uint sbbs_t::gettimeleft(bool handle_out_of_time)
 					logline("  ", "Credit to Minute Conversion");
 					useron.min = (uint32_t)adjustuserval(&cfg, &useron, USER_MIN, cfg.cdt_min_value);
 					useron.cdt = adjustuserval(&cfg, &useron, USER_CDT, -(102400LL));
-					SAFEPRINTF(str, "Credit Adjustment: %ld", -(102400L));
-					logline("$-", str);
-					SAFEPRINTF(str, "Minute Adjustment: %u", cfg.cdt_min_value);
-					logline("*+", str);
+					llprintf("$-", "Credit Adjustment: %ld", -(102400L));
+					llprintf("*+", "Minute Adjustment: %u", cfg.cdt_min_value);
 					term->restoreline();
 					gettimeleft();
 					gettimeleft_inside = 0;
 					return timeleft;
 				}
 			}
-			if (cfg.sys_misc & SM_TIME_EXP && !(sys_status & SS_EVENT)
+			if (cfg.sys_misc & SM_TIME_EXP && (sys_status & (SS_EVENT | SS_USERON)) == SS_USERON
 			    && !(useron.exempt & FLAG('E'))) {
 				/* set to expired values */
 				bputs(text[AccountHasExpired]);
@@ -285,8 +283,7 @@ uint sbbs_t::gettimeleft(bool handle_out_of_time)
 				putuserdatetime(useron.number, USER_EXPIRE, useron.expire);
 				putuserflags(useron.number, USER_EXEMPT, useron.exempt);
 				putuserflags(useron.number, USER_REST, useron.rest);
-				if (cfg.expire_mod[0])
-					exec_bin(cfg.expire_mod, &main_csi);
+				exec_mod("user expired", cfg.expire_mod);
 				term->restoreline();
 				gettimeleft();
 				gettimeleft_inside = 0;

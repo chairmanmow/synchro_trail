@@ -47,51 +47,50 @@ void sbbs_t::redrwstr(char *strin, int i, int l, int mode)
 	}
 }
 
-int sbbs_t::uselect(bool add, uint n, const char *title, const char *item, const uchar *ar)
+int sbbs_t::uselect(bool add, uint num, const char *title, const char *name, const uchar *ar)
 {
-	char str[128];
-	int  i;
-	uint t, u;
-
-	if (uselect_total >= sizeof(uselect_num) / sizeof(uselect_num[0]))   /* out of bounds */
-		uselect_total = 0;
+	if (title != nullptr && *title != '\0')
+		uselect_title = title;
 
 	if (add) {
-		if (ar && !chk_ar(ar, &useron, &client))
+		if (name == nullptr)
+			return -1;
+		if (ar != nullptr && !chk_ar(ar, &useron, &client))
 			return 0;
-		if (!uselect_total)
-			bprintf(text[SelectItemHdr], title);
-		uselect_num[uselect_total++] = n;
-		term->add_hotspot(uselect_total);
-		bprintf(text[SelectItemFmt], uselect_total, item);
+		uselect_item item = { name, num };
+		uselect_items.emplace_back(item);
 		return 0;
 	}
 
-	if (!uselect_total)
+	if (uselect_items.size() < 1)
 		return -1;
 
-	for (u = 0; u < uselect_total; u++)
-		if (uselect_num[u] == n)
-			break;
-	if (u == uselect_total)
-		u = 0;
-	snprintf(str, sizeof str, text[SelectItemWhich], u + 1);
-	mnemonics(str);
-	i = getnum(uselect_total);
-	t = uselect_total;
-	uselect_total = 0;
-	term->clear_hotspots();
-	if (i < 0)
-		return -1;
-	if (!i) {                    /* User hit ENTER, use default */
-		for (u = 0; u < t; u++)
-			if (uselect_num[u] == n)
-				return uselect_num[u];
-		if (n < t)
-			return uselect_num[n];
-		return -1;
+	bool invoked;
+	int retval = exec_mod("select item", cfg.uselect_mod, &invoked, "%u", num);
+	if (!invoked) {
+		bprintf(text[SelectItemHdr], uselect_title.c_str());
+		int dflt = 0;
+		for (auto u = 0; u < static_cast<int>(uselect_items.size()); ++u) {
+			bprintf(text[SelectItemFmt], u + 1, uselect_items[u].name.c_str());
+			term->add_hotspot(u + 1);
+			if (uselect_items[u].num == num)
+				dflt = u;
+		}
+
+		char str[128];
+		snprintf(str, sizeof str, text[SelectItemWhich], dflt + 1);
+		mnemonics(str);
+		int i = getnum(uselect_items.size());
+		term->clear_hotspots();
+		retval = -1;
+		if (i == 0)                    // User hit ENTER, use default
+			retval = num;
+		else if (i > 0 && i <= static_cast<int>(uselect_items.size()))
+			retval = uselect_items[i - 1].num;
 	}
-	return uselect_num[i - 1];
+	uselect_items.clear();
+	uselect_title = "";
+	return retval;
 }
 
 unsigned count_set_bits(long val)
@@ -145,7 +144,7 @@ int sbbs_t::mselect(const char *hdr, str_list_t list, unsigned max_selections, c
 /****************************************************************************/
 bool sbbs_t::chksyspass(const char* sys_pw)
 {
-	char str[256], str2[256];
+	char str[256];
 
 	if (online == ON_REMOTE && !(cfg.sys_misc & SM_R_SYSOP)) {
 		logline(LOG_NOTICE, "S!", "Remote sysop access disabled");
@@ -163,11 +162,10 @@ bool sbbs_t::chksyspass(const char* sys_pw)
 	}
 	if (stricmp(cfg.sys_pass, str)) {
 		if (cfg.sys_misc & SM_ECHO_PW)
-			SAFEPRINTF3(str2, "%s #%u System password attempt: '%s'"
+			llprintf(LOG_NOTICE, "S!", "%s #%u System password attempt: '%s'"
 			            , useron.alias, useron.number, str);
 		else
-			SAFECOPY(str2, "System password verification failure");
-		logline(LOG_NOTICE, "S!", str2);
+			llprintf(LOG_NOTICE, "S!", "System password verification failure");
 		return false;
 	}
 	last_sysop_auth = time(NULL);

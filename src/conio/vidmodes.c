@@ -1,5 +1,3 @@
-/* $Id: vidmodes.c,v 1.33 2020/06/27 00:04:45 deuce Exp $ */
-
 #include <stdlib.h>
 #include <stdbool.h>
 
@@ -56,7 +54,7 @@ struct video_params vparams[] = {
 	/* BW 40x28 */
 	{BW40X28, GREYSCALE_PALETTE,          40, 28, 12, 13, 14, 8, 7, 0,  4, 3, 320,  392},
 	/* BW 40x43 */
-	{BW40X43, GREYSCALE_PALETTE,          40, 43,  7,  7, 14, 8, 7, 0,  4, 3, 320,  350},
+	{BW40X43, GREYSCALE_PALETTE,          40, 43, 12, 13, 14, 8, 7, 0,  4, 3, 320,  350},
 	/* BW 40x50 */
 	{BW40X50, GREYSCALE_PALETTE,          40, 50,  7,  7,  8, 8, 7, 0,  4, 3, 320,  400},
 	/* BW 40x60 */
@@ -68,7 +66,7 @@ struct video_params vparams[] = {
 	/* BW 80x28 */
 	{BW80X28, GREYSCALE_PALETTE,          80, 28, 12, 13, 14, 8, 7, 0,  4, 3, 640,  392},
 	/* BW 80x43 */
-	{BW80X43, GREYSCALE_PALETTE,          80, 43,  7,  7, 14, 8, 7, 0,  4, 3, 640,  350},
+	{BW80X43, GREYSCALE_PALETTE,          80, 43, 12, 13, 14, 8, 7, 0,  4, 3, 640,  350},
 	/* BW 80x50 */
 	{BW80X50, GREYSCALE_PALETTE,          80, 50,  7,  7,  8, 8, 7, 0,  4, 3, 640,  400},
 	/* BW 80x60 */
@@ -80,7 +78,7 @@ struct video_params vparams[] = {
 	/* MONO 80x28 */
 	{MONO28, MONO_PALETTE,                80, 28, 12, 13, 14, 8, 7, 0,  4, 3, 640,  392},
 	/* MONO 80x43 */
-	{MONO43, MONO_PALETTE,                80, 43,  7,  7, 14, 8, 7, 0,  4, 3, 640,  350},
+	{MONO43, MONO_PALETTE,                80, 43, 12, 13, 14, 8, 7, 0,  4, 3, 640,  350},
 	/* MONO 80x50 */
 	{MONO50, MONO_PALETTE,                80, 50,  7,  7,  8, 8, 7, 0,  4, 3, 640,  400},
 	/* MONO 80x60 */
@@ -118,7 +116,7 @@ struct video_params vparams[] = {
 	/* VESA 60x132 mode */
 	{VESA_132X60, COLOUR_PALETTE,        132, 60,  7,  7,  8, 8, 7, 0,  4, 3, 1056, 480},
 	/* Awesome modes */
-	{ST132X37_16_9, COLOUR_PALETTE,      132, 37, 14, 15, 16, 8, 7, 0, 16, 9, 1056, 600},
+	{ST132X37_16_9, COLOUR_PALETTE,      132, 37, 14, 15, 16, 8, 7, 0, 16, 9, 1056, 592},
 	{ST132X52_5_4, COLOUR_PALETTE,       132, 52, 14, 15, 16, 8, 7, 0,  5, 4, 1056, 832},
 	/* Stupid modes */
 	{VGA80X25, COLOUR_PALETTE,            80, 25, 14, 15, 16, 9, 7, CIOLIB_VIDEO_EXPAND | CIOLIB_VIDEO_LINE_GRAPHICS_EXPAND, 4, 3, 720, 400},
@@ -311,6 +309,11 @@ struct dac_colors dac_default[TOTAL_DAC_SIZE] = {
 	{255, 255, 109}, {109, 109, 255}, {255, 109, 255}, {109, 255, 255},
 };
 
+void *hack_font1 = NULL;
+void *hack_font2 = NULL;
+void *hack_font3 = NULL;
+void *hack_font4 = NULL;
+
 int find_vmode(int mode)
 {
     unsigned i;
@@ -353,6 +356,7 @@ static struct vstat_vmem *new_vmem(int cols, int rows, bool palette)
 	ret->width = cols;
 	ret->height = rows;
 	ret->count = cols * rows;
+	ret->changed = true;
 	ret->vmem = malloc(ret->count * sizeof(ret->vmem[0]));
 	if (ret->vmem == NULL) {
 		free(ret);
@@ -499,6 +503,9 @@ int load_vmode(struct video_stats *vs, int mode)
 		vs->aspect_width = vs->scrnwidth;
 		vs->aspect_height = vs->scrnheight;
 	}
-	vs->forced_font = NULL;
+	vs->forced_font = hack_font1;
+	vs->forced_font2 = hack_font2;
+	vs->forced_font3 = hack_font3;
+	vs->forced_font4 = hack_font4;
 	return(0);
 }

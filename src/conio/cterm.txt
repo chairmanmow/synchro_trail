@@ -1179,7 +1179,7 @@ CSI Ps n (DSR)
 	6	- Request active cursor position
 		  CTerm will reply with CSI y ; x R where y is the current line
 		  and x is
-		  the current row.
+		  the current column.
 	255	- NON-STANDARD EXTENSION (BCDSR)
 		  Replies as though a CSI 6 n was received with the cursor in
 		  the bottom right corner.  i.e.: Returns the terminal size as
@@ -1248,6 +1248,17 @@ CSI ? Ps [ ; Pn ] n (DECDSR)
 	Where xxxx is the hex checksum.
 
 	SOURCE: VT420
+
+CSI Ps SP q (DECSCUSR)
+	Set cursor style
+	Defaults: 1
+
+	When Ps is 2, sets steady block
+	When Ps is 3, sets blinking underline
+	When Ps is 4, sets steady underline
+	When Ps is anything else, sets blinking block
+
+	SOURCE: VT520
 
 CSI Pn1 ; Pn2 r (DECSTBM)
 	NON-STANDARD EXTENSION.

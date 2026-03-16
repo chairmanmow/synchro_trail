@@ -274,7 +274,7 @@ static int v31x_parseuserdat(scfg_t* cfg, char *userdat, user_t *user)
 	getrec(userdat, U_NAME, LEN31x_NAME, user->name);
 	getrec(userdat, U_HANDLE, LEN31x_HANDLE, user->handle);
 	getrec(userdat, U_NOTE, LEN31x_NOTE, user->note);
-	getrec(userdat, U_COMP, LEN31x_COMP, user->comp);
+	getrec(userdat, U_COMP, LEN31x_COMP, user->host);
 	getrec(userdat, U_COMMENT, LEN31x_COMMENT, user->comment);
 	getrec(userdat, U_NETMAIL, LEN31x_NETMAIL, user->netmail);
 	getrec(userdat, U_ADDRESS, LEN31x_ADDRESS, user->address);
@@ -333,9 +333,9 @@ static int v31x_parseuserdat(scfg_t* cfg, char *userdat, user_t *user)
 	user->cols = atoi(str);
 	if (user->cols && user->cols < TERM_COLS_MIN)
 		user->cols = TERM_COLS_MIN;
-	user->sex = userdat[U_SEX];
-	if (!user->sex)
-		user->sex = ' '; /* fix for v1b04 that could save as 0 */
+	user->gender = userdat[U_SEX];
+	if (!user->gender)
+		user->gender = ' '; /* fix for v1b04 that could save as 0 */
 	user->prot = userdat[U_PROT];
 	if (user->prot < ' ')
 		user->prot = ' ';
@@ -535,7 +535,7 @@ int main(int argc, char** argv)
 		fprintf(stderr, "!ERROR changing directory to: %s", scfg.ctrl_dir);
 
 	printf("\nLoading configuration files from %s\n", scfg.ctrl_dir);
-	if (!load_cfg(&scfg, NULL, TRUE, /* node: **/ FALSE, error, sizeof(error))) {
+	if (!load_cfg(&scfg, NULL, 0, TRUE, /* node: **/ FALSE, error, sizeof(error))) {
 		fprintf(stderr, "!ERROR loading configuration files: %s\n", error);
 		return EXIT_FAILURE + __COUNTER__;
 	}

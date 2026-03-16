@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: syncterm.c,v 1.261 2020/06/27 00:04:50 deuce Exp $ */
-
 #if defined(__APPLE__) && defined(__MACH__)
  #include "DarwinWrappers.h"
 #endif
@@ -60,6 +58,9 @@ static const KNOWNFOLDERID FOLDERID_ProgramData = {
 #include <stdbool.h>
 #include <stdlib.h>
 #include <vidmodes.h>
+#ifdef HAS_VSTAT
+ #include "bitmap_con.h"
+#endif
 #if !(defined __BORLANDC__ || defined _MSC_VER)
  #include <stdbool.h>
 #else
@@ -102,7 +103,7 @@ enum {
 	#endif
 #endif
 
-const char *syncterm_version = "SyncTERM 1.7b"
+const char *syncterm_version = "SyncTERM 1.8b"
 
 #define ALPHA
 #ifdef _DEBUG
@@ -883,6 +884,22 @@ char *output_enum[] = {
 	NULL
 };
 
+char *cursor_descrs[] = {
+	"Default (set by video mode)",
+	"Blinking Underline",
+	"Solid Underline",
+	"Blinking Block",
+	"Solid Block",
+};
+
+char *cursor_enum[] = {
+	"Default",
+	"BlinkingUnderline",
+	"SolidUnderline",
+	"BlinkingBlock",
+	"SolidBlock",
+};
+
 ini_bitdesc_t audio_output_bits[] = {
 	{
 		.name = "PulseAudio",
@@ -956,6 +973,55 @@ ini_bitdesc_t audio_output_types[] = {
 		.bit = 0
 	},
 };
+
+const char * const colour_names[18] = {"Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown", "Light Gray",
+                                 "Dark Gray", "Light Blue", "Light Green", "Light Cyan", "Light Red", "Light Magenta", "Yellow",
+                                 "White", "Default", NULL};
+const char * const colour_enum[18] = {"Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown", "LightGray",
+                                "DarkGray", "LightBlue", "LightGreen", "LightCyan", "LightRed", "LightMagenta", "Yellow",
+                                 "White", "Default", NULL};
+const char * const bg_colour_names[10] = {"Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown", "Light Gray", "Default", NULL};
+const char * const bg_colour_enum[10] = {"Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown", "LightGray", "Default", NULL};
+
+void
+set_default_cursor(void)
+{
+	bool solid = false; // _SOLIDCURSOR, not "Doesn't Blink"
+#ifdef HAS_VSTAT
+	switch (settings.defaultCursor) {
+		case ST_CT_DEFAULT:
+			break;
+		case ST_CT_BLINK_BLK:
+			vstat.curs_blinks = 1;
+			vstat.default_curs_start = 0;
+			vstat.default_curs_end = vstat.charheight - 1;
+			solid = true;
+			break;
+		case ST_CT_SOLID_BLK:
+			vstat.curs_blinks = 0;
+			vstat.default_curs_start = 0;
+			vstat.default_curs_end = vstat.charheight - 1;
+			solid = true;
+			break;
+		case ST_CT_BLINK_UNDER:
+			vstat.curs_blinks = 1;
+			vstat.default_curs_start = vstat.charheight - (vstat.charheight > 8 ? 2 : 1);
+			vstat.default_curs_end = vstat.charheight - 1;
+			break;
+		case ST_CT_SOLID_UNDER:
+			vstat.curs_blinks = 0;
+			vstat.default_curs_start = vstat.charheight - (vstat.charheight > 8 ? 2 : 1);
+			vstat.default_curs_end = vstat.charheight - 1;
+			break;
+	}
+	_setcursortype(solid ? _SOLIDCURSOR : _NORMALCURSOR);
+	setcustomcursor(vstat.default_curs_start, vstat.default_curs_end, 0, vstat.curs_blinks, vstat.curs_visible);
+#else
+	if (settings.defaultCursor == ST_CT_SOLID_UNDER || settings.defaultCursor == ST_CT_SOLID_BLK)
+		solid = true;
+	_setcursortype(solid ? _SOLIDCURSOR : _NORMALCURSOR);
+#endif
+}
 
 bool
 check_exit(bool force)
@@ -1366,6 +1432,8 @@ get_xdg_path(enum xdg_paths type, char *buf, size_t bufsz)
 	// Add "syncterm" to the end
 	if (type != XDG_NONE) {
 		backslash(buf);
+		if (strlen(buf) + strlen("syncterm") >= bufsz)
+			return NULL;
 		strcat(buf, "syncterm");
 	}
 
@@ -1439,11 +1507,21 @@ char *
 get_syncterm_filename(char *fn, int fnlen, int type, bool shared)
 {
 	if ((config_override != NULL) && (type == SYNCTERM_PATH_INI) && !shared) {
-		sprintf(fn, "%.*s", fnlen - 1, config_override);
+		strlcpy(fn, config_override, fnlen);
 		return fn;
 	}
 	if ((list_override != NULL) && (type == SYNCTERM_PATH_LIST) && !shared) {
-		sprintf(fn, "%.*s", fnlen - 1, list_override);
+		strlcpy(fn, list_override, fnlen);
+		return fn;
+	}
+	if (settings.webgetUserList && type == SYNCTERM_PATH_LIST && !shared) {
+		if (!get_syncterm_filename(fn, fnlen, SYNCTERM_PATH_CACHE, false))
+			return NULL;
+		backslash(fn);
+		strlcat(fn, "syncterm-system-cache", fnlen);
+		if (mkpath(fn) != 0)
+			return NULL;
+		strlcat(fn, "System List.lst", fnlen);
 		return fn;
 	}
 
@@ -1541,12 +1619,33 @@ load_settings(struct syncterm_settings *set)
 		SAFECOPY(set->list_path, list_override);
 	}
 	else {
-		SAFECOPY(set->list_path, set->stored_list_path);
+		if (strnicmp(set->stored_list_path, "http://", 7) == 0)
+			set->webgetUserList = true;
+		else if (strnicmp(set->stored_list_path, "https://", 8) == 0)
+			set->webgetUserList = true;
+		if (set->webgetUserList) {
+			if (!get_syncterm_filename(settings.list_path, sizeof(settings.list_path), SYNCTERM_PATH_CACHE, false))
+				SAFECOPY(set->list_path, set->stored_list_path);
+			else {
+				backslash(set->list_path);
+				strlcat(set->list_path, "syncterm-system-cache", sizeof(set->list_path));
+				if (mkpath(set->list_path) != 0)
+					SAFECOPY(set->list_path, set->stored_list_path);
+				else {
+					backslash(set->list_path);
+					strlcat(set->list_path, "System List.lst", sizeof(set->list_path));
+				}
+			}
+		}
+		else {
+			SAFECOPY(set->list_path, set->stored_list_path);
+		}
 	}
 	set->scaling_factor = iniReadFloat(inifile, "SyncTERM", "ScalingFactor", 0);
 	set->blocky = iniReadBool(inifile, "SyncTERM", "BlockyScaling", true);
 	set->extern_scale = iniReadBool(inifile, "SyncTERM", "ExternalScaling", false);
 	set->invert_wheel = iniReadBool(inifile, "SyncTERM", "InvertMouseWheel", false);
+	set->defaultCursor = iniReadEnum(inifile, "SyncTERM", "DefaultCursor", cursor_enum, ST_CT_DEFAULT);
 
         // TODO: Add this to the UI somewhere.
 	set->left_just = iniReadBool(inifile, "SyncTERM", "LeftJustify", false);
@@ -1558,7 +1657,7 @@ load_settings(struct syncterm_settings *set)
 	set->mdm.com_rate = iniReadLongInt(inifile, "SyncTERM", "ModemComRate", 0);
 
         /* Sort order */
-	sortby = iniReadStringList(inifile, "SyncTERM", "SortOrder", ",", "5,1");
+	sortby = iniReadStringList(inifile, "SyncTERM", "SortOrder", ",", "29,5,1");
 	while ((order = strListRemove(&sortby, 0)) != NULL) {
 		sortorder[i++] = atoi(order);
 		free(order);
@@ -1573,6 +1672,17 @@ load_settings(struct syncterm_settings *set)
 		iniFreeNamedStringList(set->webgets);
 		set->webgets = iniReadNamedStringList(inifile, "WebLists");
 	}
+
+	/* KDF Parameters */
+	set->keyDerivationIterations = iniReadInteger(inifile, "SyncTERM", "KeyDerivationIterations", 50000);
+
+	/* UIFC Colours */
+	set->uifc_bclr = iniReadEnum(inifile, "UIFC", "BackgroundColour", (char **)bg_colour_enum, 8);
+	set->uifc_cclr = iniReadEnum(inifile, "UIFC", "InverseColour", (char **)bg_colour_enum, 8);
+	set->uifc_hclr = iniReadEnum(inifile, "UIFC", "FrameColour", (char **)colour_enum, 16);
+	set->uifc_lbclr = iniReadEnum(inifile, "UIFC", "LightbarColour", (char **)colour_enum, 16);
+	set->uifc_lbbclr = iniReadEnum(inifile, "UIFC", "LightbarBackgroundColour", (char **)bg_colour_enum, 8);
+	set->uifc_lclr = iniReadEnum(inifile, "UIFC", "TextColour", (char **)colour_enum, 16);
 
 	if (inifile)
 		fclose(inifile);
@@ -1633,16 +1743,16 @@ update_webget_progress(struct webget_request *reqs, size_t items, bool leaveup)
 					byte_estimate_to_str(reqs[i].received_size, received, sizeof(received), 0, 3);
 					byte_estimate_to_str(reqs[i].remote_size, total, sizeof(total), 0, 3);
 					if (reqs[i].remote_size) {
-						int added = snprintf(&helpbuf[pos], sz - pos, "%9s/%-9s ", received, total);
+						int added = snprintf(&helpbuf[pos], sz - pos, "%7s/%-7s ", received, total);
 						pos += added;
 						if (sz > pos) {
-							int pct = reqs[i].received_size * 100 / reqs[i].remote_size;
-							int added = snprintf(&helpbuf[pos], sz - pos, "~%.*s~%.*s\r\n", pct, "", 10 - pct, "");
+							int pct = reqs[i].received_size * 10 / reqs[i].remote_size;
+							int added = snprintf(&helpbuf[pos], sz - pos, "~%*s~%*s\r\n", pct, "", 10 - pct, "");
 							pos += added;
 						}
 					}
 					else {
-						int added = snprintf(&helpbuf[pos], sz - pos, "%9s\r\n", received);
+						int added = snprintf(&helpbuf[pos], sz - pos, "%7s\r\n", received);
 						pos += added;
 					}
 				}
@@ -2097,6 +2207,7 @@ main(int argc, char **argv)
 	ciolib_reaper = false;
 	seticon(syncterm_icon.pixel_data, syncterm_icon.width);
 	textmode(text_mode);
+	set_default_cursor();
 	if (settings.scaling_factor)
 		setscaling(settings.scaling_factor);
 
@@ -2144,6 +2255,58 @@ main(int argc, char **argv)
  #endif /* ifdef ALPHA */
 #endif /* if 0 */
 
+	if (!winsock_startup())
+		return 1;
+
+	if ((settings.webgetUserList || settings.webgets) && !quitting) {
+		// Update the web list caches...
+
+		init_uifc(true, true);
+		char cache_path[MAX_PATH + 1];
+		if (get_syncterm_filename(cache_path, sizeof(cache_path), SYNCTERM_PATH_SYSTEM_CACHE, false)) {
+			size_t items;
+			size_t started = 0;
+			if (settings.webgets) {
+				COUNT_LIST_ITEMS(settings.webgets, items);
+			}
+			else
+				items = 0;
+			struct webget_request *reqs = calloc(items + settings.webgetUserList, sizeof(struct webget_request));
+			if (reqs != NULL) {
+				sem_init(&download_complete_sem, 0, 0);
+				if (settings.webgetUserList) {
+					if (init_webget_req(&reqs[0], cache_path, "System List", settings.list_path)) {
+						reqs[0].cb_data = 0;
+						_beginthread(download_thread, 0, &reqs[0]);
+						started++;
+					}
+					else {
+						reqs[0].cb_data = UINT64_C(0x8000000000000000);
+					}
+				}
+				for (size_t i = settings.webgetUserList; i < items + settings.webgetUserList; i++) {
+					if (init_webget_req(&reqs[i], cache_path, settings.webgets[i - settings.webgetUserList]->name, settings.webgets[i - settings.webgetUserList]->value)) {
+						reqs[i].cb_data = i;
+						_beginthread(download_thread, 0, &reqs[i]);
+						started++;
+					}
+					else {
+						reqs[i].cb_data = UINT64_C(0x8000000000000000) | i;
+					}
+				}
+				while (started > 0) {
+					if (sem_trywait_block(&download_complete_sem, 200) == 0) {
+						started--;
+					}
+					update_webget_progress(reqs, items, false);
+				}
+				sem_destroy(&download_complete_sem);
+				update_webget_progress(reqs, items, true);
+			}
+		}
+		uifcbail();
+	}
+
         /* Auto-connect URL */
 	if (url[0]) {
 		if ((bbs = (struct bbslist *)malloc(sizeof(struct bbslist))) == NULL) {
@@ -2152,14 +2315,17 @@ main(int argc, char **argv)
 		}
 		bbs_alloc = true;
 		memset(bbs, 0, sizeof(struct bbslist));
-		if ((listfile = fopen(settings.list_path, "r")) == NULL) {
+		if ((listfile = fopen(settings.list_path, "rb")) == NULL) {
 			parse_url(url, bbs, conn_type, true);
 		}
 		else {
 			str_list_t inilines;
-			inilines = iniReadFile(listfile);
+			inilines = iniReadBBSList(listfile, true);
 			fclose(listfile);
-			read_item(inilines, bbs, NULL, 0, USER_BBSLIST);
+			ini_fp_list_t *nlines = iniFastParseSections(inilines, false);
+			read_item(nlines, bbs, NULL, 0, USER_BBSLIST);
+			iniFreeFastParse(nlines);
+			strListFree(&inilines);
 			if (override_conn) {
 				if (conn_type != bbs->conn_type)
 					bbs->port = conn_ports[conn_type];
@@ -2174,41 +2340,6 @@ main(int argc, char **argv)
 			goto USAGE;
 	}
 
-	if (!winsock_startup())
-		return 1;
-
-	if (settings.webgets && !quitting) {
-		// Update the web list caches...
-
-		init_uifc(true, true);
-		char cache_path[MAX_PATH + 1];
-		if (get_syncterm_filename(cache_path, sizeof(cache_path), SYNCTERM_PATH_SYSTEM_CACHE, false)) {
-			size_t items;
-			size_t started = 0;
-			COUNT_LIST_ITEMS(settings.webgets, items);
-			struct webget_request *reqs = calloc(items, sizeof(struct webget_request));
-			sem_init(&download_complete_sem, 0, 0);
-			for (size_t i = 0; i < items; i++) {
-				if (init_webget_req(&reqs[i], cache_path, settings.webgets[i]->name, settings.webgets[i]->value)) {
-					reqs[i].cb_data = i;
-					_beginthread(download_thread, 0, &reqs[i]);
-					started++;
-				}
-				else {
-					reqs[i].cb_data = UINT64_C(0x8000000000000000) | i;
-				}
-			}
-			while (started > 0) {
-				if (sem_trywait_block(&download_complete_sem, 200) == 0) {
-					started--;
-				}
-				update_webget_progress(reqs, items, false);
-			}
-			sem_destroy(&download_complete_sem);
-			update_webget_progress(reqs, items, true);
-		}
-		uifcbail();
-	}
 	load_font_files();
 	while ((!quitting) && (bbs != NULL || (bbs = show_bbslist(last_bbs, false)) != NULL)) {
 		if (default_hidepopups >= 0)
@@ -2221,6 +2352,7 @@ main(int argc, char **argv)
 		if (bbs->screen_mode != SCREEN_MODE_CURRENT)
 			fake_mode = screen_to_ciolib(bbs->screen_mode);
 		textmode(screen_to_ciolib(bbs->screen_mode));
+		set_default_cursor();
 		if (!bbs->hidepopups)
 			init_uifc(true, true);
 		load_font_files();
@@ -2229,6 +2361,7 @@ main(int argc, char **argv)
 			load_font_files();
 			uifcbail();
 			textmode(txtinfo.currmode);
+			set_default_cursor();
 			fake_mode = -1;
 			init_uifc(true, true);
 			settitle("SyncTERM");
@@ -2246,9 +2379,8 @@ main(int argc, char **argv)
 					bbs->type = USER_BBSLIST;
 					add_bbs(settings.list_path, bbs, false);
 				}
-				if ((listfile = fopen(settings.list_path, "r")) != NULL) {
-					inifile = iniReadFile(listfile);
-					fclose(listfile);
+				if ((listfile = fopen(settings.list_path, "r+b")) != NULL) {
+					inifile = iniReadBBSList(listfile, true);
 					iniSetDateTime(&inifile,
 					    bbs->name,
 					    "LastConnected",
@@ -2256,10 +2388,8 @@ main(int argc, char **argv)
 					    bbs->connected,
 					    &ini_style);
 					iniSetInteger(&inifile, bbs->name, "TotalCalls", bbs->calls, &ini_style);
-					if ((listfile = fopen(settings.list_path, "w")) != NULL) {
-						iniWriteFile(listfile, inifile);
-						fclose(listfile);
-					}
+					iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
+					fclose(listfile);
 					strListFree(&inifile);
 				}
 			}
@@ -2306,6 +2436,7 @@ main(int argc, char **argv)
 				log_fp = NULL;
 			}
 			textmode(txtinfo.currmode);
+			set_default_cursor();
 			settitle("SyncTERM");
 		}
 		if (quitting || url[0]) {

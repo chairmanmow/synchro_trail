@@ -1,7 +1,5 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
-/* $Id: bbslist.h,v 1.57 2020/06/27 08:27:39 deuce Exp $ */
-
 #ifndef _BBSLIST_H_
 #define _BBSLIST_H_
 
@@ -165,6 +163,8 @@ struct bbslist {
 	int                parity;
 	uint32_t           palette[16];
 	unsigned           palette_size;
+	char               term_name[32];
+	int32_t            sort_order;
 };
 
 extern char *music_names[];
@@ -178,14 +178,19 @@ extern int         rates[];
 extern int         sortorder[];
 extern ini_style_t ini_style;
 extern char       *screen_modes_enum[];
-void read_item(str_list_t listfile, struct bbslist *entry, char *bbsname, int id, int type);
+extern char list_password[1024];
+extern enum iniCryptAlgo list_algo;
+extern int list_keysize;
+
+void read_item(ini_fp_list_t *listfile, struct bbslist *entry, ini_lv_string_t *bbsname, int id, int type);
 void read_list(char *listpath, struct bbslist **list, struct bbslist *defaults, int *i, int type);
 void free_list(struct bbslist **list, int listcount);
 void add_bbs(char *listpath, struct bbslist *bbs, bool isnew);
 int edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdefault);
 int get_rate_num(int rate);
 cterm_emulation_t get_emulation(struct bbslist *bbs);
-const char *get_emulation_str(cterm_emulation_t emu);
+const char *get_emulation_str(struct bbslist *bbs);
 void get_term_size(struct bbslist *bbs, int *cols, int *rows);
+str_list_t iniReadBBSList(FILE *fp, bool userList);
 
 #endif // ifndef _BBSLIST_H_

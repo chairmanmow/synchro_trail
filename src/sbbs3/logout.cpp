@@ -25,7 +25,7 @@
 /****************************************************************************/
 /* Function that is called after a user hangs up or logs off				*/
 /****************************************************************************/
-void sbbs_t::logout(bool logged_in)
+void sbbs_t::logout()
 {
 	char   path[MAX_PATH + 1];
 	char   str[256];
@@ -38,15 +38,13 @@ void sbbs_t::logout(bool logged_in)
 
 	if (!useron.number) {                 /* Not logged in, so do nothing */
 		if (!online) {
-			SAFEPRINTF2(str, "%-6s  T:%3u sec\r\n"
+			llprintf("@-", "%-6s  T:%3u sec\r\n"
 			            , time_as_hhmm(&cfg, now, tmp)
 			            , (uint)(now - answertime));
-			logline("@-", str);
 		}
 		return;
 	}
 	lprintf(LOG_INFO, "logout initiated");
-	SAFECOPY(lastuseron, useron.alias); // TODO: race condition here
 	if (!online && getnodedat(cfg.node_num, &node, /* lock: */ true)) {
 		node.status = NODE_LOGOUT;
 		putnodedat(cfg.node_num, &node);
@@ -57,8 +55,8 @@ void sbbs_t::logout(bool logged_in)
 		clearbatdl();
 	}
 
-	if (sys_status & SS_USERON && thisnode.status != NODE_QUIET && !(useron.rest & FLAG('Q')) && logged_in)
-		for (i = 1; i <= cfg.sys_nodes; i++)
+	if (sys_status & SS_USERON && thisnode.status != NODE_QUIET && !(useron.rest & FLAG('Q')) && user_login_state == user_logged_on) {
+		for (i = 1; i <= cfg.sys_nodes; i++) {
 			if (i != cfg.node_num) {
 				getnodedat(i, &node);
 				if ((node.status == NODE_INUSE || node.status == NODE_QUIET)
@@ -69,18 +67,23 @@ void sbbs_t::logout(bool logged_in)
 					            ? text[UNKNOWN_USER] : useron.alias));
 				}
 			}
-
-	if (!online) {       /* NOT re-login */
-		if (cfg.sys_logout.cmd[0] && !(cfg.sys_logout.misc & EVENT_DISABLED)) {      /* execute system logout event */
-			lprintf(LOG_DEBUG, "executing logout event: %s", cfg.sys_logout.cmd);
-			external(cmdstr(cfg.sys_logout.cmd, nulstr, nulstr, NULL, cfg.sys_logout.misc), EX_OUTL | EX_OFFLINE | cfg.sys_logout.misc);
+		}
+		if (!useron_is_sysop() || (cfg.sys_misc & SM_SYSSTAT)) {
+			SAFECOPY(lastuseron, useron.alias); // TODO: race condition here
+			laston_time = now;
 		}
 	}
 
-	if (cfg.logout_mod[0]) {
-		lprintf(LOG_DEBUG, "executing logout module: %s", cfg.logout_mod);
-		exec_bin(cfg.logout_mod, &main_csi);
+	if (!online) {       /* NOT re-login */
+		for (i = 0; cfg.sys_logout.cmd != nullptr && cfg.sys_logout.cmd[i] != nullptr; ++i) {
+			if (cfg.sys_logout.misc[i] & EVENT_DISABLED)
+				continue;
+			lprintf(LOG_DEBUG, "Executing logout event: %s", cfg.sys_logout.cmd[i]);
+			external(cmdstr(cfg.sys_logout.cmd[i], nulstr, nulstr, NULL, cfg.sys_logout.misc[i]), EX_OUTL | EX_OFFLINE | cfg.sys_logout.misc[i]);
+		}
 	}
+
+	exec_mod("logout", cfg.logout_mod);
 	SAFEPRINTF2(path, "%smsgs/%4.4u.msg", cfg.data_dir, useron.number);
 	if (fexistcase(path) && !flength(path))      /* remove any 0 byte message files */
 		fremove(WHERE, path);
@@ -108,8 +111,7 @@ void sbbs_t::logout(bool logged_in)
 
 	if (useron.min && j > i) {
 		j -= i;                               /* j=time to deduct from min */
-		SAFEPRINTF(str, "Minute Adjustment: %d", -j);
-		logline(">>", str);
+		llprintf(">>", "Minute Adjustment: %d", -j);
 		if (useron.min > (ulong)j)
 			useron.min -= j;
 		else
@@ -124,7 +126,8 @@ void sbbs_t::logout(bool logged_in)
 	if (last_ns_time > 0)
 		putuserdatetime(useron.number, USER_NS_TIME, last_ns_time);
 
-	logoutuserdat(&cfg, &useron, now, logontime);
+	if ((i = logoutuserdat(&cfg, &useron, logontime)) != USER_SUCCESS)
+		errormsg(WHERE, ERR_WRITE, "user.tab", i, "updating user record in logoutuserdat");
 
 	getusrsubs();
 	getusrdirs();
@@ -138,7 +141,7 @@ void sbbs_t::logout(bool logged_in)
 		char dlb[64];
 		safe_snprintf(tmp, sizeof(tmp), "T:%3u   R:%3u   P:%3u   E:%3u   F:%3u   "
 		              "U:%4s %u   D:%4s %u"
-		              , (uint)(now - logontime) / 60, posts_read, logon_posts
+		              , timeon() / 60, posts_read, logon_posts
 		              , logon_emails, logon_fbacks
 		              , byte_estimate_to_str(logon_ulb, ulb, sizeof(ulb), 1024, /* precision: */ logon_ulb > 1024 * 1024)
 		              , logon_uls
@@ -160,6 +163,21 @@ void sbbs_t::logout(bool logged_in)
 	mqtt_user_logout(mqtt, &client, logontime);
 
 	lprintf(LOG_DEBUG, "logout completed");
+}
+
+/****************************************************************************/
+/****************************************************************************/
+bool sbbs_t::logoff(bool prompt)
+{
+	if (!prompt || !noyes(text[LogOffQ])) {
+		exec_mod("logoff", cfg.logoff_mod);
+		user_event(EVENT_LOGOFF);
+		menu("logoff");
+		sync();
+		hangup();
+		return true;
+	}
+	return false;
 }
 
 /****************************************************************************/

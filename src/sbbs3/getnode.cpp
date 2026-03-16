@@ -29,7 +29,6 @@
 /****************************************************************************/
 bool sbbs_t::getnodedat(uint number, node_t *node, bool lockit)
 {
-	char str[MAX_PATH + 1];
 	int  rd = sizeof(node_t);
 	int  count;
 
@@ -57,7 +56,7 @@ bool sbbs_t::getnodedat(uint number, node_t *node, bool lockit)
 #endif
 	for (count = 0; count < LOOP_NODEDAB; count++) {
 		if (count > 0)
-			FILE_RETRY_DELAY(count + 1);
+			FILE_RETRY_DELAY(count + 1, LOCK_RETRY_DELAY);
 		if (lockit && lock(nodefile, nodedatoffset(number), sizeof(node_t)) != 0) {
 			unlock(nodefile, nodedatoffset(number), sizeof(node_t));
 			continue;
@@ -70,24 +69,20 @@ bool sbbs_t::getnodedat(uint number, node_t *node, bool lockit)
 				break;
 		}
 	}
-	if (!lockit && cfg.node_misc & NM_CLOSENODEDAB) {
-		close(nodefile);
-		nodefile = -1;
+	if (!lockit && (cfg.node_misc & NM_CLOSENODEDAB)) {
+		CLOSE_OPEN_FILE(nodefile);
 	}
 
 	if (count == LOOP_NODEDAB) {
-		if (nodefile != -1)
-			close(nodefile);
-		nodefile = -1;
+		CLOSE_OPEN_FILE(nodefile);
 		pthread_mutex_unlock(&nodefile_mutex);
-		errormsg(WHERE, rd == sizeof(node_t) ? ERR_LOCK : ERR_READ, "node.dab", number + 1);
+		errormsg(WHERE, rd == sizeof(node_t) ? ERR_LOCK : ERR_READ, "node.dab", number);
 		return false;
 	}
 	pthread_mutex_unlock(&nodefile_mutex);
 	if (count > (LOOP_NODEDAB / 2)) {
-		SAFEPRINTF2(str, "NODE.DAB (node %d) COLLISION - Count: %d"
-		            , number + 1, count);
-		logline(LOG_WARNING, "!!", str);
+		llprintf(LOG_WARNING, "!!", "NODE.DAB (node %d) COLLISION - Count: %d"
+		            , number, count);
 	}
 
 	return true;
@@ -150,6 +145,11 @@ void sbbs_t::nodesync(bool clearline)
 				putnodedat(cfg.node_num, &thisnode);
 			}
 		}
+		if (useron.exempt & FLAG('H'))
+			console |= CON_NO_INACT;
+		else
+			console &= ~CON_NO_INACT;
+
 		if (!(sys_status & SS_MOFF)) {
 			if (thisnode.misc & NODE_MSGW)
 				getsmsg(useron.number, clearline);  /* getsmsg clears MSGW flag */
@@ -158,8 +158,7 @@ void sbbs_t::nodesync(bool clearline)
 		}
 	}
 
-	if (cfg.sync_mod[0])
-		exec_bin(cfg.sync_mod, &main_csi);
+	exec_mod("sync", cfg.sync_mod);
 
 	if (thisnode.misc & NODE_INTR) {
 		bputs(text[NodeLocked]);
@@ -269,7 +268,6 @@ bool sbbs_t::getnmsg(bool clearline)
 /****************************************************************************/
 bool sbbs_t::getnodeext(uint number, char *ext)
 {
-	char str[MAX_PATH + 1];
 	int  rd, count;
 
 	if (number < 1 || number > cfg.sys_nodes) {
@@ -286,7 +284,7 @@ bool sbbs_t::getnodeext(uint number, char *ext)
 	number--;   /* make zero based */
 	for (count = 0; count < LOOP_NODEDAB; count++) {
 		if (count > 0)
-			FILE_RETRY_DELAY(count + 1);
+			FILE_RETRY_DELAY(count + 1, LOCK_RETRY_DELAY);
 		if (lock(node_ext, (long)number * 128L, 128) != 0)
 			continue;
 		lseek(node_ext, (long)number * 128L, SEEK_SET);
@@ -304,9 +302,8 @@ bool sbbs_t::getnodeext(uint number, char *ext)
 		return false;
 	}
 	if (count > (LOOP_NODEDAB / 2)) {
-		SAFEPRINTF2(str, "NODE.EXB (node %d) COLLISION - Count: %d"
+		llprintf("!!", "NODE.EXB (node %d) COLLISION - Count: %d"
 		            , number + 1, count);
-		logline("!!", str);
 	}
 
 	return true;
@@ -341,7 +338,7 @@ bool sbbs_t::getsmsg(int usernumber, bool clearline)
 		term->clearline();
 	else
 		term->cond_newline();
-	putmsg(buf, P_NOATCODES);
+	putmsg(buf, P_NOATCODES | P_AUTO_UTF8);
 	free(buf);
 
 	return true;
@@ -350,16 +347,14 @@ bool sbbs_t::getsmsg(int usernumber, bool clearline)
 /****************************************************************************/
 /* This function lists users that are online.                               */
 /* If listself is true, it will list the current node.                      */
-/* Returns number of active nodes (not including current node).             */
 /****************************************************************************/
-int sbbs_t::whos_online(bool listself)
+void sbbs_t::whos_online(bool listself)
 {
 	int    i, j;
 	node_t node;
 
-	if (cfg.whosonline_mod[0] != '\0') {
-		return exec_bin(cfg.whosonline_mod, &main_csi);
-	}
+	if(exec_mod("who's online", cfg.whosonline_mod) == 0)
+		return;
 
 	term->newline();
 	bputs(text[NodeLstHdr]);
@@ -379,17 +374,14 @@ int sbbs_t::whos_online(bool listself)
 	}
 	if (!j)
 		bputs(text[NoOtherActiveNodes]);
-	return j;
 }
 
 void sbbs_t::nodelist(void)
 {
 	node_t node;
 
-	if (cfg.nodelist_mod[0] != '\0') {
-		exec_bin(cfg.nodelist_mod, &main_csi);
+	if (exec_mod("list nodes", cfg.nodelist_mod) == 0)
 		return;
-	}
 
 	term->newline();
 	bputs(text[NodeLstHdr]);

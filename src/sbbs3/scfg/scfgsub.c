@@ -457,7 +457,7 @@ void sub_cfg(int grpnum)
 					uifc.helpbuf = sub_code_help;
 					SAFECOPY(str, cfg.sub[i]->code_suffix);
 					if (uifc.input(WIN_MID | WIN_SAV, 0, 17, "Internal Code Suffix (unique)"
-					           , str, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED) < 1)
+					           , str, LEN_CODE, K_EDIT | K_UPPER | K_NOSPACE | K_CHANGED | K_FIND) < 1)
 						break;
 					SAFEPRINTF2(tmp, "%s%s", cfg.grp[cfg.sub[i]->grp]->code_prefix, str);
 					if (getsubnum(&cfg, tmp) >= 0)
@@ -465,6 +465,7 @@ void sub_cfg(int grpnum)
 					else if (code_ok(str)) {
 						SAFECOPY(cfg.sub[i]->code_suffix, str);
 						cfg.sub[i]->cfg_modified = true;
+						uifc.changes = TRUE;
 					}
 					else {
 						uifc.helpbuf = invalid_code;
@@ -504,23 +505,33 @@ void sub_cfg(int grpnum)
 					break;
 				case 6:
 					sprintf(str, "%s Access", cfg.sub[i]->sname);
-					getar(str, cfg.sub[i]->arstr);
+					getar(str, cfg.sub[i]->arstr, /* helpbuf: */ NULL);
 					break;
 				case 7:
 					sprintf(str, "%s Reading", cfg.sub[i]->sname);
-					getar(str, cfg.sub[i]->read_arstr);
+					getar(str, cfg.sub[i]->read_arstr, /* helpbuf: */ NULL);
 					break;
 				case 8:
 					sprintf(str, "%s Posting", cfg.sub[i]->sname);
-					getar(str, cfg.sub[i]->post_arstr);
+					getar(str, cfg.sub[i]->post_arstr, /* helpbuf: */ NULL);
 					break;
 				case 9:
 					sprintf(str, "%s Operator", cfg.sub[i]->sname);
-					getar(str, cfg.sub[i]->op_arstr);
+					getar(str, cfg.sub[i]->op_arstr, /* helpbuf: */ NULL);
 					break;
 				case 10:
 					sprintf(str, "%s Moderated Posting User", cfg.sub[i]->sname);
-					getar(str, cfg.sub[i]->mod_arstr);
+					getar(str, cfg.sub[i]->mod_arstr,
+						"`Moderated Posting User Requirements`\n"
+						"\n"
+						"Do not set this option unless you wish to have the messages posted to\n"
+						"this sub-board by `some` users of your BBS require operator review and\n"
+						"validation before other users are able to see/read the messages or the\n"
+						"messages are exported to any message networks.\n"
+						"\n"
+						"For details about how this feature works when used, see\n"
+						"`https://wiki.synchro.net/howto:moderation`"
+					);
 					break;
 				case 11:
 					sprintf(str, "%" PRIu32, cfg.sub[i]->maxmsgs);
@@ -631,6 +642,8 @@ void sub_cfg(int grpnum)
 						         , cfg.sub[i]->pmode & P_MARKUP ? ((cfg.sub[i]->pmode & P_HIDEMARKS)  ? "Hide" : "Yes") : "No");
 						snprintf(opt[n++], MAX_OPLN, "%-30.30s%s", "Word-wrap Messages"
 						         , cfg.sub[i]->n_pmode & P_WORDWRAP ? "No" : "Yes");
+						snprintf(opt[n++], MAX_OPLN, "%-30.30s%s", "Format Output for 80 Columns"
+						         , cfg.sub[i]->pmode & P_80COLS ? "Yes" : "No");
 						snprintf(opt[n++], MAX_OPLN, "%-30.30s%s", "Auto-detect UTF-8 Msgs"
 						         , cfg.sub[i]->pmode & P_AUTO_UTF8 ? "Yes" : "No");
 						snprintf(opt[n++], MAX_OPLN, "%-30.30s%s", "Expand @-codes in Sysop Msgs"
@@ -1164,6 +1177,28 @@ void sub_cfg(int grpnum)
 								else if (n == 1 && !(cfg.sub[i]->n_pmode & P_WORDWRAP)) {
 									uifc.changes = TRUE;
 									cfg.sub[i]->n_pmode ^= P_WORDWRAP;
+								}
+								break;
+							case __COUNTER__:
+								n = (cfg.sub[i]->pmode & P_80COLS) ? 0:1;
+								uifc.helpbuf =
+									"`Format Output for 80 Columns:`\n"
+									"\n"
+									"Set this option to `Yes` to enable formatting (e.g. word-wrapping) of\n"
+									"message text for a maximum of 80 columns when displaying messages from\n"
+									"this sub-board on the Terminal Server.\n"
+								;
+								n = uifc.list(WIN_SAV | WIN_MID, 0, 0, 0, &n, 0
+								              , "Format Output for 80 Columns", uifcYesNoOpts);
+								if (n == -1)
+									break;
+								if (n == 0 && !(cfg.sub[i]->pmode & P_80COLS)) {
+									uifc.changes = TRUE;
+									cfg.sub[i]->pmode ^= P_80COLS;
+								}
+								else if (n == 1 && (cfg.sub[i]->pmode & P_80COLS)) {
+									uifc.changes = TRUE;
+									cfg.sub[i]->pmode ^= P_80COLS;
 								}
 								break;
 							case __COUNTER__:

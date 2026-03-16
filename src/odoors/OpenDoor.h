@@ -74,67 +74,76 @@
 #ifndef _INC_OPENDOOR
 #define _INC_OPENDOOR
 
+#if (__STDC_VERSION__ >= 199901L) || (__cplusplus >= 201103L)
+#include <stdint.h>
+#endif
 
 /* ========================================================================= */
 /* Version and platform definitions.                                         */
 /* ========================================================================= */
 
 /* OpenDoors API version number. */
-#define OD_VERSION 0x624
+#define OD_VERSION 0x630
 
 #define DIRSEP		'\\'
 #define DIRSEP_STR	"\\"
 
 /* OpenDoors target platform. */
 #if defined(WIN32) || defined(__WIN32__) || defined(_WIN32)
-#define ODPLAT_WIN32
-#undef ODPLAT_DOS
-#ifdef OD_WIN32_STATIC
-#pragma message("Compiling for Win32 static version of OpenDoors")
-#else /* !OD_WIN32_STATIC */
-#pragma message("Compiling for Win32 DLL version of OpenDoors")
-#define OD_DLL
-#endif /* !OD_WIN32_STATIC */
+# define ODPLAT_WIN32
+# undef ODPLAT_DOS
+# ifdef OD_WIN32_STATIC
+#  pragma message("Compiling for Win32 static version of OpenDoors")
+# else /* !OD_WIN32_STATIC */
+#  pragma message("Compiling for Win32 DLL version of OpenDoors")
+#  define OD_DLL
+# endif /* !OD_WIN32_STATIC */
 #else /* !WIN32 */
-#if defined(__unix__) || defined(__NetBSD__) || defined(__APPLE__)
-#define ODPLAT_NIX
-#undef ODPLAT_DOS
-#undef DIRSEP
-#define DIRSEP '/'
-#undef DIRSEP_STR
-#define DIRSEP_STR "/"
-#else
-#define ODPLAT_DOS
-#undef ODPLAT_WIN32
-#pragma message("Compiling for DOS version of OpenDoors")
-#endif /* !NIX */
+# if defined(__unix__) || defined(__NetBSD__) || defined(__APPLE__)
+#  define ODPLAT_NIX
+#  undef ODPLAT_DOS
+#  undef DIRSEP
+#  define DIRSEP '/'
+#  undef DIRSEP_STR
+#  define DIRSEP_STR "/"
+# else
+#  define ODPLAT_DOS
+#  undef ODPLAT_WIN32
+#  pragma message("Compiling for DOS version of OpenDoors")
+# endif /* !NIX */
 #endif /* !WIN32 */
 
 
 /* Include any other headers required by OpenDoor.h. */
 #ifdef ODPLAT_WIN32 
+#include "ws2tcpip.h"
 #include "windows.h"
 #endif /* ODPLAT_WIN32 */
 
 /* For DLL versions, definitions of function or data that is exported from */
 /* a module or imported into a module.                                     */
 #ifdef OD_DLL
-#if defined(_MSC_VER) || defined(__BORLANDC__)
-#define OD_EXPORT __declspec(dllexport)
-#else /* !_MSC_VER || __BORLANDC__ */
-#define OD_EXPORT _export
-#endif /* !_MSC_VER */
-#define OD_IMPORT DECLSPEC_IMPORT
+# if defined(_MSC_VER) || defined(__BORLANDC__) || defined(__MINGW32__)
+#  define OD_EXPORT __declspec(dllexport)
+# else /* !_MSC_VER || __BORLANDC__ */
+#  define OD_EXPORT _export
+# endif /* !_MSC_VER */
+# define OD_IMPORT DECLSPEC_IMPORT
 #else /* !OD_DLL */
-#define OD_EXPORT
-#define OD_IMPORT
+# if defined(BUILDING_OPENDOORS) && (__GNUC__ >= 4)
+#  define OD_EXPORT __attribute__ ((visibility ("default")))
+#  define OD_IMPORT __attribute__ ((visibility ("hidden")))
+# else
+#  define OD_EXPORT
+#  define OD_IMPORT
+# endif
 #endif /* !OD_DLL */
 
 /* Definition of function naming convention used by OpenDoors. */
 #ifdef __cplusplus
-#define OD_NAMING_CONVENTION extern "C"
+# define OD_NAMING_CONVENTION extern "C"
 #else /* !__cplusplus */
-#define OD_NAMING_CONVENTION
+# define OD_NAMING_CONVENTION
 #endif /* !__cplusplus */
 
 /* Definition of function calling convention used by OpenDoors. */
@@ -150,9 +159,9 @@
 
 /* OpenDoors API function declaration type. */
 #ifdef BUILDING_OPENDOORS
-#define ODAPIDEF OD_NAMING_CONVENTION OD_EXPORT
+# define ODAPIDEF OD_NAMING_CONVENTION OD_EXPORT
 #else /* !BUILDING_OPENDOORS */
-#define ODAPIDEF OD_NAMING_CONVENTION OD_IMPORT
+# define ODAPIDEF OD_NAMING_CONVENTION OD_IMPORT
 #endif /* !BUILDING_OPENDOORS */
 
 /* OpenDoors API global variable definition and declaration types. */
@@ -178,26 +187,48 @@
 
 /* Portable types that are the same size across all platforms */
 #ifndef ODPLAT_WIN32
-#ifndef BYTE
-typedef unsigned char      BYTE;                        /* Unsigned, 8 bits. */
-#endif
-#ifndef WORD
-typedef unsigned short     WORD;                       /* Unsigned, 16 bits. */
-#endif
-#ifndef DWORD
-typedef unsigned long      DWORD;                      /* Unsigned, 32 bits. */
-#endif
-#ifndef CHAR
-typedef char               CHAR;         /* Native character representation. */
-#endif
-#define DWORD_DEFINED
-#define WORD_DEFINED
+# if (__STDC_VERSION__ >= 199901L) || (__cplusplus >= 201103L)
+   typedef uint8_t            BYTE;                        /* Unsigned, 8 bits. */
+   typedef uint16_t           WORD;                       /* Unsigned, 16 bits. */
+   typedef uint32_t           DWORD;                      /* Unsigned, 32 bits. */
+   typedef uintptr_t          DWORD_PTR;
+# else
+#  ifndef BYTE
+    typedef unsigned char      BYTE;                        /* Unsigned, 8 bits. */
+#  endif
+#  ifndef WORD
+    typedef unsigned short     WORD;                       /* Unsigned, 16 bits. */
+#  endif
+#  ifndef DWORD
+    typedef unsigned long      DWORD;                      /* Unsigned, 32 bits. */
+#  endif
+#  ifndef DWORD_PTR
+/*
+ * We have no way of being right, but assume since it's an old compiler,
+ * that unsigned long is big enough for a pointer
+ */
+    typedef unsigned long      DWORD_PTR; /* Unsigned, big enough for a pointer. */
+#  endif
+#  ifndef CHAR
+    typedef char               CHAR;         /* Native character representation. */
+#  endif
+# endif
+# define DWORD_DEFINED
+# define WORD_DEFINED
 #endif /* !ODPLAT_WIN32 */
 
+#if (__STDC_VERSION__ >= 199901L) || (__cplusplus >= 201103L)
+typedef int8_t             INT8;                          /* Signed, 8 bits. */
+typedef int16_t            INT16;                        /* Signed, 16 bits. */
+#ifndef ODPLAT_WIN32	/* avoid type redefinition from basetsd.h */
+typedef int32_t            INT32;                        /* Signed, 32 bits. */
+#endif
+#else
 typedef signed char        INT8;                          /* Signed, 8 bits. */
 typedef signed short int   INT16;                        /* Signed, 16 bits. */
 #ifndef ODPLAT_WIN32	/* avoid type redefinition from basetsd.h */
 typedef signed long int    INT32;                        /* Signed, 32 bits. */
+#endif
 #endif
 
 
@@ -324,8 +355,12 @@ typedef struct
 #define MAYBE 2
 
 /* od_spawnvpe() flags. */
+#ifdef ODPLAT_WIN32
+#include <process.h>
+#else
 #define P_WAIT                  0
 #define P_NOWAIT                1
+#endif
 #define CURRENT                 0
 #define IRET                    1
 
@@ -583,7 +618,8 @@ typedef struct
    BOOL          od_no_fossil;
    BOOL          od_use_socket;
    INT16         port;
-   DWORD         od_open_handle;
+   DWORD_PTR     od_open_handle;
+   BOOL          od_cp437_to_utf8_out;
 
    /* Caller and system information. */
    char          system_name[40];
@@ -717,7 +753,7 @@ typedef struct
 
    /* OpenDoors customization settings. */
    char          od_box_chars[8];
-   char          od_cfg_text[48][33];
+   char          od_cfg_text[49][33];
    char          od_cfg_lines[25][33];
    OD_COMPONENT  *od_config_file;
    const char *  od_config_filename;
@@ -726,6 +762,7 @@ typedef struct
    char          od_color_delimiter;
    char          od_color_names[12][33];
    BOOL          od_clear_on_exit;
+   BOOL          (*od_cmd_line_flag_handler)(const char *pszKeyword);
    void          (*od_cmd_line_handler)(char *pszKeyword, char *pszOptions);
    void          (*od_cmd_line_help_func)(void);
    void          (*od_default_personality)(BYTE operation);
@@ -825,7 +862,7 @@ typedef struct
    char *        od_time_left;
    char *        od_time_warning;
    char *        od_want_chat;
-   char *        od_cmd_line_help;
+   const char *  od_cmd_line_help;
 
    /* OpenDoors color customizations. */
    BYTE          od_chat_color1;
@@ -969,6 +1006,7 @@ ODAPIDEF WORD ODCALL   od_edit_str(char *pszInput, char *pszFormat, INT nRow,
                           BYTE btHighlightColour, char chBlank,
                           WORD nFlags);
 ODAPIDEF void ODCALL   od_exit(INT nErrorLevel, BOOL bTermCall);
+ODAPIDEF void ODCALL   od_free_split_cmd_line(char **papszArguments);
 ODAPIDEF char ODCALL   od_get_answer(const char *pszOptions);
 ODAPIDEF void ODCALL   od_get_cursor(INT *pnRow, INT *pnColumn);
 ODAPIDEF BOOL ODCALL   od_get_input(tODInputEvent *pInputEvent,
@@ -984,7 +1022,7 @@ ODAPIDEF void ODCALL   od_input_str(char *pszInput, INT nMaxLength,
                           unsigned char chMin, unsigned char chMax);
 ODAPIDEF void ODCALL   od_kernel(void);
 ODAPIDEF BOOL ODCALL   od_list_files(char *pszFileSpec);
-ODAPIDEF BOOL ODCALL   od_log_write(char *pszMessage);
+ODAPIDEF BOOL ODCALL   od_log_write(const char *pszMessage);
 ODAPIDEF INT ODCALL    od_multiline_edit(char *pszBufferToEdit,
                           UINT unBufferSize, tODEditOptions *pEditOptions);
 ODAPIDEF void ODCALL   od_page(void);
@@ -1015,8 +1053,9 @@ ODAPIDEF BOOL ODCALL   od_set_personality(const char *pszName);
 ODAPIDEF void ODCALL   od_set_statusline(INT nSetting);
 ODAPIDEF void ODCALL   od_sleep(tODMilliSec Milliseconds);
 ODAPIDEF BOOL ODCALL   od_spawn(const char *pszCommandLine);
-ODAPIDEF INT16 ODCALL  od_spawnvpe(INT16 nModeFlag, char *pszPath,
-                          char *papszArg[], char *papszEnv[]);
+ODAPIDEF INT16 ODCALL  od_spawnvpe(INT16 nModeFlag, char *const pszPath,
+                          const char *const papszArg[], const char *const papszEnv[]);
+ODAPIDEF char ** ODCALL od_split_cmd_line(const char *pszCmdLine, INT *nArgCount);
 ODAPIDEF void * ODCALL od_window_create(INT nLeft, INT nTop, INT nRight,
                           INT nBottom, char *pszTitle, BYTE btBorderCol,
                           BYTE btTitleCol, BYTE btInsideCol, INT nReserved);
@@ -1118,6 +1157,10 @@ ODAPIDEF BOOL ODCALL   od_window_remove(void *pWinInfo);
                                   od_control.config_function=function;\
                                   od_init()
 ODAPIDEF BOOL ODCALL                   od_log_open(void);
+#if __cplusplus < 201103L
 ODAPIDEF void ODCALL                   od_emulate(register char in_char);
+#else
+ODAPIDEF void ODCALL                   od_emulate(char in_char);
+#endif
 
 #endif /* _INC_OPENDOOR */

@@ -22,6 +22,15 @@
 #ifndef _GEN_DEFS_H
 #define _GEN_DEFS_H
 
+#if (__STDC_VERSION__ >= 199901L) || (__cplusplus >= 201103L)
+# ifndef HAS_INTTYPES_H
+#  define HAS_INTTYPES_H
+# endif
+# ifndef HAS_STDINT_H
+#  define HAS_STDINT_H
+# endif
+#endif
+
 #include "cp437defs.h"
 #ifdef _DEBUG
 #include <assert.h>
@@ -480,7 +489,7 @@ typedef struct {
 
 /* ASCIIZ char* parsing helper macros */
 /* These (unsigned char) typecasts defeat MSVC debug assertion when passed a negative value */
-#define IS_WHITESPACE(c)				(isspace((unsigned char)(c)) || c == CP437_NO_BREAK_SPACE)
+#define IS_WHITESPACE(c)				((c) == ' ' || (c) == '\r' || (c) == '\n' || (c) == '\t' || (c) == '\f' || (c) == '\v' || (c) == CP437_NO_BREAK_SPACE)
 #define IS_CONTROL(c)					iscntrl((unsigned char)(c))
 #define IS_ALPHA(c)						isalpha((unsigned char)(c))
 #define IS_ALPHANUMERIC(c)				isalnum((unsigned char)(c))
@@ -490,6 +499,7 @@ typedef struct {
 #define IS_PRINTABLE(c)					isprint((unsigned char)(c))
 #define IS_DIGIT(c)						isdigit((unsigned char)(c))
 #define IS_HEXDIGIT(c)					isxdigit((unsigned char)(c))
+#define IS_UPPERHEXDIGIT(c)				(((c) >= '0' && (c) <= '9') || ((c) >= 'A' && (c) <= 'F'))
 #define IS_OCTDIGIT(c)					((c) >= '0' && (c) <= '7')
 #define SKIP_WHITESPACE(p)              while((p) && *(p) && IS_WHITESPACE(*(p)))        (p)++;
 #define FIND_WHITESPACE(p)              while((p) && *(p) && !IS_WHITESPACE(*(p)))       (p)++;

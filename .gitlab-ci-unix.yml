@@ -11,8 +11,8 @@ spec:
       default: 'no'
     build_flags:
       default: 'RELEASE=1'
-    no_javascript:
-      default: 'no'
+    has_javascript:
+      default: 'yes'
     has_curses:
       default: 'yes'
     has_gtk:
@@ -21,6 +21,14 @@ spec:
       default: 'gmake'
     has_valgrind:
       default: 'no'
+    has_graphics:
+      default: 'yes'
+    build_doors:
+      default: 'no'
+    slow_system:
+      default: 'no'
+    valgrind_pre_exec:
+      default: ''
 ---
 
 ".$[[ inputs.os ]]":
@@ -40,356 +48,190 @@ spec:
   stage: cleanup
   extends: .$[[ inputs.os ]]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]":
+###########
+# Bundles #
+###########
+# These are artifact-only builds
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - cd 3rdp/build
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS libmozjs
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz" 3rdp/*.release/mozjs
+    - touch ${CI_PIPELINE_ID}.ci
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
   variables:
     GIT_STRATEGY: fetch
+  artifacts:
+    name: "sbbs-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/sbbs3/*.exe.release/*"
+      - "src/sbbs3/*.lib.release/*"
+      - "src/sbbs3/*/*.exe.release/*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
   rules:
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
+      when: never
+    - if: '"$[[ inputs.cross_platform ]]" == "yes"'
       when: never
     - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd 3rdp/build
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] FIXED_FIXED_SEED=1 $BUILD_ARGS cryptlib
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz" 3rdp/*.release/cl
-  variables:
-    GIT_STRATEGY: fetch
+############
+# Binaries #
+############
+# These link a runnable binary
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkchat]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - cd src/xpdev
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/sbbs3/gtkchat
+    - touch cl
     - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz" src/xpdev/*.lib.release* src/xpdev/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/encode
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz" src/encode/*.lib.release* src/encode/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/hash
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz" src/hash/*.lib.release* src/hash/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/conio
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz" src/conio/*.lib.release* src/conio/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [sftp]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/sftp
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sftp.tgz" src/sftp/*.lib.release* src/sftp/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/smblib
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz" src/smblib/*.lib.release* src/smblib/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/uifc
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz" src/uifc/*.lib.release* src/uifc/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - cd src/sbbs3
-    - touch depend
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS gitinfo
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz" src/sbbs3/git_*.h
-  variables:
-    GIT_STRATEGY: fetch
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [scfg]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
-    - cd src/sbbs3/scfg
-    - touch depend
-    - touch xpdev
-    - touch xpdev-mt
     - touch encode
     - touch hash
     - touch smblib
-    - touch ciolib-mt
-    - touch uifc
-    - touch uifc-mt
-    - touch cl
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/scfg.tgz" src/sbbs3/scfg/*.exe.release* src/sbbs3/scfg/*.obj.release*/*.o*
+    - touch xpdev
+    - touch xpdev-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
+  artifacts:
+    name: "gtkchat-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/sbbs3/gtkchat/*.exe.release/*"
   needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [uedit]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
-    - cd src/sbbs3/uedit
-    - touch depend
-    - touch xpdev
-    - touch xpdev-mt
-    - touch encode
-    - touch hash
-    - touch smblib
-    - touch ciolib-mt
-    - touch uifc
-    - touch uifc-mt
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uedit.tgz" src/sbbs3/uedit/*.exe.release* src/sbbs3/uedit/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-  needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
   rules:
-    - if: '"$[[ inputs.has_curses ]]" == "no"'
+    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+      when: never
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
       when: never
     - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [umonitor]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkmonitor]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - cd src/sbbs3/umonitor
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
+    - cd src/sbbs3/gtkmonitor
     - touch depend
     - touch xpdev
     - touch xpdev-mt
-    - touch encode
-    - touch hash
     - touch smblib
-    - touch ciolib-mt
-    - touch uifc
-    - touch uifc-mt
+    - touch cl
+    - touch js
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/umonitor.tgz" src/sbbs3/umonitor/*.exe.release* src/sbbs3/umonitor/*.obj.release*/*.o*
   variables:
     GIT_STRATEGY: fetch
+  artifacts:
+    name: "gtkmonitor-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/sbbs3/gtkmonitor/*.exe.release/*"
   needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [utils]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - cd src/sbbs3
-    - touch cl
-    - touch depend
-    - touch xpdev
-    - touch xpdev-mt
-    - touch encode
-    - touch hash
-    - touch smblib
-    - touch ciolib-mt
-    - touch uifc
-    - touch uifc-mt
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO standalone-utils
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/utils.tgz" src/sbbs3/*.exe.release* src/sbbs3/*.obj.release*/*.o*
-  variables:
-    GIT_STRATEGY: fetch
-  needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]"
+  rules:
+    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+      when: never
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
+      when: never
+    - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkuseredit]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sftp.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
-    - cd src/sbbs3
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
+    - cd src/sbbs3/gtkuseredit
     - touch depend
     - touch xpdev
     - touch xpdev-mt
     - touch smblib
-    - touch uifc
-    - touch uifc-mt
-    - touch ciolib-mt
-    - touch encode
-    - touch hash
-    - touch smblib
-    - touch sftp-mt
     - touch cl
-    - touch scfg/xpdev-mt
-    - touch scfg/uifc-mt
-    - touch scfg/ciolib-mt
-    - touch scfg/smblib
-    - touch scfg/encode
-    - touch scfg/hash
-    - touch scfg/cl
-    - touch uedit/smblib
-    - touch uedit/uifc-mt
-    - touch uedit/ciolib-mt
-    - touch uedit/xpdev-mt
-    - touch umonitor/ciolib-mt
-    - touch umonitor/uifc-mt
-    - touch umonitor/xpdev-mt
-    - touch umonitor/smblib
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO all
-    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
-    - cd ../..
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz" src/sbbs3/*.exe.release* src/sbbs3/*.obj.release*/*.o* src/sbbs3/*.lib.release/* src/sbbs3/*/*.exe.release/*
-    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz" ctrl exec
+    - touch js
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
+  artifacts:
+    name: "gtkuseredit-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/sbbs3/gtkuseredit/*.exe.release/*"
   needs:
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sftp]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
   rules:
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
+    - if: '"$[[ inputs.has_gtk ]]" == "no"'
       when: never
-    - if: '"$[[ inputs.cross_platform ]]" == "yes"'
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkuserlist]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
+    - cd src/sbbs3/gtkuserlist
+    - touch depend
+    - touch xpdev
+    - touch xpdev-mt
+    - touch smblib
+    - touch cl
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "gtkuserlist-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/sbbs3/gtkuserlist/*.exe.release/*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
+  rules:
+    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+      when: never
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
       when: never
     - !reference [.rules, rules]
 
@@ -397,16 +239,18 @@ spec:
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs${EXTRA_FILENAME}-build.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs${EXTRA_FILENAME}-build.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
     - cd src/sbbs3
     - touch depend
     - touch xpdev
@@ -434,6 +278,7 @@ spec:
     - touch umonitor/uifc-mt
     - touch umonitor/xpdev-mt
     - touch umonitor/smblib
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS jsdoor
     - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
     - cd ../..
@@ -457,39 +302,178 @@ spec:
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
   rules:
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
       when: never
     - if: '"$[[ inputs.cross_platform ]]" == "yes"'
       when: never
     - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/scfg.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uedit.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/umonitor.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/utils.tgz"
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sftp.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
+    - cd src/sbbs3
+    - touch depend
+    - touch xpdev
+    - touch xpdev-mt
+    - touch smblib
+    - touch uifc
+    - touch uifc-mt
+    - touch ciolib-mt
+    - touch encode
+    - touch hash
+    - touch smblib
+    - touch sftp-mt
+    - touch cl
+    - touch scfg/xpdev-mt
+    - touch scfg/uifc-mt
+    - touch scfg/ciolib-mt
+    - touch scfg/smblib
+    - touch scfg/encode
+    - touch scfg/hash
+    - touch scfg/cl
+    - touch uedit/smblib
+    - touch uedit/uifc-mt
+    - touch uedit/ciolib-mt
+    - touch uedit/xpdev-mt
+    - touch umonitor/ciolib-mt
+    - touch umonitor/uifc-mt
+    - touch umonitor/xpdev-mt
+    - touch umonitor/smblib
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO all
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz" src/sbbs3/*.exe.release* src/sbbs3/*.obj.release*/*.o* src/sbbs3/*.lib.release/* src/sbbs3/*/*.exe.release/* src/sbbs3/suppressions.vg
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz" ctrl exec
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sftp]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
+  rules:
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
+      when: never
+    - if: '"$[[ inputs.cross_platform ]]" == "yes"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [scfg]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
+    - cd src/sbbs3/scfg
+    - touch depend
+    - touch xpdev
+    - touch xpdev-mt
+    - touch encode
+    - touch hash
+    - touch smblib
+    - touch ciolib-mt
+    - touch uifc
+    - touch uifc-mt
+    - touch cl
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/scfg.tgz" src/sbbs3/scfg/*.exe.release* src/sbbs3/scfg/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [sexpots]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/sexpots
+    - touch cl
+    - touch depend
+    - touch xpdev
+    - touch xpdev-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
   artifacts:
-    name: "sbbs-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    name: "sexpots-$[[ inputs.os ]]-$[[ inputs.platform ]]"
     paths:
-      - "src/sbbs3/*.exe.release/*"
-      - "src/sbbs3/*.lib.release/*"
-      - "src/sbbs3/*/*.exe.release/*"
+      - "src/sexpots/*.exe.release/*"
   needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [scfg]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uedit]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [umonitor]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [utils]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [syncdraw]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/syncdraw
+    - touch cl
+    - touch depend
+    - touch xpdev
+    - touch xpdev-mt
+    - touch ciolib-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "syncdraw-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/syncdraw/*.exe.release/*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
   rules:
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
-      when: never
-    - if: '"$[[ inputs.cross_platform ]]" == "yes"'
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
       when: never
     - !reference [.rules, rules]
 
@@ -497,13 +481,15 @@ spec:
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sftp.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sftp.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
     - cd src/syncterm
     - touch depend
     - touch xpdev
@@ -515,6 +501,7 @@ spec:
     - touch uifc-mt
     - touch sftp-mt
     - touch cl
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
@@ -535,6 +522,7 @@ spec:
   extends:
     - .$[[ inputs.os ]]-build
   script:
+    - touch ${CI_PIPELINE_ID}.ci
     - cd src/syncterm
     - mkdir build
     - cd build
@@ -549,192 +537,657 @@ spec:
   rules:
     - if: '"$[[ inputs.cross_platform ]]" == "yes"'
       when: never
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
+      when: never
     - !reference [.rules, rules]
   needs:
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [syncdraw]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [syncview]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - cd src/syncdraw
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/sbbs3/syncview
+    - touch ciolib-mt
+    - touch cl
     - touch depend
+    - touch encode
+    - touch hash
     - touch xpdev
     - touch xpdev-mt
-    - touch ciolib-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
   artifacts:
-    name: "syncdraw-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    name: "syncview-$[[ inputs.os ]]-$[[ inputs.platform ]]"
     paths:
-      - "src/syncdraw/*.exe.release/*"
+      - "src/sbbs3/syncview/*.exe.release/*"
   needs:
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+  rules:
+    - if: '"$[[ inputs.has_graphics ]]" == "no"'
+      when: never
+    - if: '"$[[ inputs.slow_system ]]" == "yes"'
+      when: never
+    - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [sexpots]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [uedit]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - cd src/sexpots
-    - touch depend
-    - touch xpdev
-    - touch xpdev-mt
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
-  variables:
-    GIT_STRATEGY: fetch
-  artifacts:
-    name: "sexpots-$[[ inputs.os ]]-$[[ inputs.platform ]]"
-    paths:
-      - "src/sexpots/*.exe.release/*"
-  needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkchat]":
-  extends:
-    - .$[[ inputs.os ]]-build
-  script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - cd src/sbbs3/gtkchat
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
+    - cd src/sbbs3/uedit
+    - touch cl
     - touch depend
     - touch xpdev
     - touch xpdev-mt
     - touch encode
     - touch hash
     - touch smblib
-    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - touch ciolib-mt
+    - touch uifc
+    - touch uifc-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uedit.tgz" src/sbbs3/uedit/*.exe.release* src/sbbs3/uedit/*.obj.release*/*.o*
   variables:
     GIT_STRATEGY: fetch
-  artifacts:
-    name: "gtkchat-$[[ inputs.os ]]-$[[ inputs.platform ]]"
-    paths:
-      - "src/sbbs3/gtkchat/*.exe.release/*"
   needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
   rules:
-    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+    - if: '"$[[ inputs.has_curses ]]" == "no"'
       when: never
     - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkmonitor]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [umonitor]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
-    - cd src/sbbs3/gtkmonitor
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/sbbs3/umonitor
+    - touch cl
     - touch depend
     - touch xpdev
     - touch xpdev-mt
+    - touch encode
+    - touch hash
     - touch smblib
+    - touch ciolib-mt
+    - touch uifc
+    - touch uifc-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/umonitor.tgz" src/sbbs3/umonitor/*.exe.release* src/sbbs3/umonitor/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [utils]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/sbbs3
     - touch cl
-    - touch js
+    - touch depend
+    - touch xpdev
+    - touch xpdev-mt
+    - touch encode
+    - touch hash
+    - touch smblib
+    - touch ciolib-mt
+    - touch uifc
+    - touch uifc-mt
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS GIT=NO standalone-utils
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/utils.tgz" src/sbbs3/*.exe.release* src/sbbs3/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+
+#############
+# Libraries #
+#############
+# These perform a make, but do not result in a runnable binary
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/conio
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz" src/conio/*.lib.release* src/conio/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd 3rdp/build
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] FIXED_FIXED_SEED=1 $BUILD_ARGS cryptlib
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz" 3rdp/*.release/cl
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [encode]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/encode
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/encode.tgz" src/encode/*.lib.release* src/encode/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gitinfo]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/sbbs3
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS gitinfo
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gitinfo.tgz" src/sbbs3/git_*.h
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [hash]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/hash
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/hash.tgz" src/hash/*.lib.release* src/hash/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/odoors
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz" src/odoors/libs-* src/odoors/*.h src/odoors/FILE_ID.DIZ src/odoors/*.TXT src/odoors/*.txt
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+  rules:
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [sftp]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/sftp
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sftp.tgz" src/sftp/*.lib.release* src/sftp/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd src/smblib
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz" src/smblib/*.lib.release* src/smblib/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - cd 3rdp/build
+    - touch depend
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS libmozjs
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz" 3rdp/*.*.*.release/mozjs
+  variables:
+    GIT_STRATEGY: fetch
+  rules:
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [uifc]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - cd src/uifc
+    - touch cl
+    - touch depend
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/uifc.tgz" src/uifc/*.lib.release* src/uifc/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - cd src/xpdev
+    - touch cl
+    - touch depend
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - mkdir -p "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz" src/xpdev/*.lib.release* src/xpdev/*.obj.release*/*.o*
+  variables:
+    GIT_STRATEGY: fetch
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+
+#########
+# Doors #
+#########
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [clans]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - cd src/doors/clans-src
+    - touch depend
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS installer devkit-installer
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "clans-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/doors/clans-src/Clans*.zip"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
+  rules:
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [dgnlance]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/dgnlance/src
+    - touch depend
+    - touch xpdev
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
   artifacts:
-    name: "gtkmonitor-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    name: "dgnlance-$[[ inputs.os ]]-$[[ inputs.platform ]]"
     paths:
-      - "src/sbbs3/gtkmonitor/*.exe.release/*"
+      - "src/doors/dgnlance/data"
+      - "src/doors/dgnlance/dgnlnce*"
+      - "src/doors/dgnlance/text"
   needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]"
   rules:
-    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
       when: never
     - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkuseredit]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [freevote]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/spidermonkey.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
-    - cd src/sbbs3/gtkuseredit
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/freevote/src
+    - touch ciolib-mt
     - touch depend
-    - touch xpdev
     - touch xpdev-mt
-    - touch smblib
-    - touch cl
-    - touch js
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
   artifacts:
-    name: "gtkuseredit-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    name: "freevote-$[[ inputs.os ]]-$[[ inputs.platform ]]"
     paths:
-      - "src/sbbs3/gtkuseredit/*.exe.release/*"
+      - "src/doors/freevote/*.doc"
+      - "src/doors/freevote/freevote*"
+      - "src/doors/freevote/*.cfg"
+      - "src/doors/freevote/reset"
   needs:
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [spidermonkey]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
   rules:
-    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
       when: never
     - !reference [.rules, rules]
 
-"$[[ inputs.os ]]-$[[ inputs.platform ]] [gtkuserlist]":
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gac_bj]":
   extends:
     - .$[[ inputs.os ]]-build
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/smblib.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
-    - cd src/sbbs3/gtkuserlist
-    - touch depend
-    - touch xpdev
-    - touch xpdev-mt
-    - touch smblib
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gamesdk.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/gac/gac_bj/src
     - touch cl
+    - touch depend
+    - touch xpdev-mt
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
   variables:
     GIT_STRATEGY: fetch
   artifacts:
-    name: "gtkuserlist-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    name: "gac_bj-$[[ inputs.os ]]-$[[ inputs.platform ]]"
     paths:
-      - "src/sbbs3/gtkuserlist/*.exe.release/*"
+      - "src/doors/gac/gac_bj/*.art"
+      - "src/doors/gac/gac_bj/*.bat"
+      - "src/doors/gac/gac_bj/*.diz"
+      - "src/doors/gac/gac_bj/*.doc"
+      - "src/doors/gac/gac_bj/*.sh"
+      - "src/doors/gac/gac_bj/gac_bj"
+      - "src/doors/gac/gac_fc/gac_bj.*"
   needs:
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gamesdk]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
     - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [smblib]"
-    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [sbbs-build]"
   rules:
-    - if: '"$[[ inputs.has_gtk ]]" == "no"'
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gac_fc]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gamesdk.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/gac/gac_fc/src
+    - touch cl
+    - touch depend
+    - touch xpdev-mt
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "gac_fc-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/doors/gac/gac_fc/*.art"
+      - "src/doors/gac/gac_fc/*.bat"
+      - "src/doors/gac/gac_fc/*.diz"
+      - "src/doors/gac/gac_fc/*.doc"
+      - "src/doors/gac/gac_fc/*.sh"
+      - "src/doors/gac/gac_fc/gac_fc"
+      - "src/doors/gac/gac_fc/gac_fc.*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gamesdk]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+  rules:
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gac_wh]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gamesdk.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/gac/gac_wh/src
+    - touch cl
+    - touch depend
+    - touch xpdev-mt
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "gac_wh-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/doors/gac/gac_wh/*.art"
+      - "src/doors/gac/gac_wh/*.bat"
+      - "src/doors/gac/gac_wh/*.diz"
+      - "src/doors/gac/gac_wh/*.doc"
+      - "src/doors/gac/gac_wh/*.sh"
+      - "src/doors/gac/gac_wh/gac_wh"
+      - "src/doors/gac/gac_wh/gac_wh.*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [gamesdk]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+  rules:
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [gamesdk]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/gac/gamesdk
+    - touch cl
+    - touch depend
+    - touch xpdev-mt
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+    - cd ../../../..
+    - tar -czf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/gamesdk.tgz" src/doors/gac/gamesdk/*.exe.release* src/doors/gac/gamesdk/*.obj.release*
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "gac_bj-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/doors/gac/gamesdk/*.*.exe.*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+  rules:
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
+      when: never
+    - !reference [.rules, rules]
+
+"$[[ inputs.os ]]-$[[ inputs.platform ]] [ny2008]":
+  extends:
+    - .$[[ inputs.os ]]-build
+  script:
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ciolib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/cryptlib.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/odoors.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/xpdev.tgz"
+    - cd src/doors/ny2008/src
+    - touch ciolib-mt
+    - touch cl
+    - touch depend
+    - touch xpdev-mt
+    - touch odoors
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - $[[ inputs.gnu_make ]] $[[ inputs.build_flags ]] $BUILD_ARGS
+  variables:
+    GIT_STRATEGY: fetch
+  artifacts:
+    name: "freevote-$[[ inputs.os ]]-$[[ inputs.platform ]]"
+    paths:
+      - "src/doors/ny2008/*.*"
+      - "src/doors/ny2008/src/*.*.exe.*/*"
+  needs:
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [cryptlib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [ciolib]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [odoors]"
+    - job: "$[[ inputs.os ]]-$[[ inputs.platform ]] [xpdev]"
+  rules:
+    - if: '"$[[ inputs.build_doors ]]" == "no"'
       when: never
     - !reference [.rules, rules]
 
 #########
 # Tests #
 #########
+
 "$[[ inputs.os ]]-$[[ inputs.platform ]] jsexec-testsuite":
   extends:
     - .$[[ inputs.os ]]-test
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz"
-    - sync
-    - "SBBSCTRL=./ctrl src/sbbs3/*.exe.release/jsexec -S -f exec/tests/test.js"
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - rm -rf ci-test
+    - mkdir ci-test
+    - cd ci-test
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz"
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - "SBBSCTRL=./ctrl src/sbbs3/*.exe.release/jsexec -U -S -f exec/tests/test.js"
+    - cd ..
+    - rm -rf ci-test
   variables:
     GIT_STRATEGY: none
   needs:
@@ -743,7 +1196,7 @@ spec:
   rules:
     - if: '"$[[ inputs.cross_platform ]]" == "yes"'
       when: never
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
       when: never
     - !reference [.rules, rules]
 
@@ -751,10 +1204,17 @@ spec:
   extends:
     - .$[[ inputs.os ]]-test
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz"
-    - sync
-    - "SBBSCTRL=./ctrl valgrind --leak-check=full --error-exitcode=1 --num-callers=20 --track-origins=yes --read-var-info=yes --read-inline-info=yes --suppressions=src/sbbs3/suppressions.vg src/sbbs3/*.exe.release/jsexec -S -f exec/tests/test.js"
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - rm -rf ci-test
+    - mkdir ci-test
+    - cd ci-test
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/sbbs-build${EXTRA_FILENAME}.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz"
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
+    - "SBBSCTRL=./ctrl $[[ inputs.valgrind_pre_exec ]] valgrind --leak-check=full --error-exitcode=1 --num-callers=20 --track-origins=yes --read-var-info=yes --read-inline-info=yes --suppressions=src/sbbs3/suppressions.vg src/sbbs3/*.exe.release/jsexec -U -S -f exec/tests/test.js"
+    - cd ..
+    - rm -rf ci-test
   variables:
     GIT_STRATEGY: none
   needs:
@@ -763,7 +1223,7 @@ spec:
   rules:
     - if: '"$[[ inputs.cross_platform ]]" == "yes"'
       when: never
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
       when: never
     - if: '"$[[ inputs.has_valgrind ]]" == "no"'
       when: never
@@ -773,10 +1233,17 @@ spec:
   extends:
     - .$[[ inputs.os ]]-test
   script:
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/jsdoor.tgz"
-    - tar -xzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz"
-    - sync
+    - touch ${CI_PIPELINE_ID}.ci
+    - echo -e "\e[0Ksection_start:`date +%s`:extract_depends[collapsed=true]\r\e[0KPreparing for build"
+    - rm -rf ci-test
+    - mkdir ci-test
+    - cd ci-test
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/jsdoor.tgz"
+    - tar -xvzf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}/ctrl_exec${EXTRA_FILENAME}.tgz"
+    - echo -e "\e[0Ksection_end:`date +%s`:extract_depends\r\e[0K"
     - "SBBSCTRL=./ctrl src/sbbs3/*.exe.release/jsdoor -S -f exec/tests/test.js"
+    - cd ..
+    - rm -rf ci-test
   variables:
     GIT_STRATEGY: none
   needs:
@@ -786,18 +1253,22 @@ spec:
   rules:
     - if: '"$[[ inputs.cross_platform ]]" == "yes"'
       when: never
-    - if: '"$[[ inputs.no_javascript ]]" == "yes"'
+    - if: '"$[[ inputs.has_javascript ]]" == "no"'
       when: never
     - !reference [.rules, rules]
 
 ###########
 # Cleanup #
 ###########
+
 "$[[ inputs.os ]]-$[[ inputs.platform ]] cleanup":
   extends:
     - .$[[ inputs.os ]]-cleanup
   script:
+    - touch ${CI_PIPELINE_ID}.ci
     - rm -rf "/tmp/gitlab-runner/$[[ inputs.os ]]-$[[ inputs.platform ]]-${CI_PIPELINE_ID}"
+    - cd ../../..
+    - if [ "${CI_PROJECT_NAMESPACE}" != "main" ]; then for dir in */${CI_PROJECT_NAMESPACE}; do if [ -f $dir/${CI_PROJECT_NAME}/${CI_PIPELINE_ID}.ci ]; then rm -rf $dir/; fi; done; fi
   variables:
     GIT_STRATEGY: none
   dependencies: []

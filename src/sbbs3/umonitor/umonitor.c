@@ -193,6 +193,10 @@ int dospy(scfg_t *cfg, int nodenum, bbs_startup_t *bbs_startup)  {
 			uifc.msg("STDIN has gone away... you probably can't close this window.  :-)");
 			return(-1);
 
+		case SPY_NOCTERM:
+			uifc.msg("CTerm has failed to initialize.");
+			return(-1);
+
 		case SPY_CLOSED:
 			break;
 
@@ -706,15 +710,15 @@ int recycle_servers(scfg_t *cfg)
 	return(0);
 }
 
-char *geteditor(char *edit)
+char *geteditor(char *edit, size_t esz)
 {
 	if(getenv("EDITOR")==NULL && (getenv("VISUAL")==NULL || getenv("DISPLAY")==NULL))
 		strcpy(edit,"vi");
 	else {
 		if(getenv("DISPLAY")!=NULL && getenv("VISUAL")!=NULL)
-			strcpy(edit,getenv("VISUAL"));
+			strlcpy(edit,getenv("VISUAL"), esz);
 		else
-			strcpy(edit,getenv("EDITOR"));
+			strlcpy(edit,getenv("EDITOR"), esz);
 	}
 	return(edit);
 }
@@ -760,7 +764,7 @@ int edit_cfg(scfg_t *cfg)
 				return(0);
 				break;
 			default:
-				sprintf(cmd,"%s %s%s",geteditor(editcmd),cfg->ctrl_dir,opt[i]);
+				sprintf(cmd,"%s %s%s",geteditor(editcmd, sizeof(editcmd)),cfg->ctrl_dir,opt[i]);
 				do_cmd(cmd);
 				break;
 		}
@@ -803,7 +807,7 @@ int edit_can(scfg_t *cfg)
 				return(0);
 				break;
 			default:
-				sprintf(cmd,"%s %s%s",geteditor(editcmd),cfg->text_dir,opt[i]);
+				sprintf(cmd,"%s %s%s",geteditor(editcmd, sizeof(editcmd)),cfg->text_dir,opt[i]);
 				do_cmd(cmd);
 				break;
 		}
@@ -888,7 +892,7 @@ int main(int argc, char** argv)  {
 	memset(&cfg,0,sizeof(cfg));
 	cfg.size=sizeof(cfg);
 	SAFECOPY(cfg.ctrl_dir,bbs_startup.ctrl_dir);
-	if(!load_cfg(&cfg, text, /* prep: */TRUE, /* node: */FALSE, str, sizeof(str))) {
+	if(!load_cfg(&cfg, text, TOTAL_TEXT, /* prep: */TRUE, /* node: */FALSE, str, sizeof(str))) {
 		printf("ERROR! %s\n",str);
 		exit(1);
 	}

@@ -29,7 +29,7 @@ function print_user(u)
 }
 
 console.mnemonics("Sort by User ~Name, ~Last-on Date or [#]: ");
-var sort = console.getkeys("NL#");
+var sort = console.getkeys("NL#", 0);
 if(sort != 'N' && sort != 'L')
 	sort = false;
 else
@@ -47,11 +47,11 @@ for(var i = 1; i <= lastuser; i++) {
 	++users;
 	switch(mode) {
 		case UL_SUB:
-			if(!u.can_access_sub(bbs.cursub_code))
+			if(typeof u.can_access_sub == 'function' && !u.can_access_sub(bbs.cursub_code))
 				continue;
 			break;
 		case UL_DIR:
-			if(!u.can_access_dir(bbs.curdir_code))
+			if(typeof u.can_access_dir == 'function' && !u.can_access_dir(bbs.curdir_code))
 				continue;
 			break;
 	}

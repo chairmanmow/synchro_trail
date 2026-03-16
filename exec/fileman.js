@@ -329,7 +329,7 @@ function list_files(title, list, dircode)
 			items.push(format("%-*s%-*s  %s"
 				,tagged ? 2:0
 				,file.tagged ? ascii(251):""
-				,namelen, wide_screen ? file.name : FileBase().format_name(file.name)
+				,namelen, wide_screen ? file.name : FileBase.format_name(file.name)
 				,file.desc || ""));
 		}
 		var win_mode = WIN_SAV | WIN_RHT | WIN_ACT | WIN_DEL | WIN_DELACT | WIN_TAG;
@@ -1006,6 +1006,14 @@ function save(file, dircode, filename)
 
 function add_file(filename, dircode)
 {
+	if(system.illegal_filename(filename)) {
+		uifc.msg("Illegal filename: " + filename);
+		return false;
+	}
+	if(!system.allowed_filename(filename)) {
+		uifc.msg("Disallowed filename: " + filename);
+		return false;
+	}
 	var base = new FileBase(dircode);
 	if(!base.open()) {
 		uifc.msg("Unable to open base: " + dircode);
@@ -1141,7 +1149,7 @@ function list_parsed_filelist(listfile, list, dircode)
 			items.push(format("%-*s%-*s  %s"
 				,tagged ? 2:0
 				,file.tagged ? ascii(251):""
-				,namelen, wide_screen ? file.name : FileBase().format_name(file.name)
+				,namelen, wide_screen ? file.name : FileBase.format_name(file.name)
 				,file.desc || ""));
 		}
 		var win_mode = WIN_SAV | WIN_BOT | WIN_DEL | WIN_DELACT | WIN_TAG | WIN_ACT;

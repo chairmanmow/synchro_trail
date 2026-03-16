@@ -23,6 +23,7 @@
 #include "cmdshell.h"
 #include "js_request.h"
 #include "js_rtpool.h"
+#include "readtext.h"
 
 char ** sbbs_t::getstrvar(csi_t *bin, uint32_t name)
 {
@@ -43,7 +44,7 @@ char ** sbbs_t::getstrvar(csi_t *bin, uint32_t name)
 			sysvar_p[sysvar_pi] = (char*)useron.handle;
 			break;
 		case 0xc8cd5fb7:
-			sysvar_p[sysvar_pi] = (char*)useron.comp;
+			sysvar_p[sysvar_pi] = (char*)useron.host;
 			break;
 		case 0xcc7aca99:
 			sysvar_p[sysvar_pi] = (char*)useron.note;
@@ -172,7 +173,7 @@ int32_t * sbbs_t::getintvar(csi_t *bin, uint32_t name)
 			sysvar_l[sysvar_li] = useron.level;
 			break;
 		case 0x9e70e855:
-			sysvar_l[sysvar_li] = useron.sex;
+			sysvar_l[sysvar_li] = useron.gender;
 			break;
 		case 0x094cc42c:
 			sysvar_l[sysvar_li] = useron.rows;
@@ -688,7 +689,7 @@ int sbbs_t::js_execfile(const char *cmd, const char* startup_dir, JSObject* scop
 	js_callback.rq_tail = NULL;
 	listeners = js_callback.listeners;
 	js_callback.listeners = NULL;
-	if (!JS_ExecuteScript(js_cx, js_scope, js_script, &rval))
+	if (!JS_ExecuteScript(js_cx, js_scope, js_script, &rval) && !js_callback.auto_terminated)
 		result = -1;
 	js_handle_events(js_cx, &js_callback, &terminated);
 //	clearabort();
@@ -768,6 +769,58 @@ int sbbs_t::js_execxtrn(const char *cmd, const char* startup_dir)
 	return result;
 }
 #endif
+
+/* Execute a loadable module */
+int sbbs_t::exec_mod(const char* name, struct loadable_module mod, bool* invoked, const char* fmt, ...)
+{
+	va_list argptr;
+	const char* cmd = nullptr;
+
+	if (invoked != NULL)
+		*invoked = false;
+
+	if (strListIndexOf(mod_callstack, name) >= 0) {
+		if (invoked == nullptr)
+			lprintf(LOG_ERR, "Attempt to recursively execute %s module", name);
+		return -1;
+	}
+
+	size_t ars_count = strListCount(mod.ars);
+	for (size_t i = 0; mod.cmd != nullptr && mod.cmd[i] != nullptr; ++i) {
+		if (mod.cmd[i][0] == '\0')
+			continue;
+		if (i >= ars_count || chk_ars(mod.ars[i], &useron, &client)) {
+			cmd = mod.cmd[i];
+			break;
+		}
+	}
+	if (cmd == nullptr) {
+		if (mod.cmd != NULL && mod.cmd[0] != NULL && mod.cmd[0][0] != '\0')
+			lprintf(LOG_DEBUG, "No user access to %s module", name);
+		return -1;
+	}
+
+	char cmdline[MAX_PATH + 512];
+	if (fmt == nullptr)
+		SAFECOPY(cmdline, cmd);
+	else {
+		char args[512];
+		va_start(argptr, fmt);
+		vsnprintf(args, sizeof args, fmt, argptr);
+		args[sizeof args - 1] = '\0';
+		va_end(argptr);
+		snprintf(cmdline, sizeof cmdline, "%s %s", cmd, args);
+	}
+	lprintf(LOG_DEBUG, "Executing %s module: %s", name, cmdline);
+	strListPushPtr(&mod_callstack, name);
+	int i = exec_bin(cmdline, &main_csi);
+	strListPop(&mod_callstack);
+	if (invoked != NULL)
+		*invoked = true;
+	if (i != 0)
+		lprintf(LOG_DEBUG, "%s module (%s) returned %d", name, cmdline, i);
+	return i;
+}
 
 /* Important change as of Nov-16-2006, 'cmdline' may contain args */
 int sbbs_t::exec_bin(const char *cmdline, csi_t *csi, const char* startup_dir)
@@ -938,6 +991,7 @@ void sbbs_t::skipto(csi_t *csi, uchar inst)
 					csi->ip++;
 					switch (*(csi->ip++)) {
 						case SHOW_VARS:
+						case EMAIL_SECTION:
 							continue;
 						case PRINT_VAR:
 						case DEFINE_STR_VAR:
@@ -1249,7 +1303,7 @@ int sbbs_t::exec(csi_t *csi)
 							break;
 						}
 						for (i = 0; i < TOTAL_TEXT && !feof(stream); i++) {
-							if ((text[i] = readtext(NULL, stream, i)) == NULL) {
+							if ((text[i] = readtext(NULL, stream, i, NULL)) == NULL) {
 								i--;
 								continue;
 							}
@@ -1322,7 +1376,7 @@ int sbbs_t::exec(csi_t *csi)
 				mnemonics((char*)csi->ip);
 				break;
 			case CS_PRINT:
-				putmsg(cmdstr((char*)csi->ip, path, csi->str, (char*)buf), P_SAVEATR | P_NOABORT);
+				putmsg(cmdstr((char*)csi->ip, path, csi->str, (char*)buf), P_SAVEATR | P_NOABORT | ((cfg.sys_misc & SM_XATTR_SUPPORT) << P_XATTR_SHIFT));
 				break;
 			case CS_PRINT_LOCAL:
 				lputs(LOG_INFO, cmdstr((char*)csi->ip, path, csi->str, (char*)buf));
@@ -1675,9 +1729,9 @@ int sbbs_t::exec(csi_t *csi)
 						csi->logic = LOGIC_TRUE;
 						break;
 					case USER_STRING_COMPUTER:
-						SAFECOPY(useron.comp, csi->str);
+						SAFECOPY(useron.host, csi->str);
 						putuserstr(useron.number, USER_HOST
-						           , useron.comp);
+						           , useron.host);
 						csi->logic = LOGIC_TRUE;
 						break;
 					case USER_STRING_NOTE:
@@ -1902,37 +1956,17 @@ int sbbs_t::exec(csi_t *csi)
 			term->restoreline();
 			return 0;
 		case CS_SELECT_SHELL:
-			csi->logic = select_shell() ? LOGIC_TRUE:LOGIC_FALSE;
+			csi->logic = select_shell(&useron) ? LOGIC_TRUE:LOGIC_FALSE;
 			return 0;
 		case CS_SET_SHELL:
-			csi->logic = LOGIC_TRUE;
-			for (i = 0; i < cfg.total_shells; i++)
-				if (!stricmp(csi->str, cfg.shell[i]->code)
-				    && chk_ar(cfg.shell[i]->ar, &useron, &client))
-					break;
-			if (i < cfg.total_shells) {
-				useron.shell = i;
-				putuserstr(useron.number, USER_SHELL, cfg.shell[i]->code);
-			}
-			else
-				csi->logic = LOGIC_FALSE;
+			csi->logic = set_shell(csi->str) ? LOGIC_TRUE:LOGIC_FALSE;
 			return 0;
 
 		case CS_SELECT_EDITOR:
-			csi->logic = select_editor() ? LOGIC_TRUE:LOGIC_FALSE;
+			csi->logic = select_editor(&useron) ? LOGIC_TRUE:LOGIC_FALSE;
 			return 0;
 		case CS_SET_EDITOR:
-			csi->logic = LOGIC_TRUE;
-			for (i = 0; i < cfg.total_xedits; i++)
-				if (!stricmp(csi->str, cfg.xedit[i]->code)
-				    && chk_ar(cfg.xedit[i]->ar, &useron, &client))
-					break;
-			if (i < cfg.total_xedits) {
-				useron.xedit = i + 1;
-				putuserstr(useron.number, USER_XEDIT, cfg.xedit[i]->code);
-			}
-			else
-				csi->logic = LOGIC_FALSE;
+			csi->logic = set_editor(csi->str) ? LOGIC_TRUE:LOGIC_FALSE;
 			return 0;
 
 		case CS_CLEAR_ABORT:
@@ -1960,7 +1994,7 @@ int sbbs_t::exec(csi_t *csi)
 				outchar(csi->cmd & 0x7f);
 			return 0;
 		case CS_PRINTSTR:
-			putmsg(csi->str, P_SAVEATR | P_NOABORT | P_NOATCODES);
+			putmsg(csi->str, P_SAVEATR | P_NOABORT | P_NOATCODES | ((cfg.sys_misc & SM_XATTR_SUPPORT) << P_XATTR_SHIFT));
 			return 0;
 		case CS_CMD_HOME:
 			if (csi->cmdrets < MAX_CMDRETS)
@@ -2031,31 +2065,72 @@ int sbbs_t::exec(csi_t *csi)
 	}
 }
 
-bool sbbs_t::select_shell(void)
+bool sbbs_t::set_shell(const char* code)
+{
+	for (int i = 0; i < cfg.total_shells; ++i) {
+		if (stricmp(cfg.shell[i]->code, code) == 0 && chk_ar(cfg.shell[i]->ar, &useron, &client)) {
+			useron.shell = i;
+			if (useron.number > 0 && !useron_is_guest())
+				putuserstr(useron.number, USER_SHELL, cfg.shell[i]->code);
+			return true;
+		}
+	}
+	return false;
+}
+
+bool sbbs_t::set_shell(int shell_index)
+{
+	return set_shell(cfg.shell[shell_index]->code);
+}
+
+bool sbbs_t::select_shell(user_t* user)
 {
 	int i;
 
 	for (i = 0; i < cfg.total_shells; i++)
-		uselect(1, i, text[CommandShellHeading], cfg.shell[i]->name, cfg.shell[i]->ar);
-	if ((i = uselect(0, useron.shell, 0, 0, 0)) >= 0) {
-		useron.shell = i;
-		putuserstr(useron.number, USER_SHELL, cfg.shell[i]->code);
+		uselect(1, i, text[CommandShellHeading], cfg.shell[i]->name, user->number == useron.number ? cfg.shell[i]->ar : nullptr);
+	if ((i = uselect(0, user->shell, 0, 0, 0)) >= 0) {
+		user->shell = i;
+		if (user->number > 0 && !user_is_guest(user))
+			putuserstr(user->number, USER_SHELL, cfg.shell[i]->code);
 		return true;
 	}
 	return false;
 }
 
-bool sbbs_t::select_editor(void)
+bool sbbs_t::set_editor(const char* code)
+{
+	if (code == nullptr || *code == '\0') {
+		useron.xedit = 0;
+		if (useron.number > 0 && !useron_is_guest())
+			putuserstr(useron.number, USER_XEDIT, "");
+		return true;
+	}
+	for (int i = 0; i < cfg.total_xedits; ++i) {
+		if (stricmp(cfg.xedit[i]->code, code) == 0 && chk_ar(cfg.xedit[i]->ar, &useron, &client)) {
+			useron.xedit = i + 1;
+			if (useron.number > 0 && !useron_is_guest())
+				putuserstr(useron.number, USER_XEDIT, cfg.xedit[i]->code);
+			return true;
+		}
+	}
+	return false;
+}
+
+// Returns false if no editors were available
+bool sbbs_t::select_editor(user_t* user)
 {
 	int i;
 
 	for (i = 0; i < cfg.total_xedits; i++)
-		uselect(1, i, text[ExternalEditorHeading], cfg.xedit[i]->name, cfg.xedit[i]->ar);
-	if ((i = uselect(0, useron.xedit ? (useron.xedit - 1):0, 0, 0, 0)) >= 0) {
-		useron.xedit = i + 1;
-		if (useron.number > 0)
-			putuserstr(useron.number, USER_XEDIT, cfg.xedit[i]->code);
+		uselect(1, i, text[ExternalEditorHeading], cfg.xedit[i]->name, user->number == useron.number ? cfg.xedit[i]->ar : nullptr);
+	if (uselect_items.size() < 1)
+		return false;
+	if ((i = uselect(0, user->xedit ? (user->xedit - 1):0, 0, 0, 0)) >= 0) {
+		user->xedit = i + 1;
+		if (user->number > 0 && !user_is_guest(user))
+			putuserstr(user->number, USER_XEDIT, cfg.xedit[i]->code);
 		return true;
 	}
-	return false;
+	return true;
 }

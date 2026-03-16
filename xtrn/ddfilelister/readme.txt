@@ -1,6 +1,6 @@
                         Digital Distortion File Lister
-                                 Version 2.30
-                           Release date: 2025-06-18
+                                 Version 2.33
+                           Release date: 2026-03-11
 
                                      by
 
@@ -104,19 +104,23 @@ lists files in the user's current directory, which is the default.
 Aside from readme.txt revision_history.txt, Digital Distortion File Lister is
 comprised of the following files:
 
-1. ddfilelister.js        The Digital Distortion File Lister script
+- ddfilelister.js            The Digital Distortion File Lister script
 
-2. ddfilelister.cfg       The file lister configuration file
+- ddfilelister.example.ini   The configuration file. To make changes to your
+                             configuration, you can copy this file to
+                             ddfilelister.ini and edit that file. You can also
+                             use ddfl_cfg.js to configure options; ddfl_cfg will
+                             save to ddfilelister.ini.
 
-3. defaultTheme.cfg       The default theme file containing colors used in the
-                          file lister
+- defaultTheme.cfg           The default theme file containing colors used in the
+                             file lister
 
-4. ddfl_cfg.js            A menu-driven configurator for Digital Distortion File
-                          lister - This can be run at the command prompt using
-                          jsexec. For example:
-                          jsexec ddfl_cfg.js
-                          The .js can also be omitted from the filename when
-                          running it this way.
+- ddfl_cfg.js                A menu-driven configurator for Digital Distortion
+                             File lister - This can be run at the command prompt
+                             using jsexec. For example:
+                             jsexec ddfl_cfg.js
+                             The .js can also be omitted from the filename when
+                             running it this way.
 						  
 
 The configuration files are plain text files, so they can be edited using any
@@ -294,17 +298,39 @@ filenameInExtendedDescription         For extended descriptions: How to use the
 									  never: Never use the filename in the description
 
 displayNumFilesInHeader               Whether or not to display the number of
-                                      files in the directory in the header at
-                                      the top of the list
+                                      files in the directory in the default
+                                      header at the top of the list. Note that
+                                      this only affects the default header and
+                                      won't be used if you're using a custom
+                                      header .ans/.asc file.
 
 themeFilename                         The name of the configuration file to
                                       use for colors & string settings
 
 Theme configuration file
 ------------------------
-The convention for the setting names in the theme configuration file is that
-setting names ending in 'Text' are for whole text strings, and the setting
-names that don't end in 'Text' are for colors.
+The theme configuration file has a couple options for an optional custom header
+file that can be displayed above the file list. A custom header file for this
+purpose can be an .ans, .msg, .asc,  or .rip file. If the user's terminal
+supports RIP & the .rip file exists, the .rip file will be used; otherwise, if
+the user's terminal supports ANSI and the .ans file exists, the .ans file will
+be used; otherwise, an .asc or .msg file will be used if they exist. An .asc or
+.msg file can contain Synchronet attribute codes, so an .asc or .msg file could
+be used for both ANSI and non-ANSI terminals.
+
+The two settings related to the custom header file are are as follows:
+
+Setting                              Description
+-------                              -----------
+headerFilenameBase                   Base filename (without extension) of a
+                                     header file to display above the file list
+
+headerMaxLines                       The maximum number of lines from the
+                                     custom header file to display
+
+For colors, the convention for the setting names in the theme configuration
+file is that setting names ending in 'Text' are for whole text strings, and the
+setting names that don't end in 'Text' are for colors.
 
 Setting                              Element in the file lister
 -------                              --------------------------

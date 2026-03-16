@@ -328,7 +328,7 @@ LRESULT CALLBACK ODScrnWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam,
 
    ASSERT(hwnd != NULL);
 
-   hInstance = (HINSTANCE)GetWindowLong(hwnd, GWL_USERDATA);
+   hInstance = (HINSTANCE)GetWindowLongPtr(hwnd, GWLP_USERDATA);
 
    switch(uMsg)
    {
@@ -353,7 +353,7 @@ LRESULT CALLBACK ODScrnWindowProc(HWND hwnd, UINT uMsg, WPARAM wParam,
       {
          CREATESTRUCT *pCreateStruct = (CREATESTRUCT *)lParam;
          hInstance = (HINSTANCE)pCreateStruct->lpCreateParams;
-         SetWindowLong(hwnd, GWL_USERDATA, (LONG)hInstance);
+         SetWindowLongPtr(hwnd, GWLP_USERDATA, (LONG_PTR)hInstance);
          break;
       }
 
@@ -2212,7 +2212,7 @@ void ODScrnClearToEndOfLine(void)
  *
  *     Return: void
  */
-#ifdef OD_TEXTMODE
+#if defined(OD_TEXTMODE) || defined (OD_HEADLESS)
 void *ODScrnCreateWindow(BYTE btLeft, BYTE btTop, BYTE btRight,
    BYTE btBottom, BYTE btAttribute, char *pszTitle, BYTE btTitleAttribute)
 {
@@ -2309,7 +2309,7 @@ void *ODScrnCreateWindow(BYTE btLeft, BYTE btTop, BYTE btRight,
  *
  *     Return: void
  */
-#ifdef OD_TEXTMODE
+#if defined(OD_TEXTMODE) || defined(OD_HEADLESS)
 void ODScrnDestroyWindow(void *pWindow)
 {
    BYTE btLeft;

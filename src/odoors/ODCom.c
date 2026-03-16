@@ -61,6 +61,7 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
+#include <limits.h>
 
 #include "OpenDoor.h"
 #ifdef ODPLAT_NIX
@@ -72,6 +73,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#endif
+#ifndef ODPLAT_WIN32
+#include <poll.h>
 #endif
 #include "ODCore.h"
 #include "ODGen.h"
@@ -132,7 +136,7 @@
 
 /* terminal variables */
 #ifdef INCLUDE_STDIO_COM
-struct termios tio_default;				/* Initial term settings */
+struct termios sio_tio_default;				/* Initial term settings */
 #endif
 
 
@@ -188,6 +192,9 @@ typedef struct
 #ifdef INCLUDE_SOCKET_COM
 	SOCKET	socket;
 	int	old_delay;
+#ifdef OD_MULTITHREADED
+   tODSemaphoreHandle hCarrierLostSemaphore;
+#endif
 #endif
 } tPortInfo;
 
@@ -1222,11 +1229,8 @@ tODResult ODComOpen(tPortHandle hPort)
 	struct termios tio_raw;
 #endif
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
-
-   nPort = (int)pPortInfo->btPort;
 
    /* Ensure that port is not already open. */
    VERIFY_CALL(!pPortInfo->bIsOpen);
@@ -1239,6 +1243,10 @@ tODResult ODComOpen(tPortHandle hPort)
    if(pPortInfo->Method == kComMethodFOSSIL ||
       pPortInfo->Method == kComMethodUnspecified)
    {
+      int nPort;
+
+      nPort = (int)pPortInfo->btPort;
+      
       /* Attempt to open port with FOSSIL DRIVER. */
       ASM    push si
       ASM    push di
@@ -1785,8 +1793,8 @@ no_fossil:
       pPortInfo->Method == kComMethodUnspecified)
    {
 		if (isatty(STDIN_FILENO))  {
-			tcgetattr(STDIN_FILENO,&tio_default);
-			tio_raw = tio_default;
+			tcgetattr(STDIN_FILENO,&sio_tio_default);
+			tio_raw = sio_tio_default;
 			cfmakeraw(&tio_raw);
 			tcsetattr(STDIN_FILENO,TCSANOW,&tio_raw);
 			setvbuf(stdout, NULL, _IONBF, 0);
@@ -1824,7 +1832,7 @@ no_fossil:
  *     Return: kODRCSuccess on success, or an error code on failure.
  */
 tODResult ODComOpenFromExistingHandle(tPortHandle hPort,
-   DWORD dwExistingHandle)
+   DWORD_PTR dwExistingHandle)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
 
@@ -1833,19 +1841,26 @@ tODResult ODComOpenFromExistingHandle(tPortHandle hPort,
    VERIFY_CALL(!pPortInfo->bIsOpen);
 
 #ifdef INCLUDE_SOCKET_COM
-	if(pPortInfo->Method == kComMethodSocket) {
-		socklen_t delay=FALSE;
+   if(pPortInfo->Method == kComMethodSocket) {
+      socklen_t delay=FALSE;
+#ifdef OD_MULTITHREADED
+      tODResult res = kODRCSuccess;
 
-		pPortInfo->socket = dwExistingHandle;
+      res = ODSemaphoreAlloc(&pPortInfo->hCarrierLostSemaphore, 0, 1);
+      if (res != kODRCSuccess)
+         return res;
+#endif
+      pPortInfo->socket = dwExistingHandle;
 
-		getsockopt(pPortInfo->socket, IPPROTO_TCP, TCP_NODELAY, &(pPortInfo->old_delay), &delay);
-		delay=FALSE;
-		setsockopt(pPortInfo->socket, IPPROTO_TCP, TCP_NODELAY, &delay, sizeof(delay));
+      delay = sizeof(pPortInfo->old_delay);
+      getsockopt(pPortInfo->socket, IPPROTO_TCP, TCP_NODELAY, (void*)&(pPortInfo->old_delay), &delay);
+      delay=FALSE;
+      setsockopt(pPortInfo->socket, IPPROTO_TCP, TCP_NODELAY, (void*)&delay, sizeof(delay));
 
-        pPortInfo->bIsOpen = TRUE;
+      pPortInfo->bIsOpen = TRUE;
 
-		return(kODRCSuccess);
-	}
+      return(kODRCSuccess);
+   }
 #endif /* INCLUDE_SOCKET_COM */
 
 #ifdef INCLUDE_WIN32_COM
@@ -1893,7 +1908,6 @@ tODResult ODComClose(tPortHandle hPort)
    BYTE btTemp;
 #endif /* INCLUDE_UART_COM */
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
 
@@ -1906,16 +1920,20 @@ tODResult ODComClose(tPortHandle hPort)
       return(kODRCSuccess);
    }
 
-   nPort = (int)pPortInfo->btPort;
-
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
+      {
+         int nPort;
+
+         nPort = (int)pPortInfo->btPort;
+         
          ASM    mov ah, 5
          ASM    mov dx, nPort
          ASM    int 20
          break;
+      }
 #endif /* INCLUDE_FOSSIL_COM */
 
 #ifdef INCLUDE_UART_COM
@@ -1973,7 +1991,7 @@ tODResult ODComClose(tPortHandle hPort)
 
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
-		 setsockopt(pPortInfo->socket, IPPROTO_TCP, TCP_NODELAY, &(pPortInfo->old_delay), sizeof(pPortInfo->old_delay));
+		 setsockopt(pPortInfo->socket, IPPROTO_TCP, TCP_NODELAY, (void*)&(pPortInfo->old_delay), sizeof(pPortInfo->old_delay));
          closesocket(pPortInfo->socket);
          break;
 #endif /* INCLUDE_SOCKET_COM */
@@ -1981,7 +1999,7 @@ tODResult ODComClose(tPortHandle hPort)
 #ifdef INCLUDE_STDIO_COM
 	  case kComMethodStdIO:
 	     if(isatty(STDIN_FILENO))
-		    tcsetattr(STDIN_FILENO,TCSANOW,&tio_default);
+		    tcsetattr(STDIN_FILENO,TCSANOW,&sio_tio_default);
 	     break;
 #endif
 
@@ -2017,14 +2035,11 @@ tODResult ODComCarrier(tPortHandle hPort, BOOL *pbIsCarrier)
    sigset_t	  sigs;
 #endif
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
    VERIFY_CALL(pbIsCarrier != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
-
-   nPort = pPortInfo->btPort;
 
    switch(pPortInfo->Method)
    {
@@ -2032,6 +2047,9 @@ tODResult ODComCarrier(tPortHandle hPort, BOOL *pbIsCarrier)
       case kComMethodFOSSIL:
       {
          int to_return;
+         int nPort;
+
+         nPort = pPortInfo->btPort;
 
          ASM    mov ah, 3
          ASM    mov dx, nPort
@@ -2088,6 +2106,7 @@ tODResult ODComCarrier(tPortHandle hPort, BOOL *pbIsCarrier)
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
 		{
+#ifdef ODPLAT_WIN32
 			int		i;
 			char		ch;
 			fd_set	socket_set;
@@ -2104,6 +2123,23 @@ tODResult ODComCarrier(tPortHandle hPort, BOOL *pbIsCarrier)
 				*pbIsCarrier = TRUE;
 			else
 				*pbIsCarrier = FALSE;
+#else
+			int i;
+			char		ch;
+
+			struct pollfd pfd = {0};
+			pfd.fd = pPortInfo->socket;
+			pfd.events = POLLIN | POLLHUP;
+			i = poll(&pfd, 1, 0);
+			if (i == 0)
+				*pbIsCarrier = TRUE;
+			else if (i == -1 || !(pfd.revents & POLLIN))
+				*pbIsCarrier = FALSE;
+			else if (recv(pPortInfo->socket,&ch,1,MSG_PEEK)==1)
+				*pbIsCarrier = TRUE;
+			else
+				*pbIsCarrier = FALSE;
+#endif
 			break;
 		}
 #endif
@@ -2144,18 +2180,20 @@ tODResult ODComCarrier(tPortHandle hPort, BOOL *pbIsCarrier)
 tODResult ODComSetDTR(tPortHandle hPort, BOOL bHigh)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
 
-   nPort = pPortInfo->btPort;
-
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
+      {
+         int nPort;
+
+         nPort = pPortInfo->btPort;
+         
          ASM    cmp byte ptr bHigh, 0
          ASM    je lower
          ASM    mov al, 1
@@ -2168,6 +2206,7 @@ set_dtr:
          ASM    mov ah, 6
          ASM    mov dx, nPort
          ASM    int 20
+      }
 #endif /* INCLUDE_FOSSIL_COM */
 
 #ifdef INCLUDE_UART_COM
@@ -2255,19 +2294,21 @@ set_dtr:
 tODResult ODComOutbound(tPortHandle hPort, int *pnOutboundWaiting)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
    VERIFY_CALL(pnOutboundWaiting != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
 
-   nPort = pPortInfo->btPort;
-
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
+      {
+         int nPort;
+
+         nPort = pPortInfo->btPort;
+
          ASM    mov ah, 0x03
          ASM    mov dx, nPort
          ASM    int 20
@@ -2279,6 +2320,7 @@ tODResult ODComOutbound(tPortHandle hPort, int *pnOutboundWaiting)
 still_sending:
          *pnOutboundWaiting = SIZE_NON_ZERO;
          break;
+      }
 #endif /* INCLUDE_FOSSIL_COM */
 
 #ifdef INCLUDE_UART_COM
@@ -2348,21 +2390,24 @@ still_sending:
 tODResult ODComClearOutbound(tPortHandle hPort)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
 
-   nPort = pPortInfo->btPort;
-
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
+      {
+         int nPort;
+
+         nPort = pPortInfo->btPort;
+
          ASM    mov ah, 9
          ASM    mov dx, nPort
          ASM    int 20
+      }
 #endif /* INCLUDE_FOSSIL_COM */
 
 #ifdef INCLUDE_UART_COM
@@ -2418,21 +2463,24 @@ tODResult ODComClearOutbound(tPortHandle hPort)
 tODResult ODComClearInbound(tPortHandle hPort)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
 
-   nPort = pPortInfo->btPort;
-
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
+      {
+         int nPort;
+
+         nPort = pPortInfo->btPort;
+
          ASM    mov ah, 10
          ASM    mov dx, nPort
          ASM    int 20
+      }
 #endif /* INCLUDE_FOSSIL_COM */
 
 #ifdef INCLUDE_UART_COM
@@ -2495,14 +2543,11 @@ tODResult ODComClearInbound(tPortHandle hPort)
 tODResult ODComInbound(tPortHandle hPort, int *pnInboundWaiting)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
    VERIFY_CALL(pnInboundWaiting != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
-
-   nPort = pPortInfo->btPort;
 
    switch(pPortInfo->Method)
    {
@@ -2510,6 +2555,9 @@ tODResult ODComInbound(tPortHandle hPort, int *pnInboundWaiting)
       case kComMethodFOSSIL:
       {
          BOOL bDataInBuffer = FALSE;
+         int nPort;
+
+         nPort = pPortInfo->btPort;
 
          ASM    mov ah, 3
          ASM    mov dx, nPort
@@ -2571,8 +2619,16 @@ tODResult ODComInbound(tPortHandle hPort, int *pnInboundWaiting)
 
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
+#ifdef ODPLAT_WIN32
+			u_long piw = *pnInboundWaiting;
+			if(ioctlsocket(pPortInfo->socket,FIONREAD,&piw) != 0)
+				*pnInboundWaiting = 0;
+			else
+				*pnInboundWaiting = piw;
+#else
 			if(ioctlsocket(pPortInfo->socket,FIONREAD,pnInboundWaiting) != 0)
 				*pnInboundWaiting = 0;
+#endif
 			break;
 #endif /* INCLUDE_SOCKET_COM */
 
@@ -2611,17 +2667,15 @@ tODResult ODComInbound(tPortHandle hPort, int *pnInboundWaiting)
  *
  *     Return: kODRCSuccess on success, or an error code on failure.
  */
+extern tODMilliSec ODMaxMSToWait;
 tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
    VERIFY_CALL(pbtNext != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
-
-   nPort = pPortInfo->btPort;
 
    switch(pPortInfo->Method)
    {
@@ -2630,6 +2684,9 @@ tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
       {
          BYTE btToReturn;
          int nInboundSize;
+         int nPort;
+
+         nPort = pPortInfo->btPort;
 
          /* If we should not wait for characters if inbound queue is empty. */
          if(!bWait)
@@ -2753,7 +2810,7 @@ tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
          if(WaitForSingleObject((*pPortInfo->pfDoorGetAvailableEventHandle)(),
             bWait ? INFINITE : 0) == WAIT_OBJECT_0)
          {
-            (*pPortInfo->pfDoorRead)(pbtNext, 1);
+            (*pPortInfo->pfDoorRead)((unsigned char *)pbtNext, 1);
             break;
          }
 
@@ -2764,37 +2821,66 @@ tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
 
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
-		{
-			fd_set	socket_set;
-			struct	timeval tv;
-			int		select_ret, recv_ret;
+      {
+         int recv_ret;
+#ifdef ODPLAT_WIN32
+         fd_set   socket_set;
+         struct   timeval tv;
+         int      select_ret;
 
-			FD_ZERO(&socket_set);
-			FD_SET(pPortInfo->socket,&socket_set);
+         FD_ZERO(&socket_set);
+         FD_SET(pPortInfo->socket,&socket_set);
 
-			tv.tv_sec=0;
-			tv.tv_usec=100;
+         tv.tv_sec=0;
+         tv.tv_usec=100;
 
-			select_ret = select(pPortInfo->socket+1, &socket_set, NULL, NULL, bWait ? NULL : &tv);
-			if (select_ret == SOCKET_ERROR)
-				return (kODRCGeneralFailure);
-			if (select_ret == 0)
-				return (kODRCNothingWaiting);
+         select_ret = select(pPortInfo->socket+1, &socket_set, NULL, NULL, bWait ? NULL : &tv);
+         if (select_ret == SOCKET_ERROR) {
+#ifdef OD_MULTITHREADED
+            ODSemaphoreUp(pPortInfo->hCarrierLostSemaphore, 1);
+#endif
+            return (kODRCGeneralFailure);
+         }
+         if (select_ret == 0)
+            return (kODRCNothingWaiting);
+#else
+         int i;
+         tODMilliSec wait = ODMaxMSToWait;
+         if (wait == OD_NO_TIMEOUT || wait > 200)
+            wait = 200;
+         struct pollfd pfd = {0};
+         pfd.fd = pPortInfo->socket;
+         pfd.events = POLLIN | POLLHUP;
+         i = poll(&pfd, 1, bWait ? -1 : wait);
+         if (i == 0)
+            return (kODRCNothingWaiting);
+         else if (i == -1 || !(pfd.revents & POLLIN)) {
+#ifdef OD_MULTITHREADED
+            if (i == -1 || pfd.revents & (POLLERR | POLLHUP | POLLRDHUP | POLLINVAL))
+               ODSemaphoreUp(pPortInfo->hCarrierLostSemaphore, 1);
+#endif
+            return (kODRCGeneralFailure);
+         }
+#endif
 
-			do {
-				recv_ret = recv(pPortInfo->socket, pbtNext, 1, 0);
-				if(recv_ret != SOCKET_ERROR)
-					break;
-				if(WSAGetLastError() != WSAEWOULDBLOCK)
-					return (kODRCGeneralFailure);
-				od_sleep(50);
-			} while (bWait);
+         do {
+            recv_ret = recv(pPortInfo->socket, pbtNext, 1, 0);
+            if(recv_ret != SOCKET_ERROR)
+               break;
+            if (WSAGetLastError() != WSAEWOULDBLOCK) {
+#ifdef OD_MULTITHREADED
+               ODSemaphoreUp(pPortInfo->hCarrierLostSemaphore, 1);
+#endif
+               return (kODRCGeneralFailure);
+            }
+            od_sleep(50);
+         } while (bWait);
 
-			if (recv_ret == 0)
-				 return (kODRCNothingWaiting);
+         if (recv_ret == 0)
+             return (kODRCNothingWaiting);
 
-			break;
-		}
+         break;
+      }
 #endif /* INCLUDE_SOCKET_COM */
 
 #ifdef INCLUDE_STDIO_COM
@@ -2809,8 +2895,11 @@ tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
 				FD_ZERO(&socket_set);
 				FD_SET(STDIN_FILENO,&socket_set);
 
+				tODMilliSec wait = ODMaxMSToWait;
+				if (wait == OD_NO_TIMEOUT || wait > 200)
+					wait = 200;
 				tv.tv_sec=0;
-				tv.tv_usec=100;
+				tv.tv_usec=wait * 1000;
 
 				select_ret = select(STDIN_FILENO+1, &socket_set, NULL, NULL, bWait ? NULL : &tv);
 				if (select_ret == -1) {
@@ -2840,6 +2929,86 @@ tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
    return(0);
 }
 
+const static DWORD cp437_unicode_table[128] = {
+	0x00C7, 0x00FC, 0x00E9, 0x00E2, 0x00E4, 0x00E0, 0x00E5, 0x00E7,
+	0x00EA, 0x00EB, 0x00E8, 0x00EF, 0x00EE, 0x00EC, 0x00C4, 0x00C5,
+	0x00C9, 0x00E6, 0x00C6, 0x00F4, 0x00F6, 0x00F2, 0x00FB, 0x00F9,
+	0x00FF, 0x00D6, 0x00DC, 0x00A2, 0x00A3, 0x00A5, 0x20A7, 0x0192,
+	0x00E1, 0x00ED, 0x00F3, 0x00FA, 0x00F1, 0x00D1, 0x00AA, 0x00BA,
+	0x00BF, 0x2310, 0x00AC, 0x00BD, 0x00BC, 0x00A1, 0x00AB, 0x00BB,
+	0x2591, 0x2592, 0x2593, 0x2502, 0x2524, 0x2561, 0x2562, 0x2556,
+	0x2555, 0x2563, 0x2551, 0x2557, 0x255D, 0x255C, 0x255B, 0x2510,
+	0x2514, 0x2534, 0x252C, 0x251C, 0x2500, 0x253C, 0x255E, 0x255F,
+	0x255A, 0x2554, 0x2569, 0x2566, 0x2560, 0x2550, 0x256C, 0x2567,
+	0x2568, 0x2564, 0x2565, 0x2559, 0x2558, 0x2552, 0x2553, 0x256B,
+	0x256A, 0x2518, 0x250C, 0x2588, 0x2584, 0x258C, 0x2590, 0x2580,
+	0x03B1, 0x00DF, 0x0393, 0x03C0, 0x03A3, 0x03C3, 0x00B5, 0x03C4,
+	0x03A6, 0x0398, 0x03A9, 0x03B4, 0x221E, 0x03C6, 0x03B5, 0x2229,
+	0x2261, 0x00B1, 0x2265, 0x2264, 0x2320, 0x2321, 0x00F7, 0x2248,
+	0x00B0, 0x2219, 0x00B7, 0x221A, 0x207F, 0x00B2, 0x25A0, 0x00A0
+};
+
+size_t ODComCP437ToUnicodeLen(void *buf, int sz)
+{
+   BYTE *bb = buf;
+   size_t pos;
+   size_t ret = 0;
+
+   for (pos = 0; pos < sz; pos++) {
+      if (bb[pos] < 128)
+         ret++;
+      else {
+         DWORD val = cp437_unicode_table[bb[pos] - 128];
+         if (val < 0x800)
+            ret += 2;
+         else if (val < 0x10000)
+            ret += 3;
+         else
+            ret += 4;
+      }
+   }
+   return ret;
+}
+
+BYTE *ODComCP437ToUnicode(BYTE *buf, int *sz)
+{
+   size_t need = ODComCP437ToUnicodeLen(buf, *sz);
+   if (need > INT_MAX) {
+      od_control.od_error = ERR_LIMIT;
+      return NULL;
+   }
+   BYTE *ret = malloc(need);
+   size_t outpos = 0;
+
+   if (ret == NULL) {
+      od_control.od_error = ERR_MEMORY;
+      return NULL;
+   }
+   for (size_t pos = 0; pos < *sz; pos++) {
+      DWORD ch = buf[pos];
+      if (ch >= 128)
+         ch = cp437_unicode_table[ch - 128];
+      if (ch < 128)
+         ret[outpos++] = buf[pos];
+      else if (ch < 0x800) {
+         ret[outpos++] = (ch >> 6 & 0x1f) | 0xc0;
+         ret[outpos++] = (ch & 0x3f) | 0x80;
+      }
+      else if (ch < 0x10000) {
+         ret[outpos++] = (ch >> 12 & 0x0f) | 0xe0;
+         ret[outpos++] = (ch >> 6 & 0x3f) | 0x80;
+         ret[outpos++] = (ch & 0x3f) | 0x80;
+      }
+      else {
+         ret[outpos++] = (ch >> 18 & 0x07) | 0xf0;
+         ret[outpos++] = (ch >> 12 & 0x3f) | 0x80;
+         ret[outpos++] = (ch >> 6 & 0x3f) | 0x80;
+         ret[outpos++] = (ch & 0x3f) | 0x80;
+      }
+   }
+   *sz = need;
+   return ret;
+}
 
 /* ----------------------------------------------------------------------------
  * ODComSendByte()
@@ -2855,18 +3024,31 @@ tODResult ODComGetByte(tPortHandle hPort, char *pbtNext, BOOL bWait)
 tODResult ODComSendByte(tPortHandle hPort, BYTE btToSend)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
 
-   nPort = pPortInfo->btPort;
+   if (od_control.od_cp437_to_utf8_out) {
+      int len = 1;
+      BYTE *uc = ODComCP437ToUnicode(&btToSend, &len);
+      if (uc == NULL)
+         return kODRCGeneralFailure;
+      else {
+         tODResult res = ODComSendBuffer(hPort, uc, len);
+         free(uc);
+         return res;
+      }
+   }
 
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
+      {
+         int nPort;
+         nPort = pPortInfo->btPort;
+
 try_again:
          ASM    mov ah, 0x0b
          ASM    mov dx, nPort
@@ -2884,6 +3066,7 @@ try_again:
          goto try_again;
 keep_going:
          break;
+      }
 #endif /* INCLUDE_FOSSIL_COM */
 
 #ifdef INCLUDE_UART_COM
@@ -2955,9 +3138,10 @@ keep_going:
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
 		{
+			int		send_ret;
+#ifdef ODPLAT_WIN32
 			fd_set	socket_set;
 			struct	timeval tv;
-			int		send_ret;
 
 			FD_ZERO(&socket_set);
 			FD_SET(pPortInfo->socket,&socket_set);
@@ -2966,10 +3150,21 @@ keep_going:
 			tv.tv_usec=0;
 
 			if(select(pPortInfo->socket+1,NULL,&socket_set,NULL,&tv) != 1)
-	         return(kODRCGeneralFailure);
+				return(kODRCGeneralFailure);
+#else
+			int i;
+			struct pollfd pfd = {0};
+			pfd.fd = pPortInfo->socket;
+			pfd.events = POLLOUT | POLLHUP;
+			i = poll(&pfd, 1, 1000);
+			if (i == 0)
+				return (kODRCGeneralFailure);
+			else if (i == -1 || !(pfd.revents & POLLOUT))
+				return (kODRCGeneralFailure);
+#endif
 
 			do {
-				send_ret = send(pPortInfo->socket, &btToSend, 1, 0);
+				send_ret = send(pPortInfo->socket, (char*)&btToSend, 1, 0);
 				if (send_ret != 1)
 					od_sleep(50);
 			} while ((send_ret == SOCKET_ERROR) && (WSAGetLastError() == WSAEWOULDBLOCK));
@@ -3048,7 +3243,6 @@ tODResult ODComGetBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize,
    int *pnBytesRead)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
 
    VERIFY_CALL(pPortInfo != NULL);
    VERIFY_CALL(pbtBuffer != NULL);
@@ -3057,14 +3251,15 @@ tODResult ODComGetBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize,
 
    VERIFY_CALL(pPortInfo->bIsOpen);
 
-   nPort = pPortInfo->btPort;
-
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
       {
          int nReceived;
+         int nPort;
+
+         nPort = pPortInfo->btPort;
 
          ASM    push di
          ASM    mov cx, nSize
@@ -3194,6 +3389,7 @@ tODResult ODComGetBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize,
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
 		{
+#ifdef ODPLAT_WIN32
 			fd_set	socket_set;
 			struct	timeval tv;
 
@@ -3205,10 +3401,21 @@ tODResult ODComGetBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize,
 
 			if(select(pPortInfo->socket+1,&socket_set,NULL,NULL,&tv) != 1) {
 				*pnBytesRead = 0;
-	         break;
+				break;
 			}
+#else
+			int i;
+			struct pollfd pfd = {0};
+			pfd.fd = pPortInfo->socket;
+			pfd.events = POLLIN | POLLHUP;
+			i = poll(&pfd, 1, 1);
+			if (i != 1 || !(pfd.revents & POLLIN)) {
+				*pnBytesRead = 0;
+				break;
+			}
+#endif
 
-			*pnBytesRead = recv(pPortInfo->socket,pbtBuffer,nSize,0);
+			*pnBytesRead = recv(pPortInfo->socket,(char*)pbtBuffer,nSize,0);
 			break;
 		}
 #endif /* INCLUDE_SOCKET_COM */
@@ -3217,8 +3424,8 @@ tODResult ODComGetBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize,
       case kComMethodStdIO:
 	    {
 		    for(*pnBytesRead=0;
-				*pnBytesRead<nSize && (ODComGetByte(hPort, (pbtBuffer+*pnBytesRead), FALSE)==kODRCSuccess);
-				*pnBytesRead++);
+				*pnBytesRead<nSize && (ODComGetByte(hPort, (char*)(pbtBuffer+*pnBytesRead), FALSE)==kODRCSuccess);
+				(*pnBytesRead)++);
 		}
 #endif
 
@@ -3250,15 +3457,13 @@ tODResult ODComGetBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize,
 tODResult ODComSendBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize)
 {
    tPortInfo *pPortInfo = ODHANDLE2PTR(hPort, tPortInfo);
-   int nPort;
+   BYTE *buf = pbtBuffer;
 
    VERIFY_CALL(pPortInfo != NULL);
    VERIFY_CALL(pbtBuffer != NULL);
    VERIFY_CALL(nSize >= 0);
 
    VERIFY_CALL(pPortInfo->bIsOpen);
-
-   nPort = pPortInfo->btPort;
 
    /* If there are no characters to transmit, then there is no need to */
    /* proceed further.                                                 */
@@ -3267,12 +3472,21 @@ tODResult ODComSendBuffer(tPortHandle hPort, BYTE *pbtBuffer, int nSize)
       return(kODRCSuccess);
    }
 
+   if (od_control.od_cp437_to_utf8_out) {
+      buf = ODComCP437ToUnicode(pbtBuffer, &nSize);
+      if (buf == NULL)
+         return kODRCGeneralFailure;
+   }
+
    switch(pPortInfo->Method)
    {
 #ifdef INCLUDE_FOSSIL_COM
       case kComMethodFOSSIL:
       {
          int nCount;
+         int nPort;
+
+         nPort = pPortInfo->btPort;
 
 try_again:
          ASM    push di
@@ -3281,11 +3495,11 @@ try_again:
 
 
 #ifdef LARGEDATA
-         ASM    les di, pbtBuffer
+         ASM    les di, buf
 #else
          ASM    mov ax, ds
          ASM    mov es, ax
-         ASM    mov di, pbtBuffer
+         ASM    mov di, buf
 #endif
 
          ASM    mov ah, 0x19
@@ -3302,7 +3516,7 @@ try_again:
             }
 
             nSize-=nCount;
-            pbtBuffer+=nCount;
+            buf+=nCount;
             goto try_again;
          }
          break;
@@ -3351,7 +3565,7 @@ try_again:
             pbtDest = pbtTXQueue + nTXInIndex;
             while(nFirstHalfSize--)
             {
-               *pbtDest++ = *pbtBuffer++;
+               *pbtDest++ = *buf++;
             }
 
             /* If there is a second half to transfer. */
@@ -3366,7 +3580,7 @@ try_again:
                /* Perform second half of transfer. */
                while(nSecondHalfSize--)
                {
-                  *pbtDest++ = *pbtBuffer++;
+                  *pbtDest++ = *buf++;
                }
             }
 
@@ -3421,10 +3635,11 @@ try_again:
          DWORD dwBytesWritten;
 
          /* Attempt to perform write operation. */
-         if(!WriteFile(pPortInfo->hCommDev, pbtBuffer, nSize, &dwBytesWritten,
+         if(!WriteFile(pPortInfo->hCommDev, buf, nSize, &dwBytesWritten,
             NULL) || dwBytesWritten != (DWORD)nSize)
          {
             ClearCommError(pPortInfo->hCommDev, &dwErrors, NULL);
+            if (od_control.od_cp437_to_utf8_out) free(buf);
             return(kODRCGeneralFailure);
          }
          break;
@@ -3434,20 +3649,23 @@ try_again:
 #ifdef INCLUDE_DOOR32_COM
       case kComMethodDoor32:
          ASSERT(pPortInfo->pfDoorWrite != NULL);
-         if(!(*pPortInfo->pfDoorWrite)(pbtBuffer, nSize))
+         if(!(*pPortInfo->pfDoorWrite)(buf, nSize))
          {
+            if (od_control.od_cp437_to_utf8_out) free(buf);
             return(kODRCGeneralFailure);
          }
          break;
+         if (od_control.od_cp437_to_utf8_out) free(buf);
          return(kODRCUnsupported);
 #endif /* INCLUDE_DOOR32_COM */
 
 #ifdef INCLUDE_SOCKET_COM
       case kComMethodSocket:
 		{
+			int     send_ret;
+#ifdef ODPLAT_WIN32
 			fd_set	socket_set;
 			struct	timeval tv;
-			int     send_ret;
 
 			FD_ZERO(&socket_set);
 			FD_SET(pPortInfo->socket,&socket_set);
@@ -3455,18 +3673,33 @@ try_again:
 			tv.tv_sec=1;
 			tv.tv_usec=0;
 
-			if(select(pPortInfo->socket+1,NULL,&socket_set,NULL,&tv) != 1)
-	         return(kODRCGeneralFailure);
+			if(select(pPortInfo->socket+1,NULL,&socket_set,NULL,&tv) != 1) {
+            if (od_control.od_cp437_to_utf8_out) free(buf);
+				return(kODRCGeneralFailure);
+         }
+#else
+			int i;
+			struct pollfd pfd = {0};
+			pfd.fd = pPortInfo->socket;
+			pfd.events = POLLOUT | POLLHUP;
+			i = poll(&pfd, 1, 1000);
+			if (i != 1 || !(pfd.revents & POLLOUT)) {
+            if (od_control.od_cp437_to_utf8_out) free(buf);
+				return (kODRCGeneralFailure);
+         }
+#endif
 
 			do {
-				send_ret = send(pPortInfo->socket, pbtBuffer, nSize, 0);
+				send_ret = send(pPortInfo->socket, (char*)buf, nSize, 0);
 				if (send_ret != SOCKET_ERROR)
 					break;
 				od_sleep(25);
 			} while (WSAGetLastError() == WSAEWOULDBLOCK);
 
-			if (send_ret != nSize)
+			if (send_ret != nSize) {
+            if (od_control.od_cp437_to_utf8_out) free(buf);
 				return (kODRCGeneralFailure);
+         }
       break;
 		}
 #endif /* INCLUDE_SOCKET_COM */
@@ -3490,16 +3723,19 @@ try_again:
 				retval=select(STDOUT_FILENO+1,NULL,&fdset,NULL,&tv);
 				if(retval!=1) {
 					if(retval==0) {
-						if(++loopcount>10)
+						if(++loopcount>10) {
+                     if (od_control.od_cp437_to_utf8_out) free(buf);
 							return(kODRCGeneralFailure);
+                  }
 						continue;
 					}
 					if(retval==-1 && errno==EINTR)
 						continue;
+               if (od_control.od_cp437_to_utf8_out) free(buf);
 					return(kODRCGeneralFailure);
 				}
 
-				retval=fwrite(pbtBuffer+pos,1,nSize-pos,stdout);
+				retval=fwrite(buf+pos,1,nSize-pos,stdout);
 				if(retval!=nSize-pos) {
 					od_sleep(1);
 				}
@@ -3517,6 +3753,7 @@ try_again:
    }
 
    /* Return with success. */
+   if (od_control.od_cp437_to_utf8_out) free(buf);
    return(kODRCSuccess);
 }
 
@@ -3650,25 +3887,22 @@ tODResult ODComWaitEvent(tPortHandle hPort, tComEvent Event)
 		{
 			if(Event == kNoCarrier)
 			{
-  			/* Wait for socket disconnect */
-				fd_set	socket_set;
-				char		ch;
-				int recv_ret;
-
-				while(1) 
-				{
-
-					FD_ZERO(&socket_set);
-					FD_SET(pPortInfo->socket,&socket_set);
-					if(select(pPortInfo->socket+1,&socket_set,NULL,NULL,NULL)
-						==SOCKET_ERROR)
-						break;
-					recv_ret = recv(pPortInfo->socket, &ch, 1, MSG_PEEK);
-					if(recv_ret == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
-						continue;
-					if (recv_ret != 1)
-						break;
-				}
+#ifdef OD_MULTITHREADED
+            while (ODSemaphoreDown(pPortInfo->hCarrierLostSemaphore, OD_NO_TIMEOUT) != kODRCSuccess)
+               ;
+            // Re-post the semaphore in case someone else waits...
+            ODSemaphoreUp(pPortInfo->hCarrierLostSemaphore, 1);
+#else
+            while(1) 
+            {
+               char ch;
+               int recv_ret = recv(pPortInfo->socket, &ch, 1, MSG_PEEK);
+               if(recv_ret == SOCKET_ERROR && WSAGetLastError() == WSAEWOULDBLOCK)
+                  continue;
+               if (recv_ret != 1)
+                  break;
+            }
+#endif
 			}
 			else
 			{

@@ -1,0 +1,213 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdnoreturn.h>
+#include <string.h>
+#include "platform.h"
+
+#include "misc.h"
+#include "parsing.h"
+#include "readcfg.h"
+
+struct config Config;
+
+// Someone else needs to provide these...
+void CheckMem(void *Test);
+noreturn void System_Error(char *szErrorMsg);
+
+#define MAX_CONFIG_WORDS          17
+
+const char *const papszConfigKeyWords[MAX_CONFIG_WORDS] = {
+	"SysopName",
+	"BBSName",
+	"UseLog",
+	"ScoreANSI",
+	"ScoreASCII",
+	"Node",
+	"DropDirectory",
+	"UseFOSSIL",
+	"SerialPortAddr",
+	"SerialPortIRQ",
+	"BBSId",
+	"NetmailDir",
+	"InboundDir",
+	"MailerType",
+	"InterBBS",
+	"bangshangalang\xff\xff",
+	"OutputSemaphore",
+};
+
+void AddInboundDir(const char *dir)
+{
+	if (Config.NumInboundDirs < 0)
+		System_Error("Negative inbounds in AddInboundDir");
+	char **new = realloc(Config.szInboundDirs, sizeof(Config.szInboundDirs[0]) * ((size_t)Config.NumInboundDirs + 1));
+	size_t dirlen = strlen(dir);
+	bool addSlash = false;
+	CheckMem(new);
+	Config.szInboundDirs = new;
+	if (dirlen && dir[dirlen - 1] != '\\' && dir[dirlen - 1] != '/')
+		addSlash = true;
+	Config.szInboundDirs[Config.NumInboundDirs] = malloc(dirlen + addSlash + 1);
+	CheckMem(Config.szInboundDirs[Config.NumInboundDirs]);
+	if (dirlen)
+		memcpy(Config.szInboundDirs[Config.NumInboundDirs], dir, dirlen);
+	if (addSlash)
+		Config.szInboundDirs[Config.NumInboundDirs][dirlen++] = '/';
+	Config.szInboundDirs[Config.NumInboundDirs][dirlen] = 0;
+	Config.NumInboundDirs++;
+}
+
+bool Config_Init(uint16_t Node, struct NodeData *(*getNodeData)(int))
+/*
+ * Loads data from .CFG file into Config.
+ *
+ */
+{
+	FILE *fpConfigFile;
+	char szConfigName[40], szConfigLine[255];
+	char *pcCurrentPos;
+	char szToken[MAX_TOKEN_CHARS + 1];
+	int16_t iKeyWord, iCurrentNode = 1;
+	struct NodeData *currNode = NULL;
+
+	// --- Set defaults
+	strlcpy(szConfigName, "clans.cfg", sizeof(szConfigName));
+	strlcpy(Config.szScoreFile[0], "scores.asc", sizeof(Config.szScoreFile[0]));
+	strlcpy(Config.szScoreFile[1], "scores.ans", sizeof(Config.szScoreFile[1]));
+
+	fpConfigFile = fopen(szConfigName, "rt");
+	if (!fpConfigFile) {
+		/* file not found! error */
+		return false;
+	}
+
+	for (;;) {
+		/* read in a line */
+		if (fgets(szConfigLine, 255, fpConfigFile) == NULL) break;
+
+		/* Ignore all of line after comments or CR/LF char */
+		pcCurrentPos=(char *)szConfigLine;
+		ParseLine(pcCurrentPos);
+
+		/* If no token was found, proceed to process the next line */
+		if (!*pcCurrentPos) continue;
+
+		GetToken(pcCurrentPos, szToken);
+
+		/* Loop through list of keywords */
+		for (iKeyWord = 0; iKeyWord < MAX_CONFIG_WORDS; ++iKeyWord) {
+			/* If keyword matches */
+			if (plat_stricmp(szToken, papszConfigKeyWords[iKeyWord]) == 0) {
+				/* Process config token */
+				switch (iKeyWord) {
+					case 0 :  /* sysopname */
+						strlcpy(Config.szSysopName, pcCurrentPos, sizeof(Config.szSysopName));
+						break;
+					case 1 :  /* bbsname */
+						strlcpy(Config.szBBSName, pcCurrentPos, sizeof(Config.szBBSName));
+						break;
+					case 2 :  /* use log? */
+						if (plat_stricmp(pcCurrentPos, "Yes") == 0)
+							Config.UseLog = true;
+						break;
+					case 3 :  /* ansi file */
+						strlcpy(Config.szScoreFile[1], pcCurrentPos, sizeof(Config.szScoreFile[1]));
+						break;
+					case 4 :  /* ascii file */
+						strlcpy(Config.szScoreFile[0], pcCurrentPos, sizeof(Config.szScoreFile[0]));
+						break;
+					case 5 :  /* node = ? */
+						iCurrentNode = ato16(pcCurrentPos, "Node Number", __func__);
+						if (getNodeData)
+							currNode = getNodeData(iCurrentNode);
+						break;
+					case 6 :  /* dropdirectory = ? */
+						if (getNodeData)
+							strlcpy(currNode->dropDir, pcCurrentPos, sizeof(currNode->dropDir));
+						if (Node == iCurrentNode) {
+							Config.pszInfoPath = strdup(pcCurrentPos);
+						}
+						break;
+					case 7 :  /* usefossil */
+						if (currNode) {
+							if (plat_stricmp(pcCurrentPos, "No") == 0)
+								currNode->fossil = false;
+							else
+								currNode->fossil = true;
+						}
+						if (Node == iCurrentNode) {
+							if (plat_stricmp(pcCurrentPos, "No") == 0) {
+								/* do not use fossil */
+								Config.NoFossil = true;
+							}
+						}
+						break;
+					case 8 :  /* serial port addr */
+						if (currNode)
+							currNode->addr = (uintptr_t)atoull(pcCurrentPos, "Serial Port Address", __func__);
+						break;
+					case 9 :  /* serial port irq */
+						if (currNode)
+                                                        currNode->irq = atoi(pcCurrentPos);
+						if (Node == iCurrentNode) {
+							if (plat_stricmp(pcCurrentPos, "Default") != 0)
+								Config.ComIRQ = atou8(pcCurrentPos, "IRQ", __func__);
+						}
+						break;
+					case 10 : /* BBS Id */
+						Config.BBSID = ato16(pcCurrentPos, "BBS ID", __func__);
+						if (Config.BBSID > MAX_IBBSNODES || Config.BBSID < 1)
+							System_Error("BBSId out of bounds!\n");
+						break;
+					case 11 : /* netmail dir */
+						strlcpy(Config.szNetmailDir, pcCurrentPos, sizeof(Config.szNetmailDir));
+
+						/* remove '\' if last char is it */
+						if (Config.szNetmailDir [ strlen(Config.szNetmailDir) - 1] == '\\' || Config.szNetmailDir [strlen(Config.szNetmailDir) - 1] == '/')
+							Config.szNetmailDir [ strlen(Config.szNetmailDir) - 1] = 0;
+						break;
+					case 12 : /* inbound dir */
+						AddInboundDir(pcCurrentPos);
+						break;
+					case 13 : /* mailer type */
+						if (plat_stricmp(pcCurrentPos, "None") == 0)
+							Config.MailerType = MAIL_NONE;
+						else if (plat_stricmp(pcCurrentPos, "Attach") == 0)
+							Config.MailerType = MAIL_OTHER;
+						else
+							Config.MailerType = MAIL_BINKLEY;
+						break;
+					case 14 : /* in a league? */
+						Config.InterBBS = true;
+						break;
+					case 15 : /* regcode */
+						if (*pcCurrentPos)
+							strlcpy(Config.szRegcode, pcCurrentPos, sizeof(Config.szRegcode));
+						break;
+					case 16 : /* IBBS output semaphore */
+						strlcpy(Config.szOutputSem, pcCurrentPos, sizeof(Config.szOutputSem));
+						break;
+				}
+			}
+		}
+	}
+
+	fclose(fpConfigFile);
+	Config.Initialized = true;
+	return true;
+}
+
+void Config_Close(void)
+/*
+ * Shuts down config's mem.
+ *
+ */
+{
+	int16_t i;
+	for (i = 0; i < Config.NumInboundDirs; i++) {
+		free(Config.szInboundDirs[i]);
+		Config.szInboundDirs[i] = NULL;
+	}
+	free(Config.szInboundDirs);
+	free(Config.pszInfoPath);
+}

@@ -945,7 +945,14 @@ var QWKTagLineFmt=935;
 var QWKControlCommand=936;
 var QWKBadControlCommand=937;
 var NoMoreDownloads=938;
+var ReadYourUnreadMailNowQ=939;
+var UserDownloadsToday=940;
+var WideModeIsNow=941;
+var SeekingFile=942;
+var SeekingFileDone=943;
+var SeekPrompt=944;
+var QWKSettingsMIME=945;
 
-var TOTAL_TEXT=938;
+var TOTAL_TEXT=945;
 
 this;

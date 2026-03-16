@@ -22,6 +22,14 @@ enum {
 	SYNCTERM_PATH_SYSTEM_CACHE
 };
 
+enum CursorTypeEnum {
+	ST_CT_DEFAULT,
+	ST_CT_BLINK_UNDER,
+	ST_CT_SOLID_UNDER,
+	ST_CT_BLINK_BLK,
+	ST_CT_SOLID_BLK,
+};
+
 /* Default modem device */
 #if defined(__APPLE__) && defined(__MACH__)
 
@@ -81,6 +89,15 @@ struct syncterm_settings {
 	int                   extern_scale;
 	uint                  audio_output_modes;
 	bool                  invert_wheel;
+	bool                  webgetUserList;
+	int                   keyDerivationIterations;
+	enum CursorTypeEnum   defaultCursor;
+	unsigned              uifc_hclr;
+	unsigned              uifc_lclr;
+	unsigned              uifc_bclr;
+	unsigned              uifc_cclr;
+	unsigned              uifc_lbclr;
+	unsigned              uifc_lbbclr;
 };
 
 extern ini_bitdesc_t audio_output_bits[];
@@ -102,12 +119,21 @@ extern char                    *output_types[];
 extern int                      output_map[];
 extern char                    *output_descrs[];
 extern char                    *output_enum[];
+extern char                    *cursor_descrs[];
+extern char                    *cursor_enum[];
 extern int                      fake_mode;
+extern const char * const colour_names[18];
+extern const char * const colour_enum[18];
+extern const char * const bg_colour_names[10];
+extern const char * const bg_colour_enum[10];
+
 void parse_url(char *url, struct bbslist *bbs, int dflt_conn_type, int force_defaults);
 char *get_syncterm_filename(char *fn, int fnlen, int type, bool shared);
 void load_settings(struct syncterm_settings *set);
 int ciolib_to_screen(int screen);
 int screen_to_ciolib(int ciolib);
 bool check_exit(bool force);
+void set_default_cursor(void);
+
 
 #endif // ifndef _SYNCTERM_H_

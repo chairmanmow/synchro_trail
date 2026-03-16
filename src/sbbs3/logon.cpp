@@ -26,10 +26,22 @@
 extern "C" void client_on(SOCKET sock, client_t* client, BOOL update);
 
 /****************************************************************************/
-/* Called once upon each user logging on the board							*/
-/* Returns 1 if user passed logon, 0 if user failed.						*/
+/* Just a wrapper around logon() to handle failure logging and hangup		*/
 /****************************************************************************/
 bool sbbs_t::logon()
+{
+	bool success = logon_process();
+	if (!success) {
+		lprintf(LOG_NOTICE, "Logon process aborted");
+		hangup();
+	}
+	return success;
+}
+
+/****************************************************************************/
+/* Called once upon each user logging on the board							*/
+/****************************************************************************/
+bool sbbs_t::logon_process()
 {
 	char       str[256], c;
 	char       tmp[512];
@@ -52,6 +64,8 @@ bool sbbs_t::logon()
 	client.usernum = useron.number;
 	client_on(client_socket, &client, TRUE /* update */);
 
+	register_login();
+
 #ifdef JAVASCRIPT
 	js_create_user_objects(js_cx, js_glob);
 #endif
@@ -68,23 +82,8 @@ bool sbbs_t::logon()
 		useron.cols = TERM_COLS_AUTO;
 		useron.misc &= ~TERM_FLAGS;
 		useron.misc |= autoterm;
-		if (!(useron.misc & (ANSI | PETSCII)) && text[AnsiTerminalQ][0] && yesno(text[AnsiTerminalQ]))
-			useron.misc |= ANSI;
-		if ((useron.misc & ANSI) && text[MouseTerminalQ][0] && yesno(text[MouseTerminalQ]))
-			useron.misc |= MOUSE;
-		if ((useron.misc & RIP) || !(cfg.uq & UQ_COLORTERM)
-		    || (useron.misc & (ANSI | PETSCII) && yesno(text[ColorTerminalQ])))
-			useron.misc |= COLOR;
-		if (!(useron.misc & (NO_EXASCII | PETSCII)) && !yesno(text[ExAsciiTerminalQ]))
-			useron.misc |= NO_EXASCII;
-		for (i = 0; i < cfg.total_xedits; i++)
-			if (!stricmp(cfg.xedit[i]->code, cfg.new_xedit)
-			    && chk_ar(cfg.xedit[i]->ar, &useron, &client))
-				break;
-		if (i < cfg.total_xedits)
-			useron.xedit = i + 1;
-		else
-			useron.xedit = 0;
+		if (!set_editor(cfg.new_xedit))
+			set_editor("");
 		useron.prot = cfg.new_prot;
 		useron.shell = cfg.new_shell;
 		*useron.lang = '\0';
@@ -93,25 +92,20 @@ bool sbbs_t::logon()
 
 	if (!chk_ars(startup->login_ars, &useron, &client)) {
 		bputs(text[NoNodeAccess]);
-		safe_snprintf(str, sizeof str, "(%04u)  %-25s  Insufficient server access: %s"
+		llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  Insufficient server access: %s"
 		              , useron.number, useron.alias, startup->login_ars);
-		logline(LOG_NOTICE, "+!", str);
-		hangup();
 		return false;
 	}
 
 	if (!chk_ar(cfg.node_ar, &useron, &client)) {
 		bputs(text[NoNodeAccess]);
-		safe_snprintf(str, sizeof(str), "(%04u)  %-25s  Insufficient node access: %s"
+		llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  Insufficient node access: %s"
 		              , useron.number, useron.alias, cfg.node_arstr);
-		logline(LOG_NOTICE, "+!", str);
-		hangup();
 		return false;
 	}
 
 	if (!getnodedat(cfg.node_num, &thisnode, true)) {
 		errormsg(WHERE, ERR_LOCK, "nodefile", cfg.node_num);
-		hangup();
 		return false;
 	}
 
@@ -119,16 +113,13 @@ bool sbbs_t::logon()
 		unlocknodedat(cfg.node_num);    /* must unlock! */
 		if (!useron_is_sysop() && !(useron.exempt & FLAG('N'))) {
 			bputs(text[NodeLocked]);
-			safe_snprintf(str, sizeof(str), "(%04u)  %-25s  Locked node logon attempt"
+			llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  Locked node logon attempt"
 			              , useron.number, useron.alias);
-			logline(LOG_NOTICE, "+!", str);
-			hangup();
 			return false;
 		}
 		bool rmlock = yesno(text[RemoveNodeLockQ]);
 		if (!getnodedat(cfg.node_num, &thisnode, true)) {
 			errormsg(WHERE, ERR_LOCK, "nodefile", cfg.node_num);
-			hangup();
 			return false;
 		}
 		if (rmlock) {
@@ -136,9 +127,6 @@ bool sbbs_t::logon()
 			thisnode.misc &= ~NODE_LOCK;
 		}
 	}
-
-	if (useron.exempt & FLAG('H'))
-		console |= CON_NO_INACT;
 
 	if ((useron.exempt & FLAG('Q') && useron.misc & QUIET))
 		thisnode.status = NODE_QUIET;
@@ -181,24 +169,18 @@ bool sbbs_t::logon()
 		}
 	}
 
+	const int manual_term = ANSI | RIP | PETSCII | UTF8; // Note: don't turn off NO_EXASCII flag (issue #923)
 	if ((useron.misc & AUTOTERM)
-	    // User manually-enabled PETSCII, but they're logging in with an ANSI (auto-detected) terminal
-	    || ((useron.misc & PETSCII) && (autoterm & ANSI))) {
-		useron.misc &= ~(ANSI | RIP | PETSCII | UTF8); // Note: don't turn off NO_EXASCII flag (issue #923)
+	    // User manually-enabled PETSCII, but they're logging in with an ANSI (auto-detected) terminal (or vice versa)
+	    || ((useron.misc & manual_term) && (useron.misc & manual_term) != (autoterm & manual_term))
+		|| ((autoterm & UTF8) && !(useron.misc & UTF8))) {
+		useron.misc &= ~manual_term;
 		useron.misc |= (AUTOTERM | autoterm);
 	}
 
 	if (!chk_ar(cfg.shell[useron.shell]->ar, &useron, &client)) {
-		useron.shell = cfg.new_shell;
-		if (!chk_ar(cfg.shell[useron.shell]->ar, &useron, &client)) {
-			for (i = 0; i < cfg.total_shells; i++)
-				if (chk_ar(cfg.shell[i]->ar, &useron, &client))
-					break;
-			if (i == cfg.total_shells)
-				useron.shell = 0;
-			else
-				useron.shell = i;
-		}
+		if (!set_shell(cfg.new_shell))
+			set_shell(0);
 	}
 
 	logon_ml = useron.level;
@@ -218,7 +200,7 @@ bool sbbs_t::logon()
 	if (useron.cols != TERM_COLS_AUTO)
 		term->cols = useron.cols;
 	update_nodeterm();
-	if (tm.tm_mon + 1 == getbirthmonth(&cfg, useron.birth) && tm.tm_mday == getbirthday(&cfg, useron.birth)
+	if (birthdate_is_valid(&cfg, useron.birth) && tm.tm_mon + 1 == getbirthmonth(&cfg, useron.birth) && tm.tm_mday == getbirthday(&cfg, useron.birth)
 	    && !(useron.rest & FLAG('Q'))) {
 		if (text[HappyBirthday][0]) {
 			bputs(text[HappyBirthday]);
@@ -310,9 +292,9 @@ bool sbbs_t::logon()
 						break;
 					bputs(text[NewUserPasswordVerify]);
 				}
-				console |= CON_R_ECHOX;
+				console |= CON_PASSWORD;
 				getstr(tmp, LEN_PASS * 2, K_UPPER);
-				console &= ~(CON_R_ECHOX | CON_L_ECHOX);
+				console &= ~CON_PASSWORD;
 				if (strcmp(str, tmp)) {
 					bputs(text[Wrong]); // Should be WrongPassword instead?
 					continue;
@@ -328,18 +310,14 @@ bool sbbs_t::logon()
 		if (useron.ltoday > cfg.level_callsperday[useron.level]
 		    && !(useron.exempt & FLAG('L'))) {
 			bputs(text[NoMoreLogons]);
-			safe_snprintf(str, sizeof(str), "(%04u)  %-25s  Out of logons"
+			llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  Out of logons"
 			              , useron.number, useron.alias);
-			logline(LOG_NOTICE, "+!", str);
-			hangup();
 			return false;
 		}
 		if (useron.rest & FLAG('L') && useron.ltoday > 1) {
 			bputs(text[R_Logons]);
-			safe_snprintf(str, sizeof(str), "(%04u)  %-25s  Out of logons"
+			llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  Out of logons"
 			              , useron.number, useron.alias);
-			logline(LOG_NOTICE, "+!", str);
-			hangup();
 			return false;
 		}
 		kmode = (cfg.uq & UQ_NOEXASC) | K_TRIM;
@@ -347,94 +325,6 @@ bool sbbs_t::logon()
 			kmode |= K_UPRLWR;
 
 		if (!useron_is_guest()) {
-			if (!useron.name[0] && ((cfg.uq & UQ_ALIASES && cfg.uq & UQ_REALNAME)
-			                        || cfg.uq & UQ_COMPANY))
-				while (online) {
-					if (cfg.uq & UQ_ALIASES && cfg.uq & UQ_REALNAME)
-						bputs(text[EnterYourRealName]);
-					else
-						bputs(text[EnterYourCompany]);
-					getstr(useron.name, LEN_NAME, kmode);
-					if (cfg.uq & UQ_ALIASES && cfg.uq & UQ_REALNAME) {
-						if (trashcan(useron.name, "name") || !useron.name[0]
-						    || !strchr(useron.name, ' ')
-						    || strchr(useron.name, 0xff)
-						    || (cfg.uq & UQ_DUPREAL
-						        && finduserstr(useron.number, USER_NAME
-						                       , useron.name, 0, 0)))
-							bputs(text[YouCantUseThatName]);
-						else
-							break;
-					}
-					else
-						break;
-				}
-			if (cfg.uq & UQ_HANDLE && !useron.handle[0]) {
-				SAFECOPY(useron.handle, useron.alias);
-				while (online) {
-					bputs(text[EnterYourHandle]);
-					if (!getstr(useron.handle, LEN_HANDLE
-					            , K_LINE | K_EDIT | K_AUTODEL | kmode)
-					    || strchr(useron.handle, 0xff)
-					    || (cfg.uq & UQ_DUPHAND
-					        && finduserstr(useron.number, USER_HANDLE
-					                       , useron.handle, 0, 0))
-					    || trashcan(useron.handle, "name"))
-						bputs(text[YouCantUseThatName]);
-					else
-						break;
-				}
-			}
-			if (cfg.uq & UQ_LOCATION && !useron.location[0])
-				while (online) {
-					bputs(text[EnterYourCityState]);
-					if (getstr(useron.location, LEN_LOCATION, kmode))
-						break;
-				}
-			if (cfg.uq & UQ_ADDRESS && !useron.address[0])
-				while (online) {
-					bputs(text[EnterYourAddress]);
-					if (getstr(useron.address, LEN_ADDRESS, kmode))
-						break;
-				}
-			if (cfg.uq & UQ_ADDRESS && !useron.zipcode[0])
-				while (online) {
-					bputs(text[EnterYourZipCode]);
-					if (getstr(useron.zipcode, LEN_ZIPCODE, K_UPPER | kmode))
-						break;
-				}
-			if (cfg.uq & UQ_PHONE && !useron.phone[0]) {
-				if (text[CallingFromNorthAmericaQ][0])
-					i = yesno(text[CallingFromNorthAmericaQ]);
-				else
-					i = 0;
-				while (online) {
-					bputs(text[EnterYourPhoneNumber]);
-					if (i) {
-						if (gettmplt(useron.phone, cfg.sys_phonefmt
-						             , K_LINE | (cfg.uq & UQ_NOEXASC)) < strlen(cfg.sys_phonefmt))
-							continue;
-					} else {
-						if (getstr(useron.phone, LEN_PHONE
-						           , K_UPPER | (cfg.uq & UQ_NOEXASC) | K_TRIM) < 5)
-							continue;
-					}
-					if (!trashcan(useron.phone, "phone"))
-						break;
-				}
-			}
-			if (!(cfg.uq & UQ_NONETMAIL) && !useron.netmail[0]) {
-				while (online) {
-					bputs(text[EnterNetMailAddress]);
-					if (getstr(useron.netmail, LEN_NETMAIL, K_EDIT | K_AUTODEL | K_LINE | K_TRIM)
-					    && !trashcan(useron.netmail, "email"))
-						break;
-				}
-				if (useron.netmail[0] && cfg.sys_misc & SM_FWDTONET && !noyes(text[ForwardMailQ]))
-					useron.misc |= NETMAIL;
-				else
-					useron.misc &= ~NETMAIL;
-			}
 			if (cfg.new_sif[0]) {
 				safe_snprintf(str, sizeof(str), "%suser/%4.4u.dat", cfg.data_dir, useron.number);
 				if (flength(str) < 1L)
@@ -443,9 +333,8 @@ bool sbbs_t::logon()
 		}
 	}
 	if (!online) {
-		safe_snprintf(str, sizeof(str), "(%04u)  %-25s  Unsuccessful logon"
+		llprintf(LOG_NOTICE, "+!", "(%04u)  %-25s  Unsuccessful logon (disconnected)"
 		              , useron.number, useron.alias);
-		logline(LOG_NOTICE, "+!", str);
 		return false;
 	}
 	useron.logons++;
@@ -460,9 +349,8 @@ bool sbbs_t::logon()
 	mqtt_user_login(mqtt, &client);
 
 	if (useron.rest & FLAG('Q')) {
-		safe_snprintf(str, sizeof(str), "(%04u)  %-25s  QWK Network Connection"
+		llprintf("++", "(%04u)  %-25s  QWK Network Connection"
 		              , useron.number, useron.alias);
-		logline("++", str);
 		return true;
 	}
 
@@ -470,12 +358,16 @@ bool sbbs_t::logon()
 	/* SUCCESSFUL LOGON */
 	/********************/
 	totallogons = logonstats();
-	safe_snprintf(str, sizeof(str), "(%04u)  %-25s  %sLogon %u - %u"
+	llprintf("++", "(%04u)  %-25s  %sLogon %u - %u"
 	              , useron.number, useron.alias, (sys_status & SS_FASTLOGON) ? "Fast-":"", totallogons, useron.ltoday);
-	logline("++", str);
 
-	if (!(sys_status & SS_QWKLOGON) && cfg.logon_mod[0])
-		exec_bin(cfg.logon_mod, &main_csi);
+	if (!(sys_status & SS_QWKLOGON)) {
+		bool invoked;
+		if (exec_mod("logon", cfg.logon_mod, &invoked) != 0 && invoked)
+			return false;
+		if (!online)
+			return false;
+	}
 
 	if (thisnode.status != NODE_QUIET && (!user_is_sysop(&useron) || cfg.sys_misc & SM_SYSSTAT)) {
 		int file;
@@ -497,30 +389,36 @@ bool sbbs_t::logon()
 			errormsg(WHERE, ERR_WRITE, path, strlen(str));
 	}
 
-	if (cfg.sys_logon.cmd[0] && !(cfg.sys_logon.misc & EVENT_DISABLED)) {                /* execute system logon event */
-		lprintf(LOG_DEBUG, "executing logon event: %s", cfg.sys_logon.cmd);
-		external(cmdstr(cfg.sys_logon.cmd, nulstr, nulstr, NULL, cfg.sys_logon.misc), EX_STDOUT | cfg.sys_logon.misc); /* EX_SH */
+	for (i = 0; cfg.sys_logon.cmd != nullptr && cfg.sys_logon.cmd[i] != nullptr; ++i) {
+		if (cfg.sys_logon.misc[i] & EVENT_DISABLED)
+			continue;
+		lprintf(LOG_DEBUG, "Executing logon event: %s", cfg.sys_logon.cmd[i]);
+		external(cmdstr(cfg.sys_logon.cmd[i], nulstr, nulstr, NULL, cfg.sys_logon.misc[i]), EX_STDOUT | cfg.sys_logon.misc[i]); /* EX_SH */
+		if (!online)
+			return false;
 	}
 
 	if (sys_status & SS_QWKLOGON)
 		return true;
 
 	sys_status |= SS_PAUSEON; /* always force pause on during this section */
-	mailw = getmail(&cfg, useron.number, /* Sent: */ FALSE, /* attr: */ 0);
-	mailr = getmail(&cfg, useron.number, /* Sent: */ FALSE, /* attr: */ MSG_READ);
+	mailw = mail_waiting.get();
+	mailr = mail_read.get();
 
 	if (!(cfg.sys_misc & SM_NOSYSINFO)) {
-		bprintf(text[SiSysName], cfg.sys_name);
-		//bprintf(text[SiNodeNumberName],cfg.node_num,cfg.node_name);
-		bprintf(text[LiUserNumberName], useron.number, useron.alias);
-		bprintf(text[LiLogonsToday], useron.ltoday
-		        , cfg.level_callsperday[useron.level]);
-		bprintf(text[LiTimeonToday], useron.ttoday
-		        , cfg.level_timeperday[useron.level] + useron.min);
-		bprintf(text[LiMailWaiting], mailw, mailw - mailr);
-		bprintf(text[LiSysopIs]
-		        , text[sysop_available(&cfg) ? LiSysopAvailable : LiSysopNotAvailable]);
-		term->newline();
+		if (!menu("logoninfo", P_NOERROR)) {
+			bprintf(text[SiSysName], cfg.sys_name);
+			//bprintf(text[SiNodeNumberName],cfg.node_num,cfg.node_name);
+			bprintf(text[LiUserNumberName], useron.number, useron.alias);
+			bprintf(text[LiLogonsToday], useron.ltoday
+					, cfg.level_callsperday[useron.level]);
+			bprintf(text[LiTimeonToday], useron.ttoday
+					, cfg.level_timeperday[useron.level] + useron.min);
+			bprintf(text[LiMailWaiting], mailw, mailw - mailr);
+			bprintf(text[LiSysopIs]
+					, text[sysop_available(&cfg) ? LiSysopAvailable : LiSysopNotAvailable]);
+			term->newline();
+		}
 	}
 
 	if (sys_status & SS_EVENT)
@@ -550,11 +448,8 @@ bool sbbs_t::logon()
 			}
 			if (node.status == NODE_INUSE && i != cfg.node_num && node.useron == useron.number
 			    && !useron_is_sysop() && !useron_is_guest()) {
-				SAFEPRINTF2(str, "(%04u)  %-25s  On more than one node at the same time"
-				            , useron.number, useron.alias);
-				logline(LOG_NOTICE, "+!", str);
+				llprintf(LOG_NOTICE, "+!", "On more than one node at the same time");
 				bputs(text[UserOnTwoNodes]);
-				hangup();
 				return false;
 			}
 		}
@@ -587,20 +482,25 @@ bool sbbs_t::logon()
 	sys_status &= ~SS_PAUSEON;    /* Turn off the pause override flag */
 	if (online == ON_REMOTE)
 		rioctl(IOSM | ABORT);   /* Turn abort ability on */
-	if (text[ReadYourMailNowQ][0] && mailw) {
-		if ((mailw == mailr && !noyes(text[ReadYourMailNowQ]))
-		    || (mailw != mailr && yesno(text[ReadYourMailNowQ]))) {
-			uint32_t user_mail = useron.mail & ~MAIL_LM_MODE;
-			int      result = readmail(useron.number, MAIL_YOUR, useron.mail & MAIL_LM_MODE);
-			user_mail |= result & MAIL_LM_MODE;
-			if (user_mail != useron.mail)
-				putusermail(&cfg, useron.number, useron.mail = user_mail);
-		}
+	if (mailw) {
+		uint32_t user_mail = useron.mail & ~MAIL_LM_MODE;
+		int result = useron.mail & MAIL_LM_MODE;
+		if (mailw == mailr) {
+			if (!noyes(text[ReadYourMailNowQ]))
+				result = readmail(useron.number, MAIL_YOUR, useron.mail & MAIL_LM_MODE);
+		} else if (yesno(text[ReadYourUnreadMailNowQ]))
+			result = readmail(useron.number, MAIL_YOUR, (useron.mail & MAIL_LM_MODE) | LM_UNREAD, /* listmsgs: */false);
+		user_mail |= result & MAIL_LM_MODE;
+		if (user_mail != useron.mail)
+			putusermail(&cfg, useron.number, useron.mail = user_mail);
 	}
 	if (usrgrps && useron.misc & ASK_NSCAN && text[NScanAllGrpsQ][0] && yesno(text[NScanAllGrpsQ]))
 		scanallsubs(SCAN_NEW);
 	if (usrgrps && useron.misc & ASK_SSCAN && text[SScanAllGrpsQ][0] && yesno(text[SScanAllGrpsQ]))
 		scanallsubs(SCAN_TOYOU | SCAN_UNREAD);
+
+	user_login_state = user_logged_on; // notify other nodes upon (later) logoff
+
 	return true;
 }
 
@@ -612,7 +512,6 @@ bool sbbs_t::logon()
 /****************************************************************************/
 uint sbbs_t::logonstats()
 {
-	char      msg[256];
 	char      path[MAX_PATH + 1];
 	FILE*     csts;
 	FILE*     dsts;
@@ -630,11 +529,12 @@ uint sbbs_t::logonstats()
 	if (stats.date > now + (24L * 60L * 60L)) /* More than a day in the future? */
 		errormsg(WHERE, ERR_CHK, "Daily stats date/time stamp", (int)stats.date);
 
-	if (!dates_are_same(now, stats.date)) {
+	if (stats.date < now && !dates_are_same(now, stats.date)) {
 
 		struct tm tm{};
 		struct tm update_tm{};
-		if (localtime_r(&stats.date, &update_tm) == NULL) {
+		time_t t = stats.date;
+		if (localtime_r(&t, &update_tm) == NULL) {
 			errormsg(WHERE, ERR_CHK, "Daily stats date/time break down", (int)stats.date);
 			return 0;
 		}
@@ -648,11 +548,10 @@ uint sbbs_t::logonstats()
 			sys_status |= SS_NEW_MONTH;
 		if (tm.tm_wday == 0 || difftime(now, stats.date) > (7 * 24 * 60 * 60))
 			sys_status |= SS_NEW_WEEK;
-		safe_snprintf(msg, sizeof(msg), "New Day%s%s - Prev: %s "
+		llprintf(LOG_NOTICE, "!=", "New Day%s%s - Prev: %s "
 			          , (sys_status & SS_NEW_WEEK) ? " and Week" :""
 		              , (sys_status & SS_NEW_MONTH) ? " and Month" :""
 			          , timestr(stats.date));
-		logline(LOG_NOTICE, "!=", msg);
 		safe_snprintf(path, sizeof(path), "%slogon.lst", cfg.data_dir);    /* Truncate logon list (LEGACY) */
 		int file;
 		if ((file = nopen(path, O_TRUNC | O_CREAT | O_WRONLY)) == -1) {
@@ -661,12 +560,6 @@ uint sbbs_t::logonstats()
 		}
 		close(file);
 		for (i = 0; i <= cfg.sys_nodes; i++) {
-			if (i) {     /* updating a node */
-				if (getnodedat(i, &node, true)) {
-					node.misc |= NODE_EVENT;
-					putnodedat(i, &node);
-				}
-			}
 			dstats_fname(&cfg, i, path, sizeof path);
 			if ((dsts = fopen_dstats(&cfg, i, /* for_write: */ TRUE)) == NULL) /* doesn't have stats yet */
 				continue;
@@ -680,11 +573,21 @@ uint sbbs_t::logonstats()
 			if (!fread_dstats(dsts, &stats)) {
 				errormsg(WHERE, ERR_READ, path, i);
 			} else {
-				stats.date = time(NULL);
-				fwrite_cstats(csts, &stats);
-				rolloverstats(&stats);
-				if (!fwrite_dstats(dsts, &stats, __FUNCTION__))
-					errormsg(WHERE, ERR_WRITE, path, i);
+				if(stats.date > now || dates_are_same(now, stats.date))
+					lprintf(LOG_NOTICE, "%s already updated on %s", path, timestr(stats.date));
+				else {
+					stats.date = time32(NULL);
+					fwrite_cstats(csts, &stats);
+					rolloverstats(&stats);
+					if (!fwrite_dstats(dsts, &stats, __FUNCTION__))
+						errormsg(WHERE, ERR_WRITE, path, i);
+					if (i) {     /* updating a node */
+						if (getnodedat(i, &node, true)) {
+							node.misc |= NODE_EVENT;
+							putnodedat(i, &node);
+						}
+					}
+				}
 			}
 			fclose_dstats(dsts);
 			fclose_cstats(csts);

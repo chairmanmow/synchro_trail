@@ -59,14 +59,15 @@
 
 /* xpdev */
 #include "conwrap.h"
-#include "genwrap.h"
-#include "semwrap.h"
 #include "dirwrap.h"
+#include "eventwrap.h"
 #include "filewrap.h"
+#include "genwrap.h"
+#include "ini_file.h"
+#include "os_info.h"
+#include "semwrap.h"
 #include "sockwrap.h"
 #include "str_list.h"
-#include "ini_file.h"
-#include "eventwrap.h"
 #include "threadwrap.h"
 
 /* sbbs */
@@ -109,7 +110,7 @@ FILE*       errfp;
 FILE*       statfp;
 FILE*       logfp = NULL;
 
-const char* revision = "3.0";
+const char* revision = "3.3";
 
 SOCKET      sock = INVALID_SOCKET;
 
@@ -341,12 +342,20 @@ int sendbuf(SOCKET s, void *buf, size_t buflen)
 {
 	size_t sent = 0;
 	int    ret;
+#ifdef PREFER_POLL
+	struct pollfd fds = {0};
+#else
 	fd_set socket_set;
+#endif
 
+#ifdef __unix__
+	if (stdio)
+		s = STDOUT_FILENO;
+#endif
 	for (;;) {
 #ifdef __unix__
 		if (stdio)
-			ret = write(STDOUT_FILENO, (char *)buf + sent, buflen - sent);
+			ret = write(s, (char *)buf + sent, buflen - sent);
 		else
 #endif
 		ret = sendsocket(s, (char *)buf + sent, buflen - sent);
@@ -357,21 +366,24 @@ int sendbuf(SOCKET s, void *buf, size_t buflen)
 #if (EAGAIN != EWOULDBLOCK)
 				case EWOULDBLOCK:
 #endif
+#ifdef PREFER_POLL
+					fds.fd = s;
+					fds.events = POLLOUT;
+					if ((ret = poll(&fds, 1, /* timeout (infinite): */-1)) < 1)
+						goto disconnect;
+					break;
+#else
 					/* Block until we can send */
 					FD_ZERO(&socket_set);
-#ifdef __unix__
-					if (stdio)
-						FD_SET(STDIN_FILENO, &socket_set);
-					else
-#endif
-					FD_SET(sock, &socket_set);
+					FD_SET(s, &socket_set);
 
-					if ((ret = select(sock + 1, NULL, &socket_set, NULL, NULL)) < 1) {
+					if ((ret = select(s + 1, NULL, &socket_set, NULL, NULL)) < 1) {
 						if (ret == SOCKET_ERROR && SOCKET_ERRNO != EINTR) {
 							lprintf(LOG_ERR, "ERROR %d selecting socket", SOCKET_ERRNO);
 							goto disconnect;
 						}
 					}
+#endif
 					break;
 				default:
 					goto disconnect;
@@ -417,8 +429,12 @@ void send_telnet_cmd(SOCKET sock, uchar cmd, uchar opt)
 static int recv_buffer(int timeout /* seconds */)
 {
 	int            i;
+#ifdef PREFER_POLL
+	struct pollfd fds = {0};
+#else
 	fd_set         socket_set;
 	struct timeval tv;
+#endif
 	int            magic_errno;
 
 	for (;;) {
@@ -452,8 +468,27 @@ static int recv_buffer(int timeout /* seconds */)
 #if (EAGAIN != EWOULDBLOCK)
 				case EWOULDBLOCK:
 #endif
-					// Call select()
 					if (timeout) {
+#ifdef PREFER_POLL
+						if (stdio)
+							fds.fd = STDIN_FILENO;
+						else
+							fds.fd = sock;
+						fds.events = POLLIN;
+						if ((i = poll(&fds, 1, timeout * 1000)) < 1) {
+							if (fds.revents & POLLHUP)
+								connected = FALSE;
+							if (i == 0)
+								lprintf(LOG_WARNING, "Receive timeout (%u seconds)", timeout);
+							else
+								lprintf(LOG_ERR, "Receive ERROR %d", magic_errno);
+						}
+						if (i == 1 && fds.revents & POLLIN) {
+							timeout = 0;
+							continue;
+						}
+#else
+						// Call select()
 						FD_ZERO(&socket_set);
 #ifdef __unix__
 						if (stdio)
@@ -465,7 +500,7 @@ static int recv_buffer(int timeout /* seconds */)
 						tv.tv_usec = 0;
 						if ((i = select(sock + 1, &socket_set, NULL, NULL, &tv)) < 1) {
 							if (i == SOCKET_ERROR) {
-								lprintf(LOG_ERR, "ERROR %d selecting socket", magic_errno);
+								lprintf(LOG_ERR, "Receive ERROR %d", magic_errno);
 								connected = FALSE;
 							}
 							else
@@ -475,6 +510,7 @@ static int recv_buffer(int timeout /* seconds */)
 							timeout = 0;
 							continue;
 						}
+#endif
 					}
 					return 0;
 				default:
@@ -902,11 +938,8 @@ static int send_files(char** fname, uint fnames)
 {
 	char     tmp[64];
 	char     path[MAX_PATH + 1];
-	int      i;
 	uint     fnum;
 	uint     cps;
-	glob_t   g;
-	int      gi;
 	BOOL     success = FALSE;
 	uint64_t fsize;
 	uint64_t sent_bytes;
@@ -921,17 +954,10 @@ static int send_files(char** fname, uint fnames)
 	/* Search through all to find total files and bytes */
 	/****************************************************/
 	for (fnum = 0; fnum < fnames; fnum++) {
-		if (glob(fname[fnum], 0, NULL, &g)) {
-			lprintf(LOG_WARNING, "%s not found", fname[fnum]);
+		if (!fexist(fname[fnum]) || isdir(fname[fnum]))
 			continue;
-		}
-		for (i = 0; i < (int)g.gl_pathc; i++) {
-			if (isdir(g.gl_pathv[i]))
-				continue;
-			xm.total_files++;
-			xm.total_bytes += flength(g.gl_pathv[i]);
-		}
-		globfree(&g);
+		xm.total_files++;
+		xm.total_bytes += flength(fname[fnum]);
 	}
 
 	if (xm.total_files < 1) {
@@ -949,91 +975,81 @@ static int send_files(char** fname, uint fnames)
 	/* Send every file matching names or filespecs */
 	/***********************************************/
 	for (fnum = 0; fnum < fnames; fnum++) {
-		if (glob(fname[fnum], 0, NULL, &g)) {
-			lprintf(LOG_WARNING, "%s not found", fname[fnum]);
+		SAFECOPY(path, fname[fnum]);
+		if (isdir(path))
+			continue;
+
+		if ((fp = fnopen(NULL, path, O_RDONLY | O_BINARY)) == NULL
+			&& (fp = fopen(path, "rb")) == NULL) {
+			lprintf(LOG_ERR, "Error %d opening %s for read", errno, path);
 			continue;
 		}
-		for (gi = 0; gi < (int)g.gl_pathc; gi++) {
-			SAFECOPY(path, g.gl_pathv[gi]);
-			if (isdir(path))
-				continue;
+		setvbuf(fp, NULL, _IOFBF, 0x10000);
 
-			if ((fp = fnopen(NULL, path, O_RDONLY | O_BINARY)) == NULL
-			    && (fp = fopen(path, "rb")) == NULL) {
-				lprintf(LOG_ERR, "Error %d opening %s for read", errno, path);
-				continue;
-			}
-			setvbuf(fp, NULL, _IOFBF, 0x10000);
+		fsize = filelength(fileno(fp));
 
-			fsize = filelength(fileno(fp));
+		startfile = time(NULL);
 
-			startfile = time(NULL);
+		lprintf(LOG_INFO, "Sending %s (%" PRId64 " KB) via %cMODEM"
+			    , path, fsize / 1024
+			    , mode & XMODEM ? 'X' : mode & YMODEM ? 'Y' : 'Z');
 
-			lprintf(LOG_INFO, "Sending %s (%" PRId64 " KB) via %cMODEM"
-			        , path, fsize / 1024
-			        , mode & XMODEM ? 'X' : mode & YMODEM ? 'Y' : 'Z');
+		if (mode & ZMODEM)
+			success = zmodem_send_file(&zm, path, fp, /* ZRQINIT? */ xm.sent_files == 0, &startfile, &sent_bytes);
+		else    /* X/YMODEM */
+			success = xmodem_send_file(&xm, path, fp, &startfile, &sent_bytes);
 
-			if (mode & ZMODEM)
-				success = zmodem_send_file(&zm, path, fp, /* ZRQINIT? */ xm.sent_files == 0, &startfile, &sent_bytes);
-			else    /* X/YMODEM */
-				success = xmodem_send_file(&xm, path, fp, &startfile, &sent_bytes);
+		fclose(fp);
 
-			fclose(fp);
+		if ((t = time(NULL) - startfile) <= 0)
+			t = 1;
+		if ((cps = (unsigned)(sent_bytes / t)) == 0)
+			cps = 1;
+		if (success) {
+			xm.sent_files++;
+			xm.sent_bytes += fsize;
+			if (zm.file_skipped)
+				lprintf(LOG_WARNING, "File Skipped");
+			else
+				lprintf(LOG_INFO, "Successful - Time: %s  CPS: %u"
+					    , seconds_to_str((uint)t, tmp)
+						, cps);
 
-			if ((t = time(NULL) - startfile) <= 0)
-				t = 1;
-			if ((cps = (unsigned)(sent_bytes / t)) == 0)
-				cps = 1;
-			if (success) {
-				xm.sent_files++;
-				xm.sent_bytes += fsize;
-				if (zm.file_skipped)
-					lprintf(LOG_WARNING, "File Skipped");
-				else
-					lprintf(LOG_INFO, "Successful - Time: %s  CPS: %u"
-					        , seconds_to_str((uint)t, tmp)
-						    , cps);
+			if (xm.total_files - xm.sent_files)
+				lprintf(LOG_INFO, "Remaining - Time: %s  Files: %lu  KBytes: %" PRId64
+					    , seconds_to_str((uint)((xm.total_bytes - xm.sent_bytes) / cps), tmp)
+					    , xm.total_files - xm.sent_files
+					    , (xm.total_bytes - xm.sent_bytes) / 1024
+					    );
+		} else
+			lprintf(LOG_WARNING, "File Transfer %s", zm.local_abort ? "Aborted" : "Failure");
 
-				if (xm.total_files - xm.sent_files)
-					lprintf(LOG_INFO, "Remaining - Time: %s  Files: %lu  KBytes: %" PRId64
-					        , seconds_to_str((uint)((xm.total_bytes - xm.sent_bytes) / cps), tmp)
-					        , xm.total_files - xm.sent_files
-					        , (xm.total_bytes - xm.sent_bytes) / 1024
-					        );
-			} else
-				lprintf(LOG_WARNING, "File Transfer %s", zm.local_abort ? "Aborted" : "Failure");
+		/* DSZLOG entry */
+		if (logfp) {
+			lprintf(LOG_DEBUG, "Updating DSZLOG: %s", dszlog);
+			fprintf(logfp, "%c %7" PRId64 " %5u bps %6u cps %3u errors %5u %4u "
+				    "%s -1\n"
+				    , (mode & ZMODEM && zm.file_skipped) ? 's'
+				    : success ? (mode & ZMODEM ? 'z':'S')
+				    : 'E'
+				    , sent_bytes
+				    , 115200 /* baud */
+				    , cps
+				    , mode & ZMODEM ? zm.errors : xm.errors
+				    , flows
+				    , mode & ZMODEM ? zm.block_size : xm.block_size
+				    , dszlog_filename(path));
+			fflush(logfp);
+		}
+		total_bytes += sent_bytes;
 
-			/* DSZLOG entry */
-			if (logfp) {
-				lprintf(LOG_DEBUG, "Updating DSZLOG: %s", dszlog);
-				fprintf(logfp, "%c %7" PRId64 " %5u bps %6u cps %3u errors %5u %4u "
-				        "%s -1\n"
-				        , (mode & ZMODEM && zm.file_skipped) ? 's'
-				        : success ? (mode & ZMODEM ? 'z':'S')
-				        : 'E'
-				        , sent_bytes
-				        , 115200 /* baud */
-				        , cps
-				        , mode & ZMODEM ? zm.errors : xm.errors
-				        , flows
-				        , mode & ZMODEM ? zm.block_size : xm.block_size
-				        , dszlog_filename(path));
-				fflush(logfp);
-			}
-			total_bytes += sent_bytes;
+		if (zm.local_abort) {
+			xm.cancelled = FALSE;
+			xmodem_cancel(&xm);
+			break;
+		}
 
-			if (zm.local_abort) {
-				xm.cancelled = FALSE;
-				xmodem_cancel(&xm);
-				break;
-			}
-
-			if (xm.cancelled || zm.cancelled || !success)
-				break;
-
-		} /* while(gi<(int)g.gl_pathc) */
-
-		if (gi < (int)g.gl_pathc) /* error occurred */
+		if (xm.cancelled || zm.cancelled || !success)
 			break;
 	}
 
