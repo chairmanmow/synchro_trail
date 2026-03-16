@@ -577,6 +577,7 @@ var Reader = function(options) {
 			state.thread_next_index = mb.get_msg_index(state.header.thread_next);
 			state.thread_first_index = mb.get_msg_index(state.header.thread_first);
 		}
+		log("Get_msg_body params" + JSON.stringify(settings.msg));
 		state.body = mb.get_msg_body(settings.msg);
 		var last = mb.last_msg;
 		mb.close();

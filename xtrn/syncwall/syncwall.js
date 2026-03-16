@@ -1,4 +1,4 @@
-load("ansiedit.js"); // Loads frame.js, tree.js, funclib.js, sbbsdefs.js
+load("load/ansiedit.js"); // Loads frame.js, tree.js, funclib.js, sbbsdefs.js
 load("json-client.js");
 load("event-timer.js");
 load("http.js");

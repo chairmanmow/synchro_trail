@@ -10,7 +10,7 @@ var Sauce = load({}, "sauce_lib.js");
 var Graphic = load({}, "graphic.js");
 var xbin = load({}, "xbin_lib.js");
 var cterm = load({}, "cterm_lib.js");
-
+// blah
 Frame.prototype.drawBorder = function (color) {
     var msg;
 	var theColor = color;
