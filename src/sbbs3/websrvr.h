@@ -37,8 +37,11 @@ typedef struct {
 #define WEB_DEFAULT_MAX_CGI_INACTIVITY  120 /* seconds */
 	uint max_concurrent_connections;
 #define WEB_DEFAULT_MAX_CON_CONN        10  /* 0=unlimited */
+	uint max_connects_per_period;            /* connection rate limiter, counted at accept() (0 = disabled) */
+	uint connect_rate_limit_period;          /* connection rate-limit time window, in seconds */
 	uint max_requests_per_period;
 	uint request_rate_limit_period;
+	struct rate_limit_settings rate_limit;
 	uint16_t port;
 	uint16_t tls_port;
 	str_list_t interfaces;

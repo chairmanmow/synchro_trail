@@ -116,7 +116,7 @@ struct atcode_format {
 /****************************************************************************/
 int sbbs_t::show_atcode(const char *instr, uint cols, JSObject* obj)
 {
-	char          str[128], str2[128], *tp, *sp, *p;
+	char          str[128], str2[512], *tp, *sp, *p;
 	int           len;
 	atcode_format fmt;
 	int           pmode = 0;
@@ -207,7 +207,7 @@ int sbbs_t::show_atcode(const char *instr, uint cols, JSObject* obj)
 				fmt.disp_len = (cols - 1) - term->column;
 		}
 	}
-	if (pmode & P_UTF8) {
+	if ((pmode & P_UTF8) && fmt.disp_len > 0) {  // Never split a multi-byte sequence
 		if (term->charset() == CHARSET_UTF8)
 			fmt.disp_len += strlen(cp) - utf8_str_total_width(cp, unicode_zerowidth);
 		else
@@ -225,7 +225,10 @@ int sbbs_t::show_atcode(const char *instr, uint cols, JSObject* obj)
 		} else
 			bprintf(pmode, "%.*s", fmt.disp_len, cp);
 	} else if (fmt.doubled) {
-		wide(cp);
+		if (pmode & P_UTF8)  // Already a multi-byte (potentially fullwidth) glyph
+			bputs(cp, pmode);
+		else
+			wide(cp);
 	} else if (fmt.zero_padded) {
 		int vlen = strlen(cp);
 		if (vlen < fmt.disp_len)
@@ -338,18 +341,79 @@ static bool code_match(const char* str, const char* code, char* param)
 	return result;
 }
 
-const char* sbbs_t::formatted_atcode(const char* sp, char* str, size_t maxlen)
+// Expand a Unicode code-point into 'str' (as UTF-8) or return the CP437/ASCII
+// fallback, mirroring the terminal-charset decision made by sbbs_t::outcp().
+static const char* unicode_str(bool utf8, enum unicode_codepoint codepoint, const char* fallback
+                               , char* str, size_t maxlen, int* pmode)
+{
+	if (maxlen < 1)
+		return nulstr;
+	if (!utf8) {
+		if (fallback == nullptr)
+			return nulstr;
+		strlcpy(str, fallback, maxlen);
+		return str;
+	}
+	int len = utf8_putc(str, maxlen - 1, codepoint);
+	if (len < 1)
+		return nulstr;
+	str[len] = '\0';
+	if (pmode != nullptr)
+		*pmode |= P_UTF8;
+	return str;
+}
+
+static const char* unicode_str(bool utf8, enum unicode_codepoint codepoint, char fallback
+                               , char* str, size_t maxlen, int* pmode)
+{
+	char tmp[2] = { fallback, '\0' };
+
+	return unicode_str(utf8, codepoint, tmp, str, maxlen, pmode);
+}
+
+// Expand 'src' into 'str' as fullwidth (double-width) text, mirroring sbbs_t::wide()
+static const char* wide_str(bool utf8, const char* src, char* str, size_t maxlen, int* pmode)
+{
+	size_t len = 0;
+
+	if (maxlen < 1)
+		return nulstr;
+	while (*src != '\0') {
+		if (utf8 && *src >= '!' && *src <= '~') {
+			int wlen = utf8_putc(str + len, maxlen - len - 1
+			                     , (enum unicode_codepoint)(UNICODE_FULLWIDTH_EXCLAMATION_MARK + (*src - '!')));
+			if (wlen < 1)
+				break;
+			len += wlen;
+			if (pmode != nullptr)
+				*pmode |= P_UTF8;
+		} else {
+			if (len + 2 >= maxlen)
+				break;
+			str[len++] = *src;
+			str[len++] = ' ';
+		}
+		src++;
+	}
+	str[len] = '\0';
+	return str;
+}
+
+const char* sbbs_t::formatted_atcode(const char* sp, char* str, size_t maxlen, int* pmode)
 {
 	char          tmp[256];
-	char          buf[256];
+	char          buf[512];
 	atcode_format fmt;
+	int           mode = 0;
 
 	SAFECOPY(tmp, sp);
 	char*         p = fmt.parse(tmp);
 
-	const char*   cp = atcode(tmp, buf, sizeof buf);
+	const char*   cp = atcode(tmp, buf, sizeof buf, &mode);
 	if (cp == nullptr)
 		return nullptr;
+	if (pmode != nullptr)
+		*pmode |= mode;
 
 	char          separated[128];
 	if (fmt.thousep)
@@ -365,6 +429,12 @@ const char* sbbs_t::formatted_atcode(const char* sp, char* str, size_t maxlen)
 	if (p == NULL || fmt.truncated == false || (fmt.width_specified == false && fmt.align == fmt.none))
 		fmt.disp_len = strlen(cp);
 
+	if (mode & P_UTF8) {
+		if (term->charset() == CHARSET_UTF8)
+			fmt.disp_len += strlen(cp) - utf8_str_total_width(cp, unicode_zerowidth);
+		else
+			fmt.disp_len += strlen(cp) - utf8_str_count_width(cp, /* min: */ 1, /* max: */ 2, unicode_zerowidth);
+	}
 	if (fmt.align == fmt.left)
 		snprintf(str, maxlen, "%-*.*s", fmt.disp_len, fmt.disp_len, cp);
 	else if (fmt.align == fmt.right)
@@ -503,66 +573,45 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strcmp(sp, "AT") == 0)
 		return "@";
 
+	bool utf8 = (term->charset() == CHARSET_UTF8);
+
 	if (strncmp(sp, "U+", 2) == 0) { // UNICODE
 		enum unicode_codepoint codepoint = (enum unicode_codepoint)strtoul(sp + 2, &tp, 16);
 		if (tp == NULL || *tp == 0)
-			outcp(codepoint, unicode_to_cp437(codepoint));
-		else if (*tp == ':')
-			outcp(codepoint, tp + 1);
-		else {
-			char fallback = (char)strtoul(tp + 1, NULL, 16);
-			if (*tp == ',')
-				outcp(codepoint, fallback);
-			else if (*tp == '!') {
-				char ch = unicode_to_cp437(codepoint);
-				if (ch != 0)
-					fallback = ch;
-				outcp(codepoint, fallback);
-			}
-			else
-				return NULL;  // Invalid @-code
+			return unicode_str(utf8, codepoint, unicode_to_cp437(codepoint), str, maxlen, pmode);
+		if (*tp == ':')
+			return unicode_str(utf8, codepoint, tp + 1, str, maxlen, pmode);
+		char fallback = (char)strtoul(tp + 1, NULL, 16);
+		if (*tp == ',')
+			return unicode_str(utf8, codepoint, fallback, str, maxlen, pmode);
+		if (*tp == '!') {
+			char ch = unicode_to_cp437(codepoint);
+			if (ch != 0)
+				fallback = ch;
+			return unicode_str(utf8, codepoint, fallback, str, maxlen, pmode);
 		}
-		return nulstr;
+		return NULL;  // Invalid @-code
 	}
 
-	if (strcmp(sp, "CHECKMARK") == 0) {
-		outcp(UNICODE_CHECK_MARK, CP437_CHECK_MARK);
-		return nulstr;
-	}
+	if (strcmp(sp, "CHECKMARK") == 0)
+		return unicode_str(utf8, UNICODE_CHECK_MARK, CP437_CHECK_MARK, str, maxlen, pmode);
+	if (strcmp(sp, "ELLIPSIS") == 0)
+		return unicode_str(utf8, UNICODE_HORIZONTAL_ELLIPSIS, "...", str, maxlen, pmode);
+	if (strcmp(sp, "COPY") == 0)
+		return unicode_str(utf8, UNICODE_COPYRIGHT_SIGN, "(C)", str, maxlen, pmode);
+	if (strcmp(sp, "SOUNDCOPY") == 0)
+		return unicode_str(utf8, UNICODE_SOUND_RECORDING_COPYRIGHT, "(P)", str, maxlen, pmode);
+	if (strcmp(sp, "REGISTERED") == 0)
+		return unicode_str(utf8, UNICODE_REGISTERED_SIGN, "(R)", str, maxlen, pmode);
+	if (strcmp(sp, "TRADEMARK") == 0)
+		return unicode_str(utf8, UNICODE_TRADE_MARK_SIGN, "(TM)", str, maxlen, pmode);
+	if (strcmp(sp, "DEGREE_C") == 0)
+		return unicode_str(utf8, UNICODE_DEGREE_CELSIUS, "\xF8""C", str, maxlen, pmode);
+	if (strcmp(sp, "DEGREE_F") == 0)
+		return unicode_str(utf8, UNICODE_DEGREE_FAHRENHEIT, "\xF8""F", str, maxlen, pmode);
 
-	if (strcmp(sp, "ELLIPSIS") == 0) {
-		outcp(UNICODE_HORIZONTAL_ELLIPSIS, "...");
-		return nulstr;
-	}
-	if (strcmp(sp, "COPY") == 0) {
-		outcp(UNICODE_COPYRIGHT_SIGN, "(C)");
-		return nulstr;
-	}
-	if (strcmp(sp, "SOUNDCOPY") == 0) {
-		outcp(UNICODE_SOUND_RECORDING_COPYRIGHT, "(P)");
-		return nulstr;
-	}
-	if (strcmp(sp, "REGISTERED") == 0) {
-		outcp(UNICODE_REGISTERED_SIGN, "(R)");
-		return nulstr;
-	}
-	if (strcmp(sp, "TRADEMARK") == 0) {
-		outcp(UNICODE_TRADE_MARK_SIGN, "(TM)");
-		return nulstr;
-	}
-	if (strcmp(sp, "DEGREE_C") == 0) {
-		outcp(UNICODE_DEGREE_CELSIUS, "\xF8""C");
-		return nulstr;
-	}
-	if (strcmp(sp, "DEGREE_F") == 0) {
-		outcp(UNICODE_DEGREE_FAHRENHEIT, "\xF8""F");
-		return nulstr;
-	}
-
-	if (strncmp(sp, "WIDE:", 5) == 0) {
-		wide(sp + 5);
-		return nulstr;
-	}
+	if (strncmp(sp, "WIDE:", 5) == 0)
+		return wide_str(utf8, sp + 5, str, maxlen, pmode);
 
 	if (!strcmp(sp, "VER"))
 		return VERSION;
@@ -624,7 +673,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return __TIME__;
 
 	if (code_match(sp, "UPTIME", &param)) {
-		return duration((uint)(xp_fast_timer64() - uptime), str, maxlen, param, DURATION_MINIMAL_VERBAL);
+		return duration((uint)(time(NULL) - uptime), str, maxlen, param, DURATION_MINIMAL_VERBAL);
 	}
 
 	if (!strcmp(sp, "SERVED")) {
@@ -668,7 +717,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strcmp(sp, "CHARSET") == 0)
 		return term->charset_str();
 
-	if (!strcmp(sp, "CONN"))
+	if (!strcmp(sp, "CONN") || !strcmp(sp, "CARRIER") || !strcmp(sp, "CONNECT")) // CARRIER (PCBoard), CONNECT (Wildcat!)
 		return connection;
 
 	if (!strcmp(sp, "SYSOP"))
@@ -846,11 +895,11 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strcmp(sp, "TMP") == 0)
 		return useron.tmpext;
 
-	if (strcmp(sp, "PROT") == 0) {
+	if (strcmp(sp, "PROT") == 0 || strcmp(sp, "PROLTR") == 0) { // PROLTR (PCBoard)
 		safe_snprintf(str, maxlen, "%c", useron.prot);
 		return str;
 	}
-	if (strcmp(sp, "PROTNAME") == 0 || strcmp(sp, "PROTOCOL") == 0)
+	if (strcmp(sp, "PROTNAME") == 0 || strcmp(sp, "PROTOCOL") == 0 || strcmp(sp, "PRODESC") == 0) // PRODESC (PCBoard)
 		return protname(useron.prot);
 
 	if (strcmp(sp, "SEX") == 0 || strcmp(sp, "GENDER") == 0) {
@@ -858,7 +907,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (!strcmp(sp, "QWKID"))
+	if (!strcmp(sp, "QWKID") || !strcmp(sp, "ID")) // ID (Wildcat!)
 		return cfg.sys_id;
 
 	if (!strcmp(sp, "TIME") || !strcmp(sp, "SYSTIME") || !strcmp(sp, "TIME_UTC")) {
@@ -1128,7 +1177,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return nulstr;
 	}
 
-	if (!strcmp(sp, "PAUSE") || !strcmp(sp, "MORE")) {
+	if (!strcmp(sp, "PAUSE") || !strcmp(sp, "MORE") || !strcmp(sp, "ENTER")) { // ENTER (Wildcat!)
 		pause();
 		return nulstr;
 	}
@@ -1246,7 +1295,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return str;
 	}
 
-	if (strcmp(sp, "USERNUM") == 0 || strcmp(sp, "UN") == 0) {
+	if (strcmp(sp, "USERNUM") == 0 || strcmp(sp, "UN") == 0 || strcmp(sp, "USERID") == 0) { // USERID (Wildcat!)
 		safe_snprintf(str, maxlen, "%u", useron.number);
 		return str;
 	}
@@ -1699,15 +1748,16 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	}
 
 	if (code_match(sp, "CDTLEFT", &param))
+		// coverity[INTEGER_OVERFLOW:SUPPRESS] available credits cannot exceed INT64_MAX in practice (~9 EiB)
 		return byte_count(static_cast<int64_t>(user_available_credits(&useron)), str, maxlen, param, BYTE_COUNT_VERBAL);
 
-	if (code_match(sp, "CREDITS", &param))
+	if (code_match(sp, "CREDITS", &param) || code_match(sp, "ACCBAL", &param)) // ACCBAL (Wildcat!)
 		return byte_count(useron.cdt, str, maxlen, param, BYTE_COUNT_BYTES);
 
 	if (code_match(sp, "FREECDT", &param))
 		return byte_count(useron.freecdt, str, maxlen, param, BYTE_COUNT_BYTES);
 
-	if (!strcmp(sp, "CONF")) {
+	if (!strcmp(sp, "CONF") || !strcmp(sp, "CONFNAME")) { // CONFNAME (PCBoard)
 		safe_snprintf(str, maxlen, "%s %s"
 		              , usrgrps ? cfg.grp[usrgrp[curgrp]]->sname :nulstr
 		              , usrgrps ? cfg.sub[usrsub[curgrp][cursub[curgrp]]]->sname : nulstr);
@@ -1869,7 +1919,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 	if (strcmp(sp, "LASTIP") == 0)
 		return useron.ipaddr;
 
-	if (!strcmp(sp, "CID") || !strcmp(sp, "IP"))
+	if (!strcmp(sp, "CID") || !strcmp(sp, "IP") || !strcmp(sp, "CALLID")) // CALLID (Wildcat!)
 		return cid;
 
 	if (!strcmp(sp, "LOCAL-IP"))
@@ -2372,7 +2422,7 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		return current_msg->id == NULL ? nulstr : current_msg->id;
 	if (!strcmp(sp, "MSG_REPLY_ID") && current_msg != NULL)
 		return current_msg->reply_id == NULL ? nulstr : current_msg->reply_id;
-	if (!strcmp(sp, "MSG_NUM") && current_msg != NULL) {
+	if ((!strcmp(sp, "MSG_NUM") || !strcmp(sp, "CURMSGNUM")) && current_msg != NULL) { // CURMSGNUM (PCBoard)
 		safe_snprintf(str, maxlen, "%lu", (ulong)current_msg->hdr.number);
 		return str;
 	}
@@ -2622,12 +2672,16 @@ const char* sbbs_t::atcode(const char* sp, char* str, size_t maxlen, int* pmode,
 		}
 		if (code_match(sp, "FILE_TIME_TO_DL", &param))
 			return duration(gettimetodl(&cfg, current_file, cur_cps), str, maxlen, param, DURATION_FULL_HHMMSS);
+	} else {
+		if (strcmp(sp, "FILE_NAME") == 0 || strcmp(sp, "FILE_WEB_PATH") == 0) {
+			safe_snprintf(str, maxlen, "%s.QWK", cfg.sys_id);
+			return str;
+		}
 	}
-
 	return get_text(sp);
 }
 
-char* sbbs_t::expand_atcodes(const char* src, char* buf, size_t size, const smbmsg_t* msg)
+char* sbbs_t::expand_atcodes(const char* src, char* buf, size_t size, const smbmsg_t* msg, int* pmode)
 {
 	char*           dst = buf;
 	char*           end = dst + (size - 1);
@@ -2642,10 +2696,10 @@ char* sbbs_t::expand_atcodes(const char* src, char* buf, size_t size, const smbm
 			char*       at = strchr(str, '@');
 			const char* sp = strchr(str, ' ');
 			if (at != NULL && (sp == NULL || sp > at)) {
-				char        tmp[128];
+				char        tmp[256];
 				*at = '\0';
 				src += strlen(str) + 2;
-				const char* p = formatted_atcode(str, tmp, sizeof tmp);
+				const char* p = formatted_atcode(str, tmp, sizeof tmp, pmode);
 				if (p != NULL)
 					dst += strlcpy(dst, p, end - dst);
 				continue;

@@ -1660,11 +1660,34 @@ int smb_new_msghdr(smb_t* smb, smbmsg_t* msg, int storage, bool new_msg)
 
 	idxlen = filelength(fileno(smb->sid_fp));
 	if (idxlen != (smb->status.total_msgs * idxreclen)) {
-		safe_snprintf(smb->last_error, sizeof(smb->last_error)
-		              , "%s index file length (%" PRIdOFF "), expected (%d)", __FUNCTION__
-		              , idxlen, (uint)(smb->status.total_msgs * idxreclen));
-		smb_unlocksmbhdr(smb);
-		return SMB_ERR_FILE_LEN;
+		off_t actual_msgs = idxlen / idxreclen;
+		off_t diff = actual_msgs - smb->status.total_msgs;
+		/* Allow auto-repair of small discrepancies (1-2 records) */
+		if (diff >= -2 && diff <= 1 && (idxlen % idxreclen) == 0) {
+			safe_snprintf(smb->last_error, sizeof(smb->last_error)
+			              , "%s index length mismatch (%" PRIdOFF " vs %d) auto-correcting total_msgs", __FUNCTION__
+			              , idxlen, (uint)(smb->status.total_msgs * idxreclen));
+			if (diff == 1) {
+				/* .sid is one record long — truncate the orphan */
+				if (chsize(fileno(smb->sid_fp), smb->status.total_msgs * idxreclen) != 0) {
+					smb_unlocksmbhdr(smb);
+					return SMB_ERR_WRITE;
+				}
+			} else {
+				/* .sid is 1-2 records short — reduce total_msgs to match */
+				smb->status.total_msgs = (uint32_t)actual_msgs;
+				if ((i = smb_putstatus(smb)) != SMB_SUCCESS) {
+					smb_unlocksmbhdr(smb);
+					return i;
+				}
+			}
+		} else {
+			safe_snprintf(smb->last_error, sizeof(smb->last_error)
+			              , "%s index file length (%" PRIdOFF "), expected (%d)", __FUNCTION__
+			              , idxlen, (uint)(smb->status.total_msgs * idxreclen));
+			smb_unlocksmbhdr(smb);
+			return SMB_ERR_FILE_LEN;
+		}
 	}
 
 	if (new_msg) {
@@ -1680,6 +1703,14 @@ int smb_new_msghdr(smb_t* smb, smbmsg_t* msg, int storage, bool new_msg)
 			return i;  /* error updating hash table */
 		}
 	}
+	/* A hyper-allocated msgbase can only be hyper-allocated: its allocation
+	 * files are not maintained, so the fast/self-pack allocators would return
+	 * an offset within (overwriting) existing headers. Protects smb_addvote,
+	 * smb_addpoll, smb_addpollclosure and any other caller passing a storage
+	 * mode (e.g. derived from the sub's configuration) that contradicts the
+	 * base's persisted allocation scheme (issue #1181). */
+	if (smb->status.attr & SMB_HYPERALLOC)
+		storage = SMB_HYPERALLOC;
 	if (storage != SMB_HYPERALLOC && (i = smb_open_ha(smb)) != SMB_SUCCESS) {
 		smb_unlocksmbhdr(smb);
 		return i;
@@ -1709,7 +1740,7 @@ int smb_new_msghdr(smb_t* smb, smbmsg_t* msg, int storage, bool new_msg)
 	if (i == SMB_SUCCESS && new_msg) {
 		smb->status.last_msg++;
 		smb->status.total_msgs++;
-		smb_putstatus(smb);
+		i = smb_putstatus(smb);
 	}
 	smb_unlocksmbhdr(smb);
 	return i;
@@ -1794,7 +1825,11 @@ int smb_init_idx(smb_t* smb, smbmsg_t* msg)
 
 bool smb_msg_is_from(smbmsg_t* msg, const char* name, enum smb_net_type net_type, const void* net_addr)
 {
-	if (stricmp(msg->from, name) != 0)
+	/* Guard against NULL operands: these fields can be absent in imported
+	 * messages (e.g. a QWK network vote record with no from-name), and passing
+	 * NULL to stricmp()/memcmp() is undefined (an assertion on the Win32 debug
+	 * CRT).  A missing identity simply doesn't match. */
+	if (msg->from == NULL || name == NULL || stricmp(msg->from, name) != 0)
 		return false;
 
 	if (msg->from_net.type != net_type)
@@ -1804,9 +1839,11 @@ bool smb_msg_is_from(smbmsg_t* msg, const char* name, enum smb_net_type net_type
 		case NET_NONE:
 			return true;
 		case NET_FIDO:
-			return memcmp(msg->from_net.addr, net_addr, sizeof(fidoaddr_t)) == 0;
+			return msg->from_net.addr != NULL && net_addr != NULL
+			       && memcmp(msg->from_net.addr, net_addr, sizeof(fidoaddr_t)) == 0;
 		default:
-			return stricmp(msg->from_net.addr, net_addr) == 0;
+			return msg->from_net.addr != NULL && net_addr != NULL
+			       && stricmp(msg->from_net.addr, net_addr) == 0;
 	}
 }
 

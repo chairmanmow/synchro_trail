@@ -146,10 +146,35 @@ endif
 FORCE:
 
 ifneq ($(GIT), NO)
+# A build from a DIRTY tree is marked, because otherwise the stamp describes a
+# commit the binary isn't:
+#
+#   clean:  GIT_HASH "a1009085"    GIT_DATE = that COMMIT's date
+#   dirty:  GIT_HASH "~a1009085"   GIT_DATE = the BUILD time
+#
+# The leading '~' is Vanilla Conquer's convention ("based on this commit, plus
+# uncommitted changes"). The DATE moves with it on purpose: the commit's timestamp
+# says nothing about a binary carrying newer, uncommitted code, and reporting it
+# invites the mistake of thinking a freshly-built program is an old one. With no
+# commit that describes the binary, the only honest date is when it was compiled.
+#
+# Dirtiness is judged from TRACKED changes under the trees that FEED the binary --
+# src/ and 3rdp/. 3rdp holds no loose sources, but it tracks the build patches
+# (3rdp/build), the tarballs they patch (3rdp/dist) and the prebuilt libs, all of
+# which end up in the binary, so a local change there must mark the build too.  Untracked files are ignored (a working install has hundreds, so
+# every tree would read dirty), as is tracked churn elsewhere -- LORD2 rewrites its
+# own xtrn/lord2/*.dat as people play it, and those bytes are in no binary.
+# Mirrored in ../build/gitinfo.cmake (the doors) and ../build/gitinfo.bat (MSVC).
 git_hash.h: FORCE ../../.git
-	$(QUIET)git log -1 HEAD --format="#define GIT_HASH \"%h\"" > $@.tmp
-	$(QUIET)git log -1 HEAD --format="#define GIT_DATE \"%cd\"" '--date=format-local:%b %d %Y %H:%M' >> $@.tmp
-	$(QUIET)git log -1 HEAD --format="#define GIT_TIME %cd" --date=unix >> $@.tmp
+	$(QUIET)if [ -n "`git status --porcelain -uno -- :/src :/3rdp`" ]; then \
+		echo "#define GIT_HASH \"~`git log -1 HEAD --format=%h`\"" > $@.tmp; \
+		date '+#define GIT_DATE "%b %d %Y %H:%M"' >> $@.tmp; \
+		date '+#define GIT_TIME %s' >> $@.tmp; \
+	else \
+		git log -1 HEAD --format="#define GIT_HASH \"%h\"" > $@.tmp; \
+		git log -1 HEAD --format="#define GIT_DATE \"%cd\"" '--date=format-local:%b %d %Y %H:%M' >> $@.tmp; \
+		git log -1 HEAD --format="#define GIT_TIME %cd" --date=unix >> $@.tmp; \
+	fi
 	$(QUIET)test -e $@ && diff $@.tmp $@ || cp $@.tmp $@
 	$(QUIET)rm -f $@.tmp
 
@@ -174,7 +199,7 @@ jsdoor: $(GIT_INFO) $(JS_DEPS) $(CRYPT_DEPS) $(XPDEV-MT_LIB) $(SMBLIB) $(UIFCLIB
 # Library dependencies
 $(SBBS):
 $(FTPSRVR): $(SMBLIB) 
-$(WEBSRVR):
+$(WEBSRVR): $(ENCODE_LIB)
 $(MAILSRVR):
 $(SERVICES): 
 $(SBBSCON): $(XPDEV-MT_LIB) $(SMBLIB)
@@ -182,26 +207,26 @@ $(SBBSMONO): $(XPDEV-MT_LIB) $(SMBLIB)
 $(JSEXEC): $(XPDEV-MT_LIB) $(SMBLIB)
 $(JSDOOR): $(XPDEV-MT_LIB)
 $(NODE): $(XPDEV_LIB)
-$(BAJA): $(XPDEV_LIB) $(SMBLIB)
-$(UNBAJA): $(XPDEV_LIB)
-$(FIXSMB): $(XPDEV_LIB) $(SMBLIB)
-$(CHKSMB): $(XPDEV_LIB) $(SMBLIB)
-$(SMBUTIL): $(XPDEV_LIB) $(SMBLIB)
-$(SBBSECHO): $(XPDEV_LIB) $(SMBLIB)
+$(BAJA): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB)
+$(UNBAJA): $(XPDEV_LIB) $(HASH_LIB)
+$(FIXSMB): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB) $(ENCODE_LIB)
+$(CHKSMB): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB) $(ENCODE_LIB)
+$(SMBUTIL): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB) $(ENCODE_LIB)
+$(SBBSECHO): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB) $(ENCODE_LIB)
 $(ECHOCFG): $(XPDEV-MT_LIB) $(SMBLIB) $(UIFCLIB-MT) $(CIOLIB-MT)
-$(ADDFILES): $(XPDEV_LIB) $(SMBLIB)
-$(FILELIST): $(XPDEV_LIB) $(SMBLIB)
-$(MAKEUSER): $(XPDEV_LIB)
+$(ADDFILES): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB) $(ENCODE_LIB)
+$(FILELIST): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB)
+$(MAKEUSER): $(XPDEV_LIB) $(HASH_LIB) $(ENCODE_LIB)
 $(ANS2ASC):
 $(ASC2ANS):
 $(PKTDUMP): $(XPDEV_LIB)
-$(SEXYZ): $(XPDEV-MT_LIB) $(SMBLIB)
-$(QWKNODES): $(XPDEV_LIB)
+$(SEXYZ): $(XPDEV-MT_LIB) $(SMBLIB) $(HASH_LIB)
+$(QWKNODES): $(XPDEV_LIB) $(HASH_LIB) $(ENCODE_LIB)
 $(SLOG): $(XPDEV_LIB)
-$(DELFILES): $(XPDEV_LIB) $(SMBLIB)
-$(DUPEFIND): $(XPDEV_LIB) $(SMBLIB)
+$(DELFILES): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB)
+$(DUPEFIND): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB)
 $(READSAUCE): $(XPDEV_LIB)
 $(TRASHMAN): $(XPDEV_LIB)
-$(UPGRADE_TO_V319): $(XPDEV_LIB) $(SMBLIB)
-$(UPGRADE_TO_V320): $(XPDEV_LIB)
+$(UPGRADE_TO_V319): $(XPDEV_LIB) $(SMBLIB) $(HASH_LIB) $(ENCODE_LIB)
+$(UPGRADE_TO_V320): $(XPDEV_LIB) $(HASH_LIB) $(ENCODE_LIB)
 

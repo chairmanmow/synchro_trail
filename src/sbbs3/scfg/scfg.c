@@ -21,6 +21,7 @@
 
 #define __COLORS
 #include "scfg.h"
+#include "scfgsrch.h"
 #undef BLINK
 #include "ciolib.h"
 #include "git_hash.h"
@@ -72,6 +73,10 @@ enum import_list_type determine_msg_list_type(const char* path)
 {
 	const char* fname = getfname(path);
 
+	if (wildmatchi(fname, "*subs.txt", /* path: */ false))
+		return IMPORT_LIST_TYPE_SUBS_TXT;
+	if (wildmatchi(fname, "*subs.ini", /* path: */ false))
+		return IMPORT_LIST_TYPE_SUBS_INI;
 	if (stricmp(fname, "areas.bbs") == 0)
 		return IMPORT_LIST_TYPE_SBBSECHO_AREAS_BBS;
 	if (stricmp(fname, "control.dat") == 0)
@@ -822,8 +827,10 @@ USAGE:
 			"\n"
 			"`More keys/combinations` and (`alternatives`):\n"
 			"\n"
-			"   ~ Ctrl-F ~    Find item in list\n"
-			"   ~ Ctrl-G ~    Find next item in list\n"
+			"   ~ Ctrl-F ~    Search every configuration option by name\n"
+			"               (within sub-menus, finds an item in the current list)\n"
+			"   ~ Ctrl-G ~    Same as Ctrl-F from this menu\n"
+			"               (within sub-menus, finds the next matching item)\n"
 			"   ~ Ctrl-U ~    Move up through list one screen-full (`PageUp`)\n"
 			"   ~ Ctrl-D ~    Move down through list one screen-full (`PageDown`)\n"
 			"   ~ Ctrl-B ~    Move to top of list or start of edited text (`Home`)\n"
@@ -836,8 +843,19 @@ USAGE:
 			"   ~ Ctrl-Z ~    Display help text (`F1`, `?`)\n"
 			"   ~ Backspace ~ Move back/up one menu (`ESC`) or erase previous character\n"
 		;
-		switch (uifc.list(WIN_ORG | WIN_MID | WIN_ESC | WIN_ACT, 0, 0, 30, &main_dflt, 0
-		                  , "Configure", mopt)) {
+		int main_sel = uifc.list(WIN_ORG | WIN_MID | WIN_ESC | WIN_ACT
+		                         | WIN_EXTKEYS | WIN_NOFIND
+		                         , 0, 0, 30, &main_dflt, 0
+		                         , "Configure", mopt);
+		if (main_sel == UIFC_EXTKEY(CTRL_F) || main_sel == UIFC_EXTKEY(CTRL_G)) {
+			/* Repaint the main menu in inactive (cyan) colors so the
+			 * sysop sees it backgrounded while the search overlay is up. */
+			uifc.list(WIN_ORG | WIN_MID | WIN_INACT | WIN_IMM
+			          , 0, 0, 30, &main_dflt, 0, "Configure", mopt);
+			scfg_option_search();
+			continue;
+		}
+		switch (main_sel) {
 			case 0:
 				if (!load_main_cfg(&cfg, error, sizeof(error))) {
 					SAFEPRINTF(errormsg, "ERROR: %s", error);
@@ -1910,7 +1928,7 @@ void getar(const char *desc, char *inar, const char* helpbuf)
 			case 0:
 				uifc.helpbuf =
 					"Key word   Symbol      Description\n"
-					"ÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄÄ\n"
+					"ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½\n"
 					"AND          &         More than one requirement (optional)\n"
 					"NOT          !         Logical negation (i.e. NOT EQUAL)\n"
 					"EQUAL        =         Equality required\n"

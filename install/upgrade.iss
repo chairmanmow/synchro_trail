@@ -2,13 +2,14 @@
 ; SEE THE DOCUMENTATION FOR DETAILS ON CREATING INNO SETUP SCRIPT FILES!
 
 #define MyAppName "Synchronet BBS Software"
-#define MyAppVersion "3.21c"
+#define MyAppVersion "3.22a"
 #define MyAppPublisher "Rob Swindell"
 #define MyAppURL "http://www.synchro.net/"
 #define MyAppSupportURL "http://wiki.synchro.net/howto:support"
 #define MyAppDownloadURL "http://www.synchro.net/download.html"
 #define release "release"
 #define source "c:\sbbs"
+#define vcpkg "c:\vcpkg\installed\x86-windows"
 
 [Setup]
 ; NOTE: The value of AppId uniquely identifies this application.
@@ -23,7 +24,7 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppSupportURL}
 AppUpdatesURL={#MyAppDownloadURL}
 AppCopyright=Copyright 2026 {#MyAppPublisher}
-VersionInfoVersion=3.21.2
+VersionInfoVersion=3.22.0
 AppMutex=sbbs_running,sbbsctrl_running
 DefaultDirName={sd}\sbbs
 DefaultGroupName={#MyAppName}
@@ -79,6 +80,8 @@ Source: "3rdp\win32.release\cryptlib\bin\cl32.dll";           DestDir: "{app}\ex
 Source: "3rdp\win32.release\libarchive\bin\archive.dll";      DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "3rdp\win32.release\zlib\bin\zlib1.dll";              DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "3rdp\win32.release\mosquitto\bin\mosquitto.dll";     DestDir: "{app}\exec";  Flags: ignoreversion
+; OpenSSL libcrypto for mail server DKIM signing (from vcpkg; skipped if a build without DKIM/OpenSSL support)
+Source: "{#vcpkg}\bin\libcrypto-3.dll";                       DestDir: "{app}\exec";  Flags: ignoreversion skipifsourcedoesntexist
 Source: "src\sexpots\{#release}\sexpots.exe";                 DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "s:\sbbs\exec\user.com";                              DestDir: "{app}\exec";  Flags: ignoreversion
 Source: "s:\sbbs\exec\mlabels.exe";                           DestDir: "{app}\exec";  Flags: ignoreversion
@@ -97,5 +100,5 @@ Filename: "{app}\ctrl\sbbs.ini"; Section: "Web";      Key: "RootDirectory"; Stri
 
 [Run]
 ; First time jsexec is run might not load config (when upgrading from v3.19 and earlier)
-Filename: "{app}\exec\jsexec"; Parameters: "-U -! update.js"
-Filename: "{app}\exec\jsexec"; Parameters: "-p update.js"
+Filename: "{app}\exec\jsexec"; Parameters: "-c{app}\ctrl -U -! update.js"
+Filename: "{app}\exec\jsexec"; Parameters: "-c{app}\ctrl -p update.js"

@@ -295,7 +295,7 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 	char     tmp[512];
 	int      i, j, file, linesquoted = 0;
 	int      length, qlen = 0, qtime = 0, ex_mode = 0;
-	uint     l;
+	long     l;
 	FILE*    stream;
 	FILE*    fp;
 	unsigned lines;
@@ -353,7 +353,7 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 
 		if (useron_xedit && cfg.xedit[useron_xedit - 1]->misc & QUOTEALL) {
 			if (!fexist(quotes_fname(useron_xedit, path, sizeof(path))))
-				fexistcase(path);
+				(void)fexistcase(path);
 			if ((stream = fnopen(NULL, path, O_RDONLY)) == NULL) {
 				errormsg(WHERE, ERR_OPEN, path, O_RDONLY);
 				free(buf);
@@ -391,7 +391,7 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 
 		else if (yesno(text[QuoteMessageQ])) {
 			if (!fexist(quotes_fname(useron_xedit, path, sizeof(path))))
-				fexistcase(path);
+				(void)fexistcase(path);
 			if ((stream = fnopen(&file, path, O_RDONLY)) == NULL) {
 				errormsg(WHERE, ERR_OPEN, path, O_RDONLY);
 				free(buf);
@@ -411,6 +411,13 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 			}
 
 			l = (long)ftell(stream);          /* l now points to start of message */
+			if (l < 0) {
+				errormsg(WHERE, ERR_LEN, msgtmp, 0);
+				fclose(stream);
+				close(file);
+				free(buf);
+				return false;
+			}
 
 			while (online) {
 				SAFEPRINTF(str, text[QuoteLinesPrompt], linesquoted ? text[Done] : text[All]);
@@ -565,7 +572,7 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 		}
 		else
 			l = 0;
-		while (l < (ulong)(cfg.level_linespermsg[useron_level] * MAX_LINE_LEN)) {
+		while (l < (long)(cfg.level_linespermsg[useron_level] * MAX_LINE_LEN)) {
 			c = getkey(0);
 			if (sys_status & SS_ABORT) {  /* Ctrl-C */
 				free(buf);
@@ -582,7 +589,7 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 		}
 		console &= ~CON_RAW_IN; // Turn off raw input mode in case the input exceeded length limit
 		buf[l] = 0;
-		if (l == (ulong)cfg.level_linespermsg[useron_level] * MAX_LINE_LEN)
+		if (l == (long)cfg.level_linespermsg[useron_level] * MAX_LINE_LEN)
 			bputs(text[OutOfBytes]);
 	}
 
@@ -618,6 +625,8 @@ bool sbbs_t::writemsg(const char *fname, const char *top, char *subj, int mode, 
 			ex_mode |= EX_NATIVE;
 		if (cfg.xedit[useron_xedit - 1]->misc & XTRN_SH)
 			ex_mode |= EX_SH;
+		if (cfg.xedit[useron_xedit - 1]->misc & XTRN_BIN)
+			ex_mode |= EX_BIN;
 
 		if (!draft_restored) {
 			if (!linesquoted)
@@ -1326,6 +1335,8 @@ bool sbbs_t::editfile(char *fname, uint maxlines, int wmode, const char* to, con
 			ex_mode |= EX_NATIVE;
 		if (cfg.xedit[useron_xedit - 1]->misc & XTRN_SH)
 			ex_mode |= EX_SH;
+		if (cfg.xedit[useron_xedit - 1]->misc & XTRN_BIN)
+			ex_mode |= EX_BIN;
 		if (cfg.xedit[useron_xedit - 1]->misc & XTRN_STDIO) {
 			ex_mode |= EX_STDIO;
 			if (cfg.xedit[useron_xedit - 1]->misc & WWIVCOLOR)
@@ -1837,8 +1848,8 @@ bool sbbs_t::movemsg(smbmsg_t* msg, int subnum)
 		return false;
 	}
 
-	fseek(smb.sdt_fp, msg->hdr.offset, SEEK_SET);
-	if (fread(buf, length, 1, smb.sdt_fp) != 1) {
+	if (fseek(smb.sdt_fp, msg->hdr.offset, SEEK_SET) != 0
+	    || fread(buf, length, 1, smb.sdt_fp) != 1) {
 		free(buf);
 		errormsg(WHERE, ERR_READ, smb.file, length);
 		return false;

@@ -141,7 +141,6 @@
 #include "conn.h"
 #include "fonts.h"
 #include "syncterm.h"
-#include "uifcinit.h"
 #include "window.h"
 extern int default_font;
 
@@ -338,12 +337,12 @@ pty_input_thread(void *args)
 			}
 		}
 		if (bufsz > 0) {
-			assert_pthread_mutex_lock(&(conn_inbuf.mutex));
+			assert_pthread_mutex_lock(&(conn_inbuf.write_mutex));
 			conn_buf_wait_free(&conn_inbuf, 1, 100);
 			buffered = conn_buf_put(&conn_inbuf, conn_api.rd_buf, bufsz);
 			memmove(conn_api.rd_buf, &conn_api.rd_buf[buffered], bufsz - buffered);
 			bufsz -= buffered;
-			assert_pthread_mutex_unlock(&(conn_inbuf.mutex));
+			assert_pthread_mutex_unlock(&(conn_inbuf.write_mutex));
 		}
 	}
 	conn_api.terminate = true;
@@ -368,12 +367,12 @@ pty_output_thread(void *args)
 	while (master != -1 && !conn_api.terminate) {
 		if (waitpid(child_pid, &status, WNOHANG))
 			break;
-		assert_pthread_mutex_lock(&(conn_outbuf.mutex));
+		assert_pthread_mutex_lock(&(conn_outbuf.read_mutex));
 		ret = 0;
 		wr = conn_buf_wait_bytes(&conn_outbuf, 1, 100);
 		if (wr) {
 			wr = conn_buf_get(&conn_outbuf, conn_api.wr_buf, conn_api.wr_buf_size);
-			assert_pthread_mutex_unlock(&(conn_outbuf.mutex));
+			assert_pthread_mutex_unlock(&(conn_outbuf.read_mutex));
 			sent = 0;
 			while (master != -1 && sent < wr && !conn_api.terminate) {
 				FD_ZERO(&wds);
@@ -397,7 +396,7 @@ pty_output_thread(void *args)
 			}
 		}
 		else {
-			assert_pthread_mutex_unlock(&(conn_outbuf.mutex));
+			assert_pthread_mutex_unlock(&(conn_outbuf.read_mutex));
 		}
 		if (ret == -1)
 			break;
@@ -416,7 +415,10 @@ pty_connect(struct bbslist *bbs)
 	int            cp;
 	int            i;
 
-	ts.c_iflag = TTYDEF_IFLAG;
+	/* A PTY provides reliable kernel backpressure, so start it without
+	 * software flow control.  Interactive programs may change these
+	 * settings after forkpty() returns. */
+	ts.c_iflag = TTYDEF_IFLAG & ~(IXON | IXOFF | IXANY);
 	ts.c_oflag = TTYDEF_OFLAG;
 	ts.c_lflag = TTYDEF_LFLAG;
 	ts.c_cflag = TTYDEF_CFLAG;
@@ -451,12 +453,6 @@ pty_connect(struct bbslist *bbs)
 #endif
 #ifdef VQUIT
 	ts.c_cc[VQUIT] = CQUIT;
-#endif
-#ifdef VSTART
-	ts.c_cc[VSTART] = CSTART;
-#endif
-#ifdef VSTOP
-	ts.c_cc[VSTOP] = CSTOP;
 #endif
 #ifdef VSUSP
 	ts.c_cc[VSUSP] = CSUSP;
@@ -503,28 +499,32 @@ pty_connect(struct bbslist *bbs)
 			        "%s"
 			        ":@7=\\E[K:AL=\\E[%%dL:DC=\\E[%%dP"
 			        ":DL=\\E[%%dM:DO=\\E[%%dB:F1=\\E[23~:F2=\\E[24~:IC=\\E[%%d@"
-			        ":LE=\\E[%%dD:MC=\\E[69h\\E[s\\E[69l"
-			        ":ML=\\E[?69h\\E[%%i%%d;0s\\E?69l:RA=\\E[7l:RI=\\E[%%dC"
+			        ":LE=\\E[%%dD:MC=\\E[?69h\\E[s\\E[?69l"
+			        ":ML=\\E[?69h\\E[%%i%%d;%%ds\\E[?69l"
+			        ":RA=\\E[?7l:RI=\\E[%%dC"
 			        ":SA=\\E[?7h:SF=\\E[%%dS:SR=\\E[%%dT:UP=\\E[%%dA"
-			        ":Zm=\\E[69h\\E[%%i%%d;%%ds\\E[69l:Zn=\\E[69h\\E[0;%%i%%ds\\E[69l"
 			        ":ac=}\\234|\\330{\\322+\\020,\\021l\\332m\\300k\\277j\\331u\\264t\\303v\\301w\\302q\\304x\\263n\\305`^Da\\260f\\370g\\361~\\371.^Y-^Xh\\261i^U0\\333y\\363z\\362"
 			        ":al=\\E[L:bl=^G:bt=\\E[Z:cb=\\E[1K:cd=\\E[J:ce=\\E[K"
 			        ":ch=\\E[%%i%%dG:cl=\\E[2J:cm=\\E[%%i%%d;%%dH:cr=^M"
-			        ":cs=\\E[%%i%%d;%%dr:ct=\\E[3g:dc=\\E[P:dl=\\E[M:do=^J:ec=\\E[%%dX"
-			        ":ho=\\E[H:i1=\\Ec:ic=\\E[@:k1=\\E[11~:k2=\\E[12~"
-			        ":k3=\\E[13~:k4=\\E[14~:k5=\\E[15~:k6=\\E[17~:k7=\\E[18~"
-			        ":k8=\\E[19~:k9=\\E[20~:k;=\\E[21~:kB=\\E[Z:kD=\\177:kN=\\E[U"
-			        ":kP=\\E[V:kb=^H:kd=\\E[B:kl=\\E[D:kr=\\E[C:ku=\\E[A:le=\\E[D"
-			        ":mb=\\E[5m:md=\\E[1m:me=\\E[m:nd=\\E[C:nw=^M^J"
-			        ":r1=\\E[c:rc=\\E[u"
-			        ":sc=\\E[s:se=\\E[m:sf=\\E[S:so=\\E[0;1;7m:sr=\\E[T:st=\\E[H"
-			        ":ta=^I:up=\\E[A:ve=\\E[?25h:vi=\\E[?25l:vs=\\E[?25h:"
+			        ":cs=\\E[%%i%%d;%%dr:ct=\\E[3g:cv=\\E[%%i%%dd"
+			        ":dc=\\E[P:dl=\\E[M:do=^J:ec=\\E[%%dX"
+			        ":ho=\\E[H:i1=\\Ec:ic=\\E[@"
+			        ":k1=\\E[11~:k2=\\E[12~:k3=\\E[13~:k4=\\E[14~:k5=\\E[15~"
+			        ":k6=\\E[17~:k7=\\E[18~:k8=\\E[19~:k9=\\E[20~:k;=\\E[21~"
+			        ":kB=\\E[Z:kD=\\177:kI=\\E[@:kN=\\E[U:kP=\\E[V"
+			        ":kb=^H:kd=\\E[B:kh=\\E[H:kl=\\E[D:kr=\\E[C:ku=\\E[A"
+			        ":le=\\E[D:mb=\\E[5m:md=\\E[1m:me=\\E[m:nd=\\E[C:nw=^M^J"
+			        ":op=\\E[39;49m:r1=\\Ec:rc=\\E[u"
+			        ":sc=\\E[s:se=\\E[m:sf=\\E[S:so=\\E[0;1;7m:sr=\\E[T:st=\\EH"
+			        ":ta=^I:u6=\\E[%%i%%d;%%dR:u7=\\E[6n:up=\\E[A"
+			        ":ve=\\E[?25h:vi=\\E[?25l:vs=\\E[?25h"
+			        ":Se=\\E[ q:Ss=\\E[%%d q:"
 			        ,
 			        ws.ws_col,
 			        ws.ws_row
 			        ,
 			        cio_api.options
-			        & CONIO_OPT_PALETTE_SETTING ? ":cc:Co#256:pa#32767:AB=\\E[48;5;%dm:AF=\\E[38;5;%dm" : ":Co#8:pa#64::AB=\\E[4%dm:AF=\\E[3%dm");
+			        & CONIO_OPT_PALETTE_SETTING ? ":cc:Co#256:pa#32767:AB=\\E[48;5;%dm:AF=\\E[38;5;%dm" : ":Co#8:pa#64:AB=\\E[4%dm:AF=\\E[3%dm");
 			setenv("TERMCAP", termcap, 1);
 			xp_asprintf_free(termcap);
 			termcap = xp_asprintf("%d", ws.ws_col);
@@ -568,6 +568,26 @@ pty_connect(struct bbslist *bbs)
 	_beginthread(pty_input_thread, 0, NULL);
 
 	return 0;
+}
+
+/* Push a new window size to the pty master; the kernel delivers
+ * SIGWINCH to the child session automatically.  Pixel args of -1
+ * map to 0 (unknown). */
+void
+pty_send_window_change(int text_cols, int text_rows,
+    int pixel_cols, int pixel_rows)
+{
+	if (master == -1)
+		return;
+	if (text_cols <= 0 || text_rows <= 0)
+		return;
+
+	struct winsize ws;
+	ws.ws_col    = (unsigned short)text_cols;
+	ws.ws_row    = (unsigned short)text_rows;
+	ws.ws_xpixel = (pixel_cols < 0) ? 0 : (unsigned short)pixel_cols;
+	ws.ws_ypixel = (pixel_rows < 0) ? 0 : (unsigned short)pixel_rows;
+	(void)ioctl(master, TIOCSWINSZ, &ws);
 }
 
 int

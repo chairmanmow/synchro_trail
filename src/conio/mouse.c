@@ -18,6 +18,7 @@
  ****************************************************************************/
 
 #include <math.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -48,19 +49,25 @@ enum {
 };
 
 struct in_mouse_event {
+	uint64_t epoch;
 	int	event;
 	int	x;
 	int	y;
 	int	x_res;
 	int	y_res;
+	int	kbmodifiers;
+	uint16_t hyperlink_id;
 	long long ts;
 	void	*nextevent;
 };
 
 struct out_mouse_event {
+	uint64_t epoch;
 	int event;
 	int bstate;
 	int kbsm;		/* Known button state mask */
+	int kbmodifiers;
+	uint16_t hyperlink_id;
 	int startx;
 	int starty;
 	int endx;
@@ -73,6 +80,7 @@ struct out_mouse_event {
 };
 
 struct mouse_state {
+	uint64_t epoch;
 	int	buttonstate;			/* Current state of all buttons - bitmap */
 	int	knownbuttonstatemask;	/* Mask of buttons that have done something since
 								 * We started watching... the rest are actually in
@@ -82,11 +90,15 @@ struct mouse_state {
 	int	button_y[5];
 	int	button_x_res[5];			/* Start X/Y position of the current state */
 	int	button_y_res[5];
+	int	button_kbmodifiers[5];	/* Keyboard modifiers at press time */
+	uint16_t button_hyperlink_id[5]; /* Hyperlink ID at press time */
 	long long timeout[5];	/* Button event timeouts (timespecs ie: time of expiry) */
 	int	curx;					/* Current X position */
 	int	cury;					/* Current Y position */
 	int	curx_res;					/* Current X position */
 	int	cury_res;					/* Current Y position */
+	int	cur_kbmodifiers;		/* Current keyboard modifiers */
+	uint16_t cur_hyperlink_id;	/* Current hyperlink ID */
 	int	events;					/* Currently enabled events */
 	int	click_timeout;			/* Timeout between press and release events for a click (ms) */
 	int	multi_timeout;			/* Timeout after a click for detection of multi clicks (ms) */
@@ -100,10 +112,12 @@ uint64_t mouse_events=0;
 pthread_once_t ciolib_mouse_initialized = PTHREAD_ONCE_INIT;
 static int ungot=0;
 pthread_mutex_t unget_mutex;
+static atomic_uint_fast64_t input_epoch = 1;
 
 void init_mouse(void)
 {
 	memset(&state,0,sizeof(state));
+	state.epoch=atomic_load(&input_epoch);
 	state.click_timeout=0;
 	state.multi_timeout=300;
 	listInit(&state.input,LINK_LIST_SEMAPHORE|LINK_LIST_MUTEX);
@@ -133,6 +147,11 @@ void mousestate_res(int *x, int *y, uint8_t *buttons)
 	if (buttons)
 		*buttons = (state.buttonstate & 0xff);
 	return;
+}
+
+uint64_t ciomouse_getevents(void)
+{
+	return mouse_events;
 }
 
 uint64_t ciomouse_setevents(uint64_t events)
@@ -165,23 +184,54 @@ uint64_t ciomouse_delevent(uint64_t event)
 	return mouse_events;
 }
 
-void ciomouse_gotevent(int event, int x, int y, int x_res, int y_res)
+void ciomouse_gotevent(int event, int x, int y, int x_res, int y_res, int kbmodifiers)
 {
 	struct in_mouse_event *ime;
 
 	pthread_once(&ciolib_mouse_initialized, init_mouse);
 	ime=(struct in_mouse_event *)malloc(sizeof(struct in_mouse_event));
 	if(ime) {
+		ime->epoch=atomic_load(&input_epoch);
 		ime->ts=MSEC_CLOCK();
 		ime->event=event;
 		ime->x=x;
 		ime->y=y;
 		ime->x_res=x_res;
 		ime->y_res=y_res;
+		ime->kbmodifiers=kbmodifiers;
+		ime->hyperlink_id=0;
+		if (x >= 1 && y >= 1) {
+			struct vmem_cell cell;
+			if (ciolib_vmem_gettext(x, y, x, y, &cell))
+				ime->hyperlink_id = cell.hyperlink_id;
+		}
 		ime->nextevent=NULL;
 
 		listPushNode(&state.input,ime);
 	}
+}
+
+void ciomouse_reset_input(void)
+{
+	pthread_once(&ciolib_mouse_initialized, init_mouse);
+	atomic_fetch_add(&input_epoch, 1);
+}
+
+static void reset_mouse_state(uint64_t epoch)
+{
+	state.buttonstate=0;
+	state.knownbuttonstatemask=0;
+	memset(state.button_state,0,sizeof(state.button_state));
+	memset(state.button_x,0,sizeof(state.button_x));
+	memset(state.button_y,0,sizeof(state.button_y));
+	memset(state.button_x_res,0,sizeof(state.button_x_res));
+	memset(state.button_y_res,0,sizeof(state.button_y_res));
+	memset(state.button_kbmodifiers,0,sizeof(state.button_kbmodifiers));
+	memset(state.button_hyperlink_id,0,sizeof(state.button_hyperlink_id));
+	memset(state.timeout,0,sizeof(state.timeout));
+	state.cur_kbmodifiers=0;
+	state.cur_hyperlink_id=0;
+	state.epoch=epoch;
 }
 
 void add_outevent(int event, int x, int y, int xres, int yres)
@@ -194,10 +244,13 @@ void add_outevent(int event, int x, int y, int xres, int yres)
 	ome=(struct out_mouse_event *)malloc(sizeof(struct out_mouse_event));
 
 	if(ome) {
+		ome->epoch=state.epoch;
 		but=CIOLIB_BUTTON_NUMBER(event);
 		ome->event=event;
 		ome->bstate=state.buttonstate;
 		ome->kbsm=state.knownbuttonstatemask;
+		ome->kbmodifiers=but ? state.button_kbmodifiers[but-1] : state.cur_kbmodifiers;
+		ome->hyperlink_id=but ? state.button_hyperlink_id[but-1] : state.cur_hyperlink_id;
 		ome->startx=but?state.button_x[but-1]:state.curx;
 		ome->starty=but?state.button_y[but-1]:state.cury;
 		ome->endx=x;
@@ -278,6 +331,11 @@ void ciolib_mouse_thread(void *data)
 	SetThreadName("Mouse");
 	pthread_once(&ciolib_mouse_initialized, init_mouse);
 	while(1) {
+		uint64_t epoch=atomic_load(&input_epoch);
+		if(state.epoch!=epoch) {
+			reset_mouse_state(epoch);
+			timeout_button=0;
+		}
 		timedout=0;
 		if(timeout_button) {
 			delay=state.timeout[timeout_button-1]-MSEC_CLOCK();
@@ -340,6 +398,12 @@ void ciolib_mouse_thread(void *data)
 				YIELD();
 				continue;
 			}
+			if(in->epoch!=atomic_load(&input_epoch)) {
+				free(in);
+				continue;
+			}
+			if(state.epoch!=in->epoch)
+				reset_mouse_state(in->epoch);
 			but=CIOLIB_BUTTON_NUMBER(in->event);
 			if (in->x < 0)
 				in->x = state.curx;
@@ -426,6 +490,8 @@ void ciolib_mouse_thread(void *data)
 							state.button_y[but-1]=in->y;
 							state.button_x_res[but-1]=in->x_res;
 							state.button_y_res[but-1]=in->y_res;
+							state.button_kbmodifiers[but-1]=in->kbmodifiers;
+							state.button_hyperlink_id[but-1]=in->hyperlink_id;
 							state.timeout[but-1]=MSEC_CLOCK()+state.click_timeout;
 							if(state.timeout[but-1]==0)
 								state.timeout[but-1]=1;
@@ -509,6 +575,8 @@ void ciolib_mouse_thread(void *data)
 			state.cury=in->y;
 			state.curx_res=in->x_res;
 			state.cury_res=in->y_res;
+			state.cur_kbmodifiers=in->kbmodifiers;
+			state.cur_hyperlink_id=in->hyperlink_id;
 
 			free(in);
 		}
@@ -532,6 +600,26 @@ void ciolib_mouse_thread(void *data)
 	}
 }
 
+static bool mouse_output_current(void)
+{
+	struct out_mouse_event *out;
+	bool current;
+
+	listLock(&state.output);
+	if(state.output.first==NULL) {
+		listUnlock(&state.output);
+		return false;
+	}
+	out=state.output.first->data;
+	current=out!=NULL && out->epoch==atomic_load(&input_epoch);
+	if(!current)
+		out=listShiftNode(&state.output);
+	listUnlock(&state.output);
+	if(!current)
+		free(out);
+	return current;
+}
+
 int mouse_trywait(void)
 {
 	int	result;
@@ -539,10 +627,14 @@ int mouse_trywait(void)
 	pthread_once(&ciolib_mouse_initialized, init_mouse);
 	while(1) {
 		result=listSemTryWait(&state.output);
+		if(!result)
+			return result;
 		assert_pthread_mutex_lock(&unget_mutex);
 		if(ungot==0) {
 			assert_pthread_mutex_unlock(&unget_mutex);
-			return(result);
+			if(mouse_output_current())
+				return(result);
+			continue;
 		}
 		ungot--;
 		assert_pthread_mutex_unlock(&unget_mutex);
@@ -556,10 +648,14 @@ int mouse_wait(void)
 	pthread_once(&ciolib_mouse_initialized, init_mouse);
 	while(1) {
 		result=listSemWait(&state.output);
+		if(!result)
+			return result;
 		assert_pthread_mutex_lock(&unget_mutex);
 		if(ungot==0) {
 			assert_pthread_mutex_unlock(&unget_mutex);
-			return(result);
+			if(mouse_output_current())
+				return(result);
+			continue;
 		}
 		ungot--;
 		assert_pthread_mutex_unlock(&unget_mutex);
@@ -568,8 +664,20 @@ int mouse_wait(void)
 
 int mouse_pending(void)
 {
+	int count=0;
+	uint64_t epoch;
+	list_node_t *node;
+
 	pthread_once(&ciolib_mouse_initialized, init_mouse);
-	return(listCountNodes(&state.output));
+	epoch=atomic_load(&input_epoch);
+	listLock(&state.output);
+	for(node=state.output.first;node!=NULL;node=node->next) {
+		struct out_mouse_event *out=node->data;
+		if(out!=NULL && out->epoch==epoch)
+			count++;
+	}
+	listUnlock(&state.output);
+	return(count);
 }
 
 int ciolib_getmouse(struct mouse_event *mevent)
@@ -577,15 +685,21 @@ int ciolib_getmouse(struct mouse_event *mevent)
 	int retval=0;
 
 	pthread_once(&ciolib_mouse_initialized, init_mouse);
-	if(listCountNodes(&state.output)) {
+	while(listCountNodes(&state.output)) {
 		struct out_mouse_event *out;
 		out=listShiftNode(&state.output);
 		if(out==NULL)
 			return(-1);
+		if(out->epoch!=atomic_load(&input_epoch)) {
+			free(out);
+			continue;
+		}
 		if(mevent != NULL) {
 			mevent->event=out->event;
 			mevent->bstate=out->bstate;
 			mevent->kbsm=out->kbsm;
+			mevent->kbmodifiers=out->kbmodifiers;
+			mevent->hyperlink_id=out->hyperlink_id;
 			mevent->startx=out->startx;
 			mevent->starty=out->starty;
 			mevent->endx=out->endx;
@@ -596,23 +710,37 @@ int ciolib_getmouse(struct mouse_event *mevent)
 			mevent->endy_res=out->endy_res;
 		}
 		free(out);
+		return(retval);
 	}
-	else {
-		fprintf(stderr,"WARNING: attempt to get a mouse key when none pending!\n");
-		if(mevent != NULL)
-			memset(mevent,0,sizeof(struct mouse_event));
-		retval=-1;
-	}
+	fprintf(stderr,"WARNING: attempt to get a mouse key when none pending!\n");
+	if(mevent != NULL)
+		memset(mevent,0,sizeof(struct mouse_event));
+	retval=-1;
 	return(retval);
 }
 
 int ciolib_ungetmouse(struct mouse_event *mevent)
 {
-	struct mouse_event *me;
+	struct out_mouse_event *me;
 
-	if((me=(struct mouse_event *)malloc(sizeof(struct mouse_event)))==NULL)
+	pthread_once(&ciolib_mouse_initialized, init_mouse);
+	if((me=malloc(sizeof(*me)))==NULL)
 		return(-1);
-	memcpy(me,mevent,sizeof(struct mouse_event));
+	me->epoch=atomic_load(&input_epoch);
+	me->event=mevent->event;
+	me->bstate=mevent->bstate;
+	me->kbsm=mevent->kbsm;
+	me->kbmodifiers=mevent->kbmodifiers;
+	me->hyperlink_id=mevent->hyperlink_id;
+	me->startx=mevent->startx;
+	me->starty=mevent->starty;
+	me->endx=mevent->endx;
+	me->endy=mevent->endy;
+	me->startx_res=mevent->startx_res;
+	me->starty_res=mevent->starty_res;
+	me->endx_res=mevent->endx_res;
+	me->endy_res=mevent->endy_res;
+	me->nextevent=NULL;
 	assert_pthread_mutex_lock(&unget_mutex);
 	if(listInsertNode(&state.output,me)==NULL) {
 		assert_pthread_mutex_unlock(&unget_mutex);

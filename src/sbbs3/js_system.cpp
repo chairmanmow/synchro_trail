@@ -1523,7 +1523,7 @@ js_filter_ip(JSContext *cx, uintN argc, jsval *arglist)
 	if ((sys = (js_system_private_t*)js_GetClassPrivate(cx, obj, &js_system_class)) == NULL)
 		return JS_FALSE;
 
-	for (i = 0; i < argc && fname == NULL; i++) {
+	for (i = 0; i < argc; i++) {
 		if (JSVAL_IS_NUMBER(argv[i])) {
 			JS_ValueToInt32(cx, argv[i], &duration);
 			continue;
@@ -1540,6 +1540,8 @@ js_filter_ip(JSContext *cx, uintN argc, jsval *arglist)
 			free(p);
 			return JS_FALSE;
 		}
+		/* Assign each string to the next unset parameter; ignore any extra
+		   strings so a trailing numeric duration argument is still parsed. */
 		if (prot == NULL)
 			prot = p;
 		else if (reason == NULL)
@@ -1550,8 +1552,10 @@ js_filter_ip(JSContext *cx, uintN argc, jsval *arglist)
 			ip_addr = p;
 		else if (from == NULL)
 			from = p;
-		else
+		else if (fname == NULL)
 			fname = p;
+		else
+			free(p);
 	}
 	rc = JS_SUSPENDREQUEST(cx);
 	ret = filter_ip(sys->cfg, prot, reason, host, ip_addr, from, fname, duration);
@@ -1618,7 +1622,7 @@ js_get_node(JSContext *cx, uintN argc, jsval *arglist)
 	JS_DefineProperty(cx, nodeobj, "connection", INT_TO_JSVAL((int)node.connection), NULL, NULL, JSPROP_ENUMERATE);
 	JS_DefineProperty(cx, nodeobj, "misc", INT_TO_JSVAL((int)node.misc), NULL, NULL, JSPROP_ENUMERATE);
 	JS_DefineProperty(cx, nodeobj, "aux", INT_TO_JSVAL((int)node.aux), NULL, NULL, JSPROP_ENUMERATE);
-	JS_DefineProperty(cx, nodeobj, "extaux", INT_TO_JSVAL((int)node.extaux), NULL, NULL, JSPROP_ENUMERATE);
+	JS_DefineProperty(cx, nodeobj, "extaux", UINT_TO_JSVAL(node.extaux), NULL, NULL, JSPROP_ENUMERATE);
 	JS_SET_RVAL(cx, arglist, OBJECT_TO_JSVAL(nodeobj));
 	return JS_TRUE;
 }
@@ -1712,7 +1716,7 @@ js_get_telegram(JSContext *cx, uintN argc, jsval *arglist)
 	JSObject *           obj = JS_THIS_OBJECT(cx, arglist);
 	jsval *              argv = JS_ARGV(cx, arglist);
 	char*                buf;
-	int32                usernumber = 1;
+	int32                usernumber = 0;
 	JSString*            js_str;
 	jsrefcount           rc;
 
@@ -1726,8 +1730,6 @@ js_get_telegram(JSContext *cx, uintN argc, jsval *arglist)
 		return JS_FALSE;
 
 	JS_ValueToInt32(cx, argv[0], &usernumber);
-	if (usernumber < 1)
-		usernumber = 1;
 
 	rc = JS_SUSPENDREQUEST(cx);
 	buf = getsmsg(sys->cfg, usernumber);
@@ -2171,7 +2173,7 @@ js_chkpassword(JSContext *cx, uintN argc, jsval *arglist)
 {
 	JSObject * obj = JS_THIS_OBJECT(cx, arglist);
 	jsval *    argv = JS_ARGV(cx, arglist);
-	char*      str;
+	char*      str = nullptr;
 	jsrefcount rc;
 
 	if (js_argcIsInsufficient(cx, argc, 1))
@@ -2181,6 +2183,10 @@ js_chkpassword(JSContext *cx, uintN argc, jsval *arglist)
 		return JS_TRUE;
 	}
 	JSVALUE_TO_ASTRING(cx, argv[0], str, (LEN_ALIAS > LEN_NAME)?LEN_ALIAS + 2:LEN_NAME + 2, NULL);
+	if (str == nullptr) {
+		JS_SET_RVAL(cx, arglist, JSVAL_FALSE);
+		return JS_TRUE;
+	}
 
 	js_system_private_t* sys;
 	if ((sys = (js_system_private_t*)js_GetClassPrivate(cx, obj, &js_system_class)) == NULL)
@@ -3128,7 +3134,7 @@ JSClass js_system_class = {
 };
 
 JSObject* js_CreateSystemObject(JSContext* cx, JSObject* parent
-                                , scfg_t* cfg, int64_t uptime, const char* host_name, const char* socklib_desc, struct mqtt* mqtt)
+                                , scfg_t* cfg, time_t uptime, const char* host_name, const char* socklib_desc, struct mqtt* mqtt)
 {
 	jsval     val;
 	JSObject* sysobj;

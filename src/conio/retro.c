@@ -50,7 +50,7 @@ static const struct keyvals keyval[] =
 	{RETROK_LEFTBRACKET, '[', '{', 0x1b, 0x1a00},
 	{RETROK_BACKSLASH, '\\', '|', 0x1c, 0x2b00},
 	{RETROK_RIGHTBRACKET, ']', '}', 0x1d, 0x1b00},
-	{RETROK_BACKQUOTE, '`', '~', 0, 0x2900},
+	{RETROK_BACKQUOTE, '`', '~', 0x29E0, 0x2900},  /* Ctrl+` = CIO_KEY_WREN_CONSOLE */
 
 	{RETROK_a, 'a', 'A', 0x01, 0x1e00},
 	{RETROK_b, 'b', 'B', 0x02, 0x3000},
@@ -79,7 +79,7 @@ static const struct keyvals keyval[] =
 	{RETROK_y, 'y', 'Y', 0x19, 0x1500},
 	{RETROK_z, 'z', 'Z', 0x1a, 0x2c00},
 
-	{RETROK_DELETE, CIO_KEY_DC, CIO_KEY_SHIFT_DC, CIO_KEY_CTRL_DC, CIO_KEY_CTRL_IC},
+	{RETROK_DELETE, CIO_KEY_DC, CIO_KEY_SHIFT_DC, CIO_KEY_CTRL_DC, CIO_KEY_ALT_DC},
 
 	{RETROK_KP0, '0', 0x5200, 0x9200, 0},
 	{RETROK_KP1, '1', 0x4f00, 0x7500, 0},
@@ -427,4 +427,3 @@ retro_textmode(int mode)
 }
 
 ////////
-

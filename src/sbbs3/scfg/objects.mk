@@ -15,6 +15,7 @@ OBJS =	$(MTOBJODIR)/scfg$(OFILE)\
 	$(MTOBJODIR)/scfgxfr1$(OFILE)\
 	$(MTOBJODIR)/scfgxfr2$(OFILE)\
 	$(MTOBJODIR)/scfgchat$(OFILE)\
+	$(MTOBJODIR)/scfgsrch$(OFILE)\
 	$(MTOBJODIR)/scfgsave$(OFILE)\
 	$(MTOBJODIR)/scfglib1$(OFILE)\
 	$(MTOBJODIR)/scfglib2$(OFILE)\
@@ -28,6 +29,7 @@ OBJS =	$(MTOBJODIR)/scfg$(OFILE)\
 	$(MTOBJODIR)/nopen$(OFILE)\
 	$(MTOBJODIR)/dat_rec$(OFILE)\
 	$(MTOBJODIR)/userdat$(OFILE)\
+	$(MTOBJODIR)/getmail$(OFILE)\
 	$(MTOBJODIR)/trash$(OFILE)\
 	$(MTOBJODIR)/getstats$(OFILE)\
 	$(MTOBJODIR)/msgdate$(OFILE)\

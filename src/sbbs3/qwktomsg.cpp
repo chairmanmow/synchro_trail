@@ -51,7 +51,7 @@ static bool qwk_parse_header_list(sbbs_t* sbbs, uint confnum, smbmsg_t* msg, str
 		xpDateTime_t dt = isoDateTimeStr_parse(p);
 
 		msg->hdr.when_written = smb_when(xpDateTime_to_localtime(dt), dt.zone);
-		sscanf(p, "%*s %s", zone);
+		sscanf(p, "%*s %4s", zone);
 		if (zone[0])
 			msg->hdr.when_written.zone = (ushort)strtoul(zone, NULL, 16);
 	}
@@ -225,7 +225,7 @@ bool sbbs_t::qwk_new_msg(uint confnum, smbmsg_t* msg, char* hdrblk, int offset, 
 /* Does *not* free the msgmem												*/
 /****************************************************************************/
 bool sbbs_t::qwk_import_msg(FILE *qwk_fp, char *hdrblk, uint blocks
-                            , char fromhub, smb_t* smb
+                            , uint fromhub, smb_t* smb
                             , uint touser, smbmsg_t* msg, bool* dupe)
 {
 	char*      body;
@@ -299,6 +299,9 @@ bool sbbs_t::qwk_import_msg(FILE *qwk_fp, char *hdrblk, uint blocks
 		errormsg(WHERE, ERR_READ, "QWK msg blocks", (blocks - 1) * QWK_BLOCK_LEN);
 		return false;
 	}
+	/* Make the sentinel NUL explicit (calloc already zeroed it) so static
+	 * analyzers see that downstream strchr/strlen/strlcpy on qwkbuf is bounded. */
+	qwkbuf[(blocks - 1) * QWK_BLOCK_LEN] = '\0';
 
 	bodylen = 0;
 	if ((body = (char *)malloc((blocks - 1L) * QWK_BLOCK_LEN * 2L)) == NULL) {

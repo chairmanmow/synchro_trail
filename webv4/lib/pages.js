@@ -27,6 +27,16 @@ function webCtrlTest(ini, filename) {
 	return ret;
 }
 
+// file_getext() returns undefined for a path with no extension
+function fileExt(path) {
+	const ext = file_getext(path);
+	return ext === undefined ? '' : ext.toUpperCase();
+}
+
+function isPageFile(path) {
+	return file_exists(path) && !file_isdir(path);
+}
+
 function getCtrlLine(file) {
 
     const ret = {
@@ -45,7 +55,7 @@ function getCtrlLine(file) {
 
     var ctrl = '';
 	const f = new File(file);
-	const ext = file_getext(file).toUpperCase();
+	const ext = fileExt(file);
 	switch (ext) {
 		case '.JS':
 		case '.SSJS':
@@ -93,15 +103,17 @@ function getCtrlLine(file) {
 
 }
 
+// Returns the target URL of a .link page, or null if there isn't a usable one
 function getExternalLink(fn) {
 	const p = getPagePath(fn);
-	if (p === null) throw new Error('Invalid page ' + fn + ',,,' + settings.web_mods_pages);
+	if (p === null) return null;
 	const f = new File(p);
-	f.open('r');
-	const c = f.read().split(',');
+	if (!f.open('r')) return null;
+	const c = f.read().split(/[\r\n]/)[0].split(',');	// first line only, as in _getPageList()
 	f.close();
-	if (c.length < 2) throw new Error('Invalid page ' + fn + ',,,' + settings.web_mods_pages);
-	return c[0];
+	if (c.length < 2) return null;
+	const url = truncsp(skipsp(c[0]));
+	return url === '' ? null : url;
 }
 
 function _getPageList(dir) {
@@ -128,7 +140,7 @@ function _getPageList(dir) {
             return a;
         }
 
-		const ext = file_getext(c).toUpperCase();
+		const ext = fileExt(c);
         if (c.search(/(\.xjs\.ssjs|webctrl\.ini)$/i) >= 0) return a;
         if (['.HTML', '.SSJS', '.XJS', '.TXT', '.LINK'].indexOf(ext) < 0) return a;
 
@@ -200,10 +212,11 @@ function getPageList() {
 
 function getPagePath(page) {
 	var ret = null;
-	if (file_exists(settings.web_mods_pages + page)) {
+	if (page.search(/[*?]/) >= 0) return ret;	// file_exists() globs
+	if (isPageFile(settings.web_mods_pages + page)) {
 		ret = fullpath(settings.web_mods_pages + page);
 		if (ret.indexOf(settings.web_mods_pages) != 0) ret = null;
-	} else if (file_exists(settings.web_pages + page)) {
+	} else if (isPageFile(settings.web_pages + page)) {
 		ret = fullpath(settings.web_pages + page);
 		if (ret.indexOf(settings.web_pages) != 0) ret = null;
 	}
@@ -217,7 +230,7 @@ function getPage(page) {
 	var p = getPagePath(page);
 	if (p === null) return ret;
 
-	var ext = file_getext(p).toUpperCase();
+	var ext = fileExt(p);
 
 	if (user.alias != settings.guest) {
 		var ctrl = getCtrlLine(p);

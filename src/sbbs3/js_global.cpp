@@ -87,7 +87,7 @@ bool js_argvIsNullOrVoid(JSContext* cx, jsval* args, uintN index)
 static JSBool js_system_get(JSContext *cx, JSObject *obj, jsid id, jsval *vp)
 {
 	jsval     idval;
-	char      err[256];
+	char      err[SOCKET_STRERROR_BUFLEN];
 	jsint     tiny;
 	JSString* js_str;
 
@@ -802,7 +802,7 @@ js_require(JSContext *cx, uintN argc, jsval *arglist)
 
 	if (!JS_IsExceptionPending(cx)) {
 		if (!JS_HasProperty(cx, exec_obj, property, &found) || !found) {
-			if (js_IsTerminated(cx, exec_obj)) {
+			if (!js_IsTerminated(cx, exec_obj)) {
 				JSVALUE_TO_MSTRING(cx, argv[fnarg], filename, NULL);
 				JS_ReportError(cx, "symbol '%s' not defined by script '%s'", property, filename);
 			}
@@ -2264,6 +2264,20 @@ js_html_encode(JSContext *cx, uintN argc, jsval *arglist)
 							break;
 						case 'I':
 							blink = TRUE;
+							break;
+						case 'E': /* Bright background (iCE colors - TODO) */
+							break;
+						case 'U':
+							fg = p->cfg->color[tmpbuf[i + 1] == 'u' ? clr_userlow : clr_userhigh] & 0x0f;
+							bold = (fg & HIGH);
+							bg = p->cfg->color[tmpbuf[i + 1] == 'u' ? clr_userlow : clr_userhigh] >> 4;
+							blink = (bg & HIGH);
+							break;
+						case 'V':
+							fg = p->cfg->color[tmpbuf[i + 1] == 'v' ? clr_mnelow : clr_mnehigh] & 0x0f;
+							bold = (fg & HIGH);
+							bg = p->cfg->color[tmpbuf[i + 1] == 'v' ? clr_mnelow : clr_mnehigh] >> 4;
+							blink = (bg & HIGH);
 							break;
 						case '+':
 							if (attr_sp < (int)sizeof(attr_stack))
@@ -4232,7 +4246,7 @@ js_socket_strerror(JSContext *cx, uintN argc, jsval *arglist)
 	if (!JS_ValueToInt32(cx, argv[0], &err))
 		return JS_FALSE;
 
-	char      str[256];
+	char      str[SOCKET_STRERROR_BUFLEN];
 	JSString* js_str;
 	if ((js_str = JS_NewStringCopyZ(cx, socket_strerror(err, str, sizeof(str)))) == NULL)
 		return JS_FALSE;
@@ -5079,8 +5093,13 @@ static jsSyncMethodSpec js_global_functions[] = {
 	 , 311},
 	{"file_cfgname",    js_cfgfname,        2,  JSTYPE_STRING,  JSDOCSTR("path, filename")
 	 , JSDOCSTR("Return completed configuration filename from supplied <i>path</i> and <i>filename</i>, "
-		        "optionally including the local hostname (e.g. <tt>path/file.<i>host</i>.<i>domain</i>.ext</tt> "
-		        "or <tt>path/file.<i>host</i>.ext</tt>) if such a variation of the filename exists")
+		        "preferring the most specific variation that exists: "
+		        "<tt>path/file.<i>host</i>.<i>domain</i>.ext</tt>, "
+		        "<tt>path/file.<i>host</i>.ext</tt>, "
+		        "<tt>path/file.<i>platform</i>.ext</tt>, then "
+		        "<tt>path/file.local.ext</tt> - the last naming this installation "
+		        "rather than a machine, for a sysop's own version of a file that "
+		        "Synchronet distributes. Falls back to <tt>path/file.ext</tt>")
 	 , 312},
 	{"file_getdosname", js_dosfname,        1,  JSTYPE_STRING,  JSDOCSTR("path/filename")
 	 , JSDOCSTR("Return DOS-compatible (Micros~1 shortened) version of specified <i>path/filename</i>"

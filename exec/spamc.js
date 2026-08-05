@@ -28,6 +28,7 @@
 // port <tcp_port>
 // username <user>
 // max-size <bytes>
+// timeout <seconds>
 // reject [threshold]
 // spamonly
 // debug
@@ -45,6 +46,7 @@ function main()
 	var spamonly = false;
 	var debug = false;
 	var	max_size = 500000;	/* bytes */
+	var	timeout = 600;		/* seconds to wait for spamd's response */
 
 	// Process arguments:
 	for(i=0; i<argc; i++) {
@@ -62,6 +64,8 @@ function main()
 			user = argv[++i];
 		else if(argv[i]=='s' || argv[i]=='max-size')
 			max_size = Number(argv[++i]);
+		else if(argv[i]=='t' || argv[i]=='timeout')
+			timeout = Number(argv[++i]);
 
 		// spamc.js command:
 		else if(argv[i]=='reject') {
@@ -82,7 +86,7 @@ function main()
 		log("Sender exempt from SPAM checking: " + reverse_path);
 		return;
 	}
-	var msg=new SPAMC_Message(message_text_filename, address, tcp_port, user);
+	var msg=new SPAMC_Message(message_text_filename, address, tcp_port, user, timeout);
 	if(msg.error != undefined) {
 		log(LOG_ERR,"!ERROR "+msg.error);
 		return;
@@ -91,8 +95,8 @@ function main()
 	log(LOG_INFO, "processing message with SPAMD at " + address + " port " + tcp_port);
 	msg.debug = debug;
 	msg.reverse_path = reverse_path;
-//	if(this.hello_name)
-//		msg.hello_name = this.hello_name;
+	if(hello_name)
+		msg.hello_name = hello_name;
 	var ret=msg.process();
 	if(ret.warning != undefined)
 		log(LOG_WARNING, "WARNING "+ret.warning);

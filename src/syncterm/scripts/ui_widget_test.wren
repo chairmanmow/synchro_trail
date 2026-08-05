@@ -1,0 +1,1047 @@
+// Self-tests for ui_widget + ui_app.  Covers Rect math, Widget
+// theme/focus/dirty/hit semantics, Container focus traversal +
+// hit-testing + event routing, and App modal stack + dispatch
+// (drives dispatchKey_/dispatchMouse_ directly so no event-pump
+// fiber is required).
+//
+// Pure in-process; no connection needed.  Run via Alt+T (auto) or:
+//   import "ui_widget_test" for UiWidgetTest
+//   UiWidgetTest.run()
+
+import "ui_style"  for Style, Theme
+import "ui_widget" for Rect, Widget, Container
+import "ui_app"    for App
+import "syncterm"  for KeyEvent, MouseEvent, Key, Mouse, CustomCursor
+
+// A Widget subclass that records every event it sees, optionally
+// consumes them, and counts draw() invocations.  Focus and bounds
+// are configured via the public Widget setters.
+class Probe is Widget {
+  construct new() {
+    super()
+    _seen      = []
+    _consume   = false
+    _drawCount = 0
+  }
+  seen        { _seen }
+  consume     { _consume }
+  consume=(b) { _consume = b }
+  drawCount   { _drawCount }
+
+  draw() {
+    _drawCount = _drawCount + 1
+    clearDirty()
+  }
+
+  handle(ev) {
+    _seen.add(ev)
+    return _consume
+  }
+}
+
+class OutsideDismissProbe is Probe {
+  construct new() { super() }
+  closesOnOutsideClick(event) { event == Mouse.button1Click }
+}
+
+class ClosingProbe is Probe {
+  construct new() { super() }
+
+  handle(ev) {
+    if (ev is KeyEvent && ev.code == Key.escape) {
+      parent.popModal()
+      return true
+    }
+    return super.handle(ev)
+  }
+}
+
+class RefusingCloseProbe is Probe {
+  construct new() { super() }
+  handle(ev) { true }
+}
+
+class AbortProbe is Probe {
+  construct new() { super() }
+  handle(ev) { Fiber.abort("expected handler failure") }
+}
+
+class PushModalAbortProbe is ClosingProbe {
+  construct new(app, pushed) {
+    super()
+    _app = app
+    _pushed = pushed
+  }
+
+  handle(ev) {
+    if (ev is KeyEvent && ev.code == Key.enter) {
+      _app.pushModal(_pushed)
+      Fiber.abort("expected handler failure")
+    }
+    return super.handle(ev)
+  }
+}
+
+class UiWidgetTest {
+  static run() {
+    __pass = 0
+    __fail = 0
+    System.print("=== ui_widget self-test starting ===")
+
+    // Rect
+    testRectConstruct_()
+    testRectInclusiveCorners_()
+    testRectContainsInside_()
+    testRectContainsEdges_()
+    testRectContainsOutside_()
+    testRectEquality_()
+
+    // Widget
+    testWidgetDefaults_()
+    testWidgetBoundsSetter_()
+    testWidgetThemeOverride_()
+    testWidgetEffectiveThemeFallsBack_()
+    testWidgetEffectiveThemeInheritsParent_()
+    testWidgetStyleAndGlyphForward_()
+    testWidgetActivitySensitivity_()
+    testWidgetMarkDirtyPropagates_()
+    testWidgetHitWithoutBounds_()
+    testWidgetHitInvisible_()
+    testWidgetHitContains_()
+    testWidgetHandleDefaultFalse_()
+
+    // Container — composition
+    testContainerAddSetsParent_()
+    testContainerAddFocusesFirstFocusable_()
+    testContainerAddSkipsNonFocusable_()
+    testContainerRemoveClearsParent_()
+    testContainerRemoveAdjustsFocusIndex_()
+
+    // Container — focus traversal
+    testContainerFocusNext_()
+    testContainerFocusPrev_()
+    testContainerFocusWraps_()
+    testContainerFocusSkipsNonFocusable_()
+    testContainerFocusEmptyNoOp_()
+    testContainerFocusNoFocusableNoOp_()
+    testContainerFocusSingleFocusableReturnsFalse_()
+
+    // Container — event routing
+    testContainerHandleRoutesToFocused_()
+    testContainerHandleBubblesIfNotConsumed_()
+    testContainerHandleTabSteps_()
+    testContainerHandleBackTabSteps_()
+    testContainerHandleConsumedNoTab_()
+
+    // Container — hit testing
+    testContainerHitTestDeepest_()
+    testContainerHitTestReturnsContainerIfNoChild_()
+    testContainerHitTestOutside_()
+    testContainerHitTestSkipsInvisible_()
+
+    // App
+    testAppConstruction_()
+    testAppRootParented_()
+    testAppEffectiveTheme_()
+    testAppThemeChange_()
+    testAppThemeChangeDirtiesAllLayers_()
+    testAppPushPopModal_()
+    testAppPopEmptyReturnsNull_()
+    testAppModalTopFallsBackToRoot_()
+    testAppContextFollowsFocusedTree_()
+    testAppModalWidgetInheritsTheme_()
+    testAppModalWidgetInheritsAtExit_()
+    testAppCloseModals_()
+    testAppCloseModalsCanFail_()
+    testAppKeymapBindUnbind_()
+    testAppLayoutNotifiesOnResize_()
+    testAppCursorStateInvalidation_()
+    testAppDispatchKeyToFocused_()
+    testAppDispatchKeyHitsKeymap_()
+    testAppDispatchKeyConsumedSkipsKeymap_()
+    testAppDispatchKeyModalBlocksRoot_()
+    testAppQuitUnwindsOneModal_()
+    testAppAtExitModalIgnoresQuit_()
+    testAppClaimsQuitWithoutFocus_()
+    testAppQuitUnwindsAfterHandlerError_()
+    testAppBackspaceAliasesEscape_()
+    testAppConsumedBackspaceDoesNotEscape_()
+    testAppSyncDispatchContainsError_()
+    testAppSyncErrorDiscardsPushedModal_()
+    testAppDispatchMouseHitsWidget_()
+    testAppDispatchMouseModalBlocksRoot_()
+    testAppUnhandledMouseReceivesHit_()
+    testAppUnhandledMouseSkippedForModal_()
+    testAppOutsideClickEscapesListModal_()
+    testAppDispatchMouseOutsideDrops_()
+    testAppRightClickAliasesEscape_()
+    testAppConsumedRightClickDoesNotEscape_()
+
+    var total = __pass + __fail
+    System.print("=== ui_widget: %(total) tests, %(__pass) pass, %(__fail) fail ===")
+    return [__pass, __fail]
+  }
+
+  static check_(ok, label) {
+    if (ok) {
+      __pass = __pass + 1
+    } else {
+      __fail = __fail + 1
+      System.print("  FAIL %(label)")
+    }
+  }
+
+  // ----- Rect -----------------------------------------------------
+
+  static testRectConstruct_() {
+    var r = Rect.new(3, 5, 10, 4)
+    check_(r.x == 3 && r.y == 5 && r.w == 10 && r.h == 4,
+           "Rect.new + getters")
+  }
+
+  static testRectInclusiveCorners_() {
+    var r = Rect.new(3, 5, 10, 4)
+    check_(r.right == 12 && r.bottom == 8,
+           "Rect.right/bottom inclusive")
+  }
+
+  static testRectContainsInside_() {
+    var r = Rect.new(3, 5, 10, 4)
+    check_(r.contains(7, 6), "Rect.contains: interior point")
+  }
+
+  static testRectContainsEdges_() {
+    var r = Rect.new(3, 5, 10, 4)
+    check_(r.contains(3, 5)   && r.contains(12, 8) &&
+           r.contains(3, 8)   && r.contains(12, 5),
+           "Rect.contains: all four corners (inclusive)")
+  }
+
+  static testRectContainsOutside_() {
+    var r = Rect.new(3, 5, 10, 4)
+    check_(!r.contains(2, 6)  && !r.contains(13, 6) &&
+           !r.contains(7, 4)  && !r.contains(7, 9),
+           "Rect.contains: rejects points one past each edge")
+  }
+
+  static testRectEquality_() {
+    check_(Rect.new(1, 2, 3, 4) == Rect.new(1, 2, 3, 4),
+           "Rect equality")
+    check_(Rect.new(1, 2, 3, 4) != Rect.new(1, 2, 3, 5),
+           "Rect inequality")
+    check_(!(Rect.new(1, 2, 3, 4) == "Rect"),
+           "Rect equality rejects non-Rect")
+  }
+
+  // ----- Widget ---------------------------------------------------
+
+  static testWidgetDefaults_() {
+    var w = Probe.new()
+    check_(w.bounds == null && w.parent == null && w.theme == null &&
+           !w.focused && w.visible && w.dirty && w.focusable &&
+           !w.atExit && w.activitySensitive && w.helpText == null &&
+           w.keyHints == null,
+           "Widget defaults")
+  }
+
+  static testWidgetBoundsSetter_() {
+    var w = Probe.new()
+    w.draw()              // clear dirty
+    check_(!w.dirty, "Widget.draw clears dirty (sanity)")
+    w.bounds = Rect.new(1, 1, 10, 5)
+    check_(w.bounds.w == 10 && w.dirty,
+           "Widget.bounds= sets bounds and re-dirties")
+  }
+
+  static testWidgetThemeOverride_() {
+    var w = Probe.new()
+    var t = Theme.default
+    w.theme = t
+    check_(w.theme == t && w.effectiveTheme == t,
+           "Widget.theme= and effectiveTheme returns own theme")
+  }
+
+  static testWidgetEffectiveThemeFallsBack_() {
+    var w = Probe.new()
+    check_(w.effectiveTheme == Theme.default,
+           "Widget.effectiveTheme: no parent + no override → Theme.default")
+  }
+
+  static testWidgetEffectiveThemeInheritsParent_() {
+    var custom = Theme.new({
+      "default": Style.new(0, 0x07, 0xCCCCCC, 0x000000)
+    }, {})
+    var c = Container.new()
+    c.theme = custom
+    var leaf = Probe.new()
+    c.add(leaf)
+    check_(leaf.effectiveTheme == custom,
+           "Widget.effectiveTheme: leaf walks up to parent's theme")
+  }
+
+  static testWidgetStyleAndGlyphForward_() {
+    var w = Probe.new()
+    var d = Theme.default
+    var sExpected = d.style("default")
+    var s = w.style("default")
+    check_(s == sExpected && w.glyph("frame.display.topLeft") ==
+               d.glyphs["frame.display.topLeft"],
+           "Widget.style/glyph forward to effectiveTheme")
+  }
+
+  static testWidgetActivitySensitivity_() {
+    var app = App.new()
+    app.theme = Theme.new({
+      "default":
+        Style.new(0, 0x1F, 0xFFFFFF, 0x0000A8),
+      "default.inactive":
+        Style.new(0, 0x3F, 0xFFFFFF, 0x00AAAA)
+    }, {})
+    var chrome = Probe.new()
+    app.root.add(chrome)
+    app.pushModal(Probe.new())
+    var inactive = chrome.style("default")
+    chrome.activitySensitive = false
+    var neutral = chrome.style("default")
+    check_(!chrome.inActiveLayer && inactive.legacyAttr == 0x3F &&
+           neutral.legacyAttr == 0x1F,
+           "Widget.activitySensitive=false keeps the base style")
+  }
+
+  static testWidgetMarkDirtyPropagates_() {
+    var c = Container.new()
+    var leaf = Probe.new()
+    c.add(leaf)
+    c.draw()  // clears container's dirty AND leaf's via traversal
+    leaf.markDirty()
+    check_(leaf.dirty && c.dirty,
+           "Widget.markDirty propagates up the parent chain")
+  }
+
+  static testWidgetHitWithoutBounds_() {
+    var w = Probe.new()
+    check_(!w.hit(5, 5), "Widget.hit: no bounds → no hit")
+  }
+
+  static testWidgetHitInvisible_() {
+    var w = Probe.new()
+    w.bounds  = Rect.new(1, 1, 10, 5)
+    w.visible = false
+    check_(!w.hit(2, 2), "Widget.hit: invisible → no hit")
+  }
+
+  static testWidgetHitContains_() {
+    var w = Probe.new()
+    w.bounds = Rect.new(1, 1, 10, 5)
+    check_(w.hit(2, 2) && !w.hit(11, 2),
+           "Widget.hit uses bounds.contains")
+  }
+
+  static testWidgetHandleDefaultFalse_() {
+    var w = Widget.new()
+    check_(!w.handle("anything"), "Widget.handle defaults to false")
+  }
+
+  // ----- Container — composition ----------------------------------
+
+  static testContainerAddSetsParent_() {
+    var c = Container.new()
+    var w = Probe.new()
+    c.add(w)
+    check_(w.parent == c && c.children.count == 1 && c.children[0] == w,
+           "Container.add appends child + sets parent")
+  }
+
+  static testContainerAddFocusesFirstFocusable_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    check_(c.focusedChild == a && a.focused && !b.focused,
+           "Container.add: first focusable child gets focus")
+  }
+
+  static testContainerAddSkipsNonFocusable_() {
+    var c = Container.new()
+    var a = Probe.new()
+    a.focusable = false
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    check_(c.focusedChild == b && !a.focused && b.focused,
+           "Container.add: skips non-focusable for initial focus")
+  }
+
+  static testContainerRemoveClearsParent_() {
+    var c = Container.new()
+    var w = Probe.new()
+    c.add(w)
+    c.remove(w)
+    check_(w.parent == null && c.children.count == 0,
+           "Container.remove clears parent + drops from list")
+  }
+
+  static testContainerRemoveAdjustsFocusIndex_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    var d = Probe.new()
+    c.add(a)
+    c.add(b)
+    c.add(d)
+    c.focusNext()                     // a → b
+    check_(c.focusedChild == b, "sanity: focus on b after focusNext")
+    c.remove(a)                       // remove pre-focused → index shifts
+    check_(c.focusedChild == b,
+           "Container.remove: pre-focused removal shifts index, focus stable")
+  }
+
+  // ----- Container — focus traversal ------------------------------
+
+  static testContainerFocusNext_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    c.focusNext()
+    check_(c.focusedChild == b && !a.focused && b.focused,
+           "Container.focusNext: a → b")
+  }
+
+  static testContainerFocusPrev_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    c.focusPrev()
+    check_(c.focusedChild == b,
+           "Container.focusPrev from a wraps backward to b")
+  }
+
+  static testContainerFocusWraps_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    c.focusNext()           // a → b
+    c.focusNext()           // b → a (wrap)
+    check_(c.focusedChild == a, "Container.focusNext wraps")
+  }
+
+  static testContainerFocusSkipsNonFocusable_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    b.focusable = false
+    var d = Probe.new()
+    c.add(a)
+    c.add(b)
+    c.add(d)
+    c.focusNext()
+    check_(c.focusedChild == d, "Container.focusNext skips non-focusable")
+  }
+
+  static testContainerFocusEmptyNoOp_() {
+    var c = Container.new()
+    check_(!c.focusNext() && !c.focusPrev(),
+           "Container.focusNext/Prev no-op on empty container")
+  }
+
+  static testContainerFocusNoFocusableNoOp_() {
+    var c = Container.new()
+    var a = Probe.new()
+    a.focusable = false
+    var b = Probe.new()
+    b.focusable = false
+    c.add(a)
+    c.add(b)
+    check_(!c.focusNext() && c.focusedChild == null,
+           "Container.focusNext: no focusable child, no-op")
+  }
+
+  // Single focusable child → focusNext/focusPrev must return false so
+  // the parent Container can route Tab upward.  Without this, a
+  // nested Pane with one child traps Tab inside itself.
+  static testContainerFocusSingleFocusableReturnsFalse_() {
+    var c = Container.new()
+    var a = Probe.new()
+    a.focusable = false
+    var b = Probe.new()       // the one focusable child
+    var d = Probe.new()
+    d.focusable = false
+    c.add(a)
+    c.add(b)
+    c.add(d)
+    // First focusNext finds b (was unfocused) — ok, returns true.
+    // Now we're focused on the only focusable child; the next call
+    // must return false so the Tab bubbles to the parent.
+    var moved = c.focusNext()
+    check_(moved == false && c.focusedChild == b,
+           "Container.focusNext: single focusable returns false, focus stays")
+    var movedBack = c.focusPrev()
+    check_(movedBack == false && c.focusedChild == b,
+           "Container.focusPrev: single focusable returns false, focus stays")
+  }
+
+  // ----- Container — event routing --------------------------------
+
+  static testContainerHandleRoutesToFocused_() {
+    var c = Container.new()
+    var a = Probe.new()
+    a.consume = true
+    var b = Probe.new()
+    b.consume = true
+    c.add(a)
+    c.add(b)
+    var ev = KeyEvent.new(Key.enter)
+    var consumed = c.handle(ev)
+    check_(consumed && a.seen.count == 1 && b.seen.count == 0,
+           "Container.handle routes to focused child first")
+  }
+
+  static testContainerHandleBubblesIfNotConsumed_() {
+    var c = Container.new()
+    var a = Probe.new()           // consume = false
+    c.add(a)
+    var ev = KeyEvent.new(Key.enter)
+    var consumed = c.handle(ev)
+    check_(!consumed && a.seen.count == 1,
+           "Container.handle: non-Tab key not consumed → returns false")
+  }
+
+  static testContainerHandleTabSteps_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    var consumed = c.handle(KeyEvent.new(Key.tab))
+    check_(consumed && c.focusedChild == b,
+           "Container.handle Tab steps focus when leaf doesn't consume")
+  }
+
+  static testContainerHandleBackTabSteps_() {
+    var c = Container.new()
+    var a = Probe.new()
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    var consumed = c.handle(KeyEvent.new(Key.backTab))
+    check_(consumed && c.focusedChild == b,    // wraps backward from a
+           "Container.handle BackTab steps focus")
+  }
+
+  static testContainerHandleConsumedNoTab_() {
+    var c = Container.new()
+    var a = Probe.new()
+    a.consume = true
+    var b = Probe.new()
+    c.add(a)
+    c.add(b)
+    c.handle(KeyEvent.new(Key.tab))
+    check_(c.focusedChild == a,
+           "Container.handle: leaf consuming Tab prevents focus step")
+  }
+
+  // ----- Container — hit testing ----------------------------------
+
+  static testContainerHitTestDeepest_() {
+    var outer = Container.new()
+    outer.bounds = Rect.new(1, 1, 40, 20)
+    var leaf = Probe.new()
+    leaf.bounds = Rect.new(5, 5, 10, 5)
+    outer.add(leaf)
+    check_(outer.hitTest(7, 7) == leaf,
+           "Container.hitTest: descends to deepest covering leaf")
+  }
+
+  static testContainerHitTestReturnsContainerIfNoChild_() {
+    var outer = Container.new()
+    outer.bounds = Rect.new(1, 1, 40, 20)
+    var leaf = Probe.new()
+    leaf.bounds = Rect.new(5, 5, 10, 5)
+    outer.add(leaf)
+    // Inside outer, outside the only leaf.
+    check_(outer.hitTest(20, 15) == outer,
+           "Container.hitTest: point inside container, outside any child")
+  }
+
+  static testContainerHitTestOutside_() {
+    var outer = Container.new()
+    outer.bounds = Rect.new(1, 1, 40, 20)
+    check_(outer.hitTest(50, 50) == null,
+           "Container.hitTest: point outside container → null")
+  }
+
+  static testContainerHitTestSkipsInvisible_() {
+    var outer = Container.new()
+    outer.bounds = Rect.new(1, 1, 40, 20)
+    var leaf = Probe.new()
+    leaf.bounds  = Rect.new(5, 5, 10, 5)
+    leaf.visible = false
+    outer.add(leaf)
+    check_(outer.hitTest(7, 7) == outer,
+           "Container.hitTest: invisible leaf skipped, falls back to container")
+  }
+
+  // ----- App ------------------------------------------------------
+
+  static testAppConstruction_() {
+    var app = App.new()
+    check_(app.root is Container && app.modalStack.count == 0 &&
+           !app.running && app.tickMs == null,
+           "App.new: defaults")
+  }
+
+  static testAppRootParented_() {
+    var app = App.new()
+    check_(app.root.parent == app,
+           "App.new: root container is parented to the App")
+  }
+
+  static testAppEffectiveTheme_() {
+    var app = App.new()
+    var expected = Theme.current
+    check_(app.effectiveTheme.style("default") ==
+               expected.style("default") &&
+           app.effectiveTheme.style("button.focused") ==
+               expected.style("button.focused"),
+           "App.effectiveTheme defaults to the C-owned current theme")
+  }
+
+  static testAppThemeChange_() {
+    var app = App.new()
+    var t = Theme.new({
+      "default": Style.new(0, 0x07, 0xCCCCCC, 0x000000)
+    }, {})
+    app.theme = t
+    var leaf = Probe.new()
+    app.root.add(leaf)
+    check_(app.effectiveTheme == t && leaf.effectiveTheme == t,
+           "App.theme= propagates to widgets via tree walk")
+  }
+
+  static testAppThemeChangeDirtiesAllLayers_() {
+    var app = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+
+    var rootBranch = Container.new()
+    rootBranch.bounds = Rect.new(1, 1, 40, 20)
+    var rootLeaf = Probe.new()
+    rootLeaf.bounds = Rect.new(2, 2, 10, 1)
+    rootBranch.add(rootLeaf)
+    app.root.add(rootBranch)
+
+    var modal = Container.new()
+    modal.bounds = Rect.new(10, 5, 30, 10)
+    var modalLeaf = Probe.new()
+    modalLeaf.bounds = Rect.new(11, 6, 10, 1)
+    modal.add(modalLeaf)
+    app.pushModal(modal)
+
+    app.root.draw()
+    modal.draw()
+    var t = Theme.new({
+      "default": Style.new(0, 0x07, 0xCCCCCC, 0x000000)
+    }, {})
+    app.theme = t
+    check_(app.root.dirty && rootBranch.dirty && rootLeaf.dirty &&
+           modal.dirty && modalLeaf.dirty,
+           "App.theme= dirties root and modal descendants")
+  }
+
+  static testAppPushPopModal_() {
+    var app = App.new()
+    var w = Probe.new()
+    app.pushModal(w)
+    check_(app.modalTop == w && w.parent == app, "App.pushModal sets parent + top")
+    var popped = app.popModal()
+    check_(popped == w && w.parent == null && app.modalTop == app.root,
+           "App.popModal clears parent + restores root as top")
+  }
+
+  static testAppPopEmptyReturnsNull_() {
+    var app = App.new()
+    check_(app.popModal() == null, "App.popModal on empty stack → null")
+  }
+
+  static testAppModalTopFallsBackToRoot_() {
+    var app = App.new()
+    check_(app.modalTop == app.root,
+           "App.modalTop falls back to root when stack is empty")
+  }
+
+  static testAppContextFollowsFocusedTree_() {
+    var app = App.new()
+    var branch = Container.new()
+    var leaf = Probe.new()
+    var branchHints = [["Esc", "Close"]]
+    var leafHints = [["Enter", "Open"]]
+    branch.helpText = "Branch help"
+    branch.keyHints = branchHints
+    leaf.keyHints = leafHints
+    branch.add(leaf)
+    app.root.add(branch)
+    var leafWins = app.keyHints == leafHints && app.helpText == "Branch help"
+    leaf.keyHints = null
+    var parentFallback = app.keyHints == branchHints && app.helpAvailable
+
+    var modal = Probe.new()
+    var modalHints = [["Esc", "Dismiss"]]
+    modal.keyHints = modalHints
+    app.pushModal(modal)
+    var modalWins = app.keyHints == modalHints && !app.helpAvailable
+    app.popModal()
+    check_(leafWins && parentFallback && modalWins &&
+           app.keyHints == branchHints,
+           "App context: nearest focused widget wins and modal scopes it")
+  }
+
+  static testAppModalWidgetInheritsTheme_() {
+    var app = App.new()
+    var t = Theme.new({
+      "default": Style.new(0, 0x07, 0xCCCCCC, 0x000000)
+    }, {})
+    app.theme = t
+    var w = Probe.new()
+    app.pushModal(w)
+    check_(w.effectiveTheme == t,
+           "App: pushed modal inherits app theme via parent walk")
+  }
+
+  static testAppModalWidgetInheritsAtExit_() {
+    var app = App.new()
+    var parent = Probe.new()
+    parent.atExit = true
+    app.pushModal(parent)
+    var child = Probe.new()
+    app.pushModal(child)
+    check_(child.atExit,
+           "App: modal opened by atExit widget inherits atExit")
+  }
+
+  static testAppCloseModals_() {
+    var app = App.new()
+    app.pushModal(ClosingProbe.new())
+    app.pushModal(ClosingProbe.new())
+    check_(app.closeModals() && app.modalStack.count == 0,
+        "App closeModals: dismisses every modal through Escape")
+  }
+
+  static testAppCloseModalsCanFail_() {
+    var app = App.new()
+    app.pushModal(RefusingCloseProbe.new())
+    check_(!app.closeModals() && app.modalStack.count == 1,
+        "App closeModals: leaves a modal which refuses to close")
+  }
+
+  static testAppKeymapBindUnbind_() {
+    var app = App.new()
+    var fn = Fn.new {|k| true }
+    app.bind(Key.f1, fn)
+    check_(app.binding(Key.f1) == fn, "App.bind stores handler")
+    app.unbind(Key.f1)
+    check_(app.binding(Key.f1) == null, "App.unbind removes handler")
+  }
+
+  static testAppLayoutNotifiesOnResize_() {
+    var app = App.new()
+    var calls = []
+    app.onLayout = Fn.new {|w, h| calls.add([w, h]) }
+    var first = app.layout_(80, 25)
+    var same = app.layout_(80, 25)
+    var resized = app.layout_(100, 30)
+    check_(first && !same && resized && calls.count == 2 &&
+           calls[0][0] == 80 && calls[0][1] == 25 &&
+           calls[1][0] == 100 && calls[1][1] == 30 &&
+           app.root.bounds.w == 100 && app.root.bounds.h == 30,
+           "App layout: callback fires only for first size and resize")
+  }
+
+  static testAppCursorStateInvalidation_() {
+    var saved = CustomCursor.current
+    var app = App.new()
+    app.drawAll_()
+    var initiallyHidden = app.cursorShapeCache_ == "none"
+
+    CustomCursor.normal.apply()
+    var changedExternally = CustomCursor.visible &&
+        CustomCursor.startLine <= CustomCursor.endLine
+    app.pushModal(Probe.new())
+    var invalidated = app.cursorShapeCache_ == null
+    app.drawAll_()
+    var repaired = !CustomCursor.visible ||
+        CustomCursor.startLine > CustomCursor.endLine
+
+    app.popModal()
+    var invalidatedOnPop = app.cursorShapeCache_ == null
+    saved.apply()
+    check_(initiallyHidden && changedExternally && invalidated && repaired &&
+           invalidatedOnPop,
+           "App cursor state: modal transitions repair external changes")
+  }
+
+  static testAppDispatchKeyToFocused_() {
+    var app  = App.new()
+    var leaf = Probe.new()
+    leaf.consume = true
+    app.root.add(leaf)
+    var consumed = app.dispatchKey_(KeyEvent.new(Key.enter))
+    check_(consumed && leaf.seen.count == 1,
+           "App.dispatchKey_ routes to focused child")
+  }
+
+  static testAppDispatchKeyHitsKeymap_() {
+    var app   = App.new()
+    var fired = false
+    app.bind(Key.f1, Fn.new {|k| fired = true })
+    var consumed = app.dispatchKey_(KeyEvent.new(Key.f1))
+    check_(consumed && fired,
+           "App.dispatchKey_ hits keymap when no widget consumes")
+  }
+
+  static testAppDispatchKeyConsumedSkipsKeymap_() {
+    var app   = App.new()
+    var leaf  = Probe.new()
+    leaf.consume = true
+    app.root.add(leaf)
+    var fired = false
+    app.bind(Key.enter, Fn.new {|k| fired = true })
+    app.dispatchKey_(KeyEvent.new(Key.enter))
+    check_(!fired,
+           "App.dispatchKey_: widget consumption short-circuits keymap")
+  }
+
+  static testAppDispatchKeyModalBlocksRoot_() {
+    var app  = App.new()
+    var rootLeaf = Probe.new()
+    rootLeaf.consume = true
+    app.root.add(rootLeaf)
+    var modal = Probe.new()
+    modal.consume = true
+    app.pushModal(modal)
+    app.dispatchKey_(KeyEvent.new(Key.enter))
+    check_(modal.seen.count == 1 && rootLeaf.seen.count == 0,
+           "App.dispatchKey_: modal blocks root")
+  }
+
+  static testAppQuitUnwindsOneModal_() {
+    var app = App.new()
+    var lower = Probe.new()
+    var top = Probe.new()
+    top.consume = true
+    app.pushModal(lower)
+    app.pushModal(top)
+    var fired = false
+    app.bind(Key.quit, Fn.new {|event| fired = true })
+    var consumed = app.dispatchKey_(KeyEvent.new(Key.quit))
+    check_(consumed && app.modalStack.count == 1 &&
+           app.modalTop == lower && top.seen.count == 1 &&
+           top.seen[0].code == Key.escape && !fired,
+           "App quit: Escape cleanup then one modal frame unwound")
+  }
+
+  static testAppAtExitModalIgnoresQuit_() {
+    var app = App.new()
+    var modal = Probe.new()
+    modal.atExit = true
+    app.pushModal(modal)
+    var fired = false
+    app.bind(Key.quit, Fn.new {|event| fired = true })
+    var consumed = app.dispatchKey_(KeyEvent.new(Key.quit))
+    check_(consumed && app.modalStack.count == 1 &&
+           modal.seen.count == 0 && !fired,
+           "App quit: atExit modal remains interactive without dispatch")
+  }
+
+  static testAppClaimsQuitWithoutFocus_() {
+    var app = App.new()
+    check_(app.shouldConsume_(KeyEvent.new(Key.quit)),
+           "App quit: claimed even when no widget has focus")
+  }
+
+  static testAppQuitUnwindsAfterHandlerError_() {
+    var app = App.new()
+    var reported = null
+    app.onError = Fn.new {|fiber| reported = fiber.error }
+    app.pushModal(AbortProbe.new())
+    var ok = app.dispatchSync_(KeyEvent.new(Key.quit))
+    check_(!ok && reported == "expected handler failure" &&
+           app.modalStack.count == 0,
+           "App quit: handler error is reported and modal still unwinds")
+  }
+
+  static testAppBackspaceAliasesEscape_() {
+    var app = App.new()
+    var fired = false
+    app.bind(Key.escape, Fn.new {|event| fired = true })
+    var consumed = app.dispatchKey_(KeyEvent.new(Key.backspace))
+    check_(consumed && fired,
+           "App.dispatchKey_: unconsumed Backspace aliases Escape")
+  }
+
+  static testAppConsumedBackspaceDoesNotEscape_() {
+    var app = App.new()
+    var leaf = Probe.new()
+    leaf.consume = true
+    app.root.add(leaf)
+    var fired = false
+    app.bind(Key.escape, Fn.new {|event| fired = true })
+    var consumed = app.dispatchKey_(KeyEvent.new(Key.backspace))
+    check_(consumed && !fired && leaf.seen.count == 1,
+           "App.dispatchKey_: text editor can consume Backspace")
+  }
+
+  static testAppSyncDispatchContainsError_() {
+    var app = App.new()
+    var reported = null
+    app.onError = Fn.new {|fiber| reported = fiber.error }
+    app.root.add(AbortProbe.new())
+    var ok = app.dispatchSync_(KeyEvent.new(Key.enter))
+    check_(!ok && reported == "expected handler failure",
+           "App.dispatchSync_: contains and reports handler aborts")
+  }
+
+  static testAppSyncErrorDiscardsPushedModal_() {
+    var app = App.new()
+    var orphan = Probe.new()
+    var owner = PushModalAbortProbe.new(app, orphan)
+    app.pushModal(owner)
+    var reported = null
+    app.onError = Fn.new {|fiber| reported = fiber.error }
+    var ok = app.dispatchSync_(KeyEvent.new(Key.enter))
+    var restored = !ok && reported == "expected handler failure" &&
+        app.modalStack.count == 1 && app.modalTop == owner &&
+        orphan.parent == null
+    app.dispatchKey_(KeyEvent.new(Key.escape))
+    check_(restored && app.modalStack.count == 0,
+           "App dispatch error: pushed modal discarded before next Escape")
+  }
+
+  // Mouse event constructor: (event, modifiers, sx, sy, ex, ey).
+  static mouse_(x, y) { MouseEvent.new(0, x, y, x, y) }
+
+  static testAppDispatchMouseHitsWidget_() {
+    var app  = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var leaf = Probe.new()
+    leaf.bounds = Rect.new(10, 5, 20, 3)
+    leaf.consume = true
+    app.root.add(leaf)
+    var consumed = app.dispatchMouse_(mouse_(15, 6))
+    check_(consumed && leaf.seen.count == 1,
+           "App.dispatchMouse_: hits widget at coords")
+  }
+
+  static testAppDispatchMouseModalBlocksRoot_() {
+    var app  = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var rootLeaf = Probe.new()
+    rootLeaf.bounds = Rect.new(10, 5, 20, 3)
+    rootLeaf.consume = true
+    app.root.add(rootLeaf)
+
+    var modal = Container.new()
+    modal.bounds = Rect.new(40, 10, 20, 10)
+    var modalLeaf = Probe.new()
+    modalLeaf.bounds = Rect.new(45, 12, 10, 3)
+    modalLeaf.consume = true
+    modal.add(modalLeaf)
+    app.pushModal(modal)
+
+    // Click at root-leaf coords: modal hit-tests (point outside its
+    // bounds) → returns null.  rootLeaf must NOT receive the event.
+    var consumed = app.dispatchMouse_(mouse_(15, 6))
+    check_(!consumed && rootLeaf.seen.count == 0 && modalLeaf.seen.count == 0,
+           "App.dispatchMouse_: modal blocks root, click outside modal drops")
+  }
+
+  static testAppUnhandledMouseReceivesHit_() {
+    var app = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var leaf = Probe.new()
+    leaf.bounds = Rect.new(10, 5, 20, 3)
+    app.root.add(leaf)
+    var event = mouse_(15, 6)
+    var received = null
+    app.onUnhandledMouse = Fn.new {|unhandled, hit|
+      received = [unhandled, hit]
+      return true
+    }
+    var consumed = app.dispatchMouse_(event)
+    check_(consumed && received != null && received[0] == event &&
+           received[1] == leaf,
+           "App unhandled mouse: receives event and declined hit widget")
+  }
+
+  static testAppUnhandledMouseSkippedForModal_() {
+    var app = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var modal = Container.new()
+    modal.bounds = Rect.new(40, 10, 20, 10)
+    app.pushModal(modal)
+    var calls = 0
+    app.onUnhandledMouse = Fn.new {|event, hit|
+      calls = calls + 1
+      return true
+    }
+    var consumed = app.dispatchMouse_(mouse_(45, 12))
+    check_(!consumed && calls == 0,
+           "App unhandled mouse: modal ownership suppresses fallback")
+  }
+
+  static testAppOutsideClickEscapesListModal_() {
+    var app = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var modal = OutsideDismissProbe.new()
+    modal.bounds = Rect.new(40, 10, 20, 10)
+    app.pushModal(modal)
+    var fired = false
+    app.bind(Key.escape, Fn.new {|event| fired = true })
+    var event = MouseEvent.new(Mouse.button1Click, 15, 6, 15, 6)
+    var consumed = app.dispatchMouse_(event)
+    check_(consumed && fired,
+           "App.dispatchMouse_: list modal outside click aliases Escape")
+  }
+
+  static testAppDispatchMouseOutsideDrops_() {
+    var app  = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var leaf = Probe.new()
+    leaf.bounds = Rect.new(10, 5, 20, 3)
+    leaf.consume = true
+    app.root.add(leaf)
+    var consumed = app.dispatchMouse_(mouse_(70, 20))
+    check_(!consumed && leaf.seen.count == 0,
+           "App.dispatchMouse_: outside any widget drops")
+  }
+
+  static testAppRightClickAliasesEscape_() {
+    var app = App.new()
+    var fired = false
+    app.bind(Key.escape, Fn.new {|event| fired = true })
+    var event = MouseEvent.new(Mouse.button3Click, 40, 12, 40, 12)
+    var consumed = app.dispatchMouse_(event)
+    check_(consumed && fired,
+           "App.dispatchMouse_: right click aliases Escape")
+  }
+
+  static testAppConsumedRightClickDoesNotEscape_() {
+    var app = App.new()
+    app.root.bounds = Rect.new(1, 1, 80, 25)
+    var leaf = Probe.new()
+    leaf.bounds = Rect.new(10, 5, 20, 3)
+    leaf.consume = true
+    app.root.add(leaf)
+    var fired = false
+    app.bind(Key.escape, Fn.new {|event| fired = true })
+    var event = MouseEvent.new(Mouse.button3Click, 15, 6, 15, 6)
+    var consumed = app.dispatchMouse_(event)
+    check_(consumed && leaf.seen.count == 1 && !fired,
+           "App.dispatchMouse_: consumed right click does not Escape")
+  }
+}

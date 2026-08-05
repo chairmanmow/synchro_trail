@@ -166,6 +166,7 @@ void __fastcall TMainForm::GetUserData(int number)
     GetUserText(EditorEdit, fields[USER_XEDIT]);
     GetUserText(TempFileExtEdit, user.tmpext);
     GetUserText(RowsEdit, user.rows);
+	GetUserText(ColsEdit, user.cols);
 
     // Apply 'misc' bit-field
     ExpertCheckBox->Checked = user.misc & EXPERT;
@@ -173,12 +174,16 @@ void __fastcall TMainForm::GetUserData(int number)
 
     TerminalCheckListBox->Checked[0] = user.misc & AUTOTERM;
     TerminalCheckListBox->Checked[1] = !(user.misc & NO_EXASCII);
-    TerminalCheckListBox->Checked[2] = user.misc & ANSI;
-    TerminalCheckListBox->Checked[3] = user.misc & COLOR;
-    TerminalCheckListBox->Checked[4] = user.misc & RIP;
-    TerminalCheckListBox->Checked[5] = user.misc & UPAUSE;
-    TerminalCheckListBox->Checked[6] = !(user.misc & COLDKEYS);
-    TerminalCheckListBox->Checked[7] = user.misc & SPIN;
+    TerminalCheckListBox->Checked[2] = user.misc & UTF8;
+    TerminalCheckListBox->Checked[3] = user.misc & ANSI;
+    TerminalCheckListBox->Checked[4] = user.misc & PETSCII;
+    TerminalCheckListBox->Checked[5] = user.misc & COLOR;
+    TerminalCheckListBox->Checked[6] = user.misc & ICE_COLOR;
+    TerminalCheckListBox->Checked[7] = user.misc & RIP;
+	TerminalCheckListBox->Checked[8] = user.misc & MOUSE;
+	TerminalCheckListBox->Checked[9] = user.misc & SWAP_DELETE;
+    TerminalCheckListBox->Checked[10] = user.misc & UPAUSE;
+    TerminalCheckListBox->Checked[11] = user.misc & SPIN;
     TerminalCheckListBox->Tag = false;
 
     MessageCheckListBox->Checked[0] = user.misc & NETMAIL;
@@ -332,6 +337,7 @@ void __fastcall TMainForm::PutUserData(int number)
     PutUserText(SexEdit, USER_GENDER);
     PutUserText(CommentEdit, USER_COMMENT);
 
+	PutUserText(ColsEdit, USER_COLS);
     PutUserText(RowsEdit, USER_ROWS);
     PutUserText(ShellEdit, USER_SHELL);
     PutUserText(EditorEdit, USER_XEDIT);
@@ -347,12 +353,16 @@ void __fastcall TMainForm::PutUserData(int number)
 
         SetBit( TerminalCheckListBox->Checked[0], user.misc, AUTOTERM);
         SetBit(!TerminalCheckListBox->Checked[1], user.misc, NO_EXASCII);
-        SetBit( TerminalCheckListBox->Checked[2], user.misc, ANSI);
-        SetBit( TerminalCheckListBox->Checked[3], user.misc, COLOR);
-        SetBit( TerminalCheckListBox->Checked[4], user.misc, RIP);
-        SetBit( TerminalCheckListBox->Checked[5], user.misc, UPAUSE);
-        SetBit(!TerminalCheckListBox->Checked[6], user.misc, COLDKEYS);
-        SetBit( TerminalCheckListBox->Checked[7], user.misc, SPIN);
+        SetBit( TerminalCheckListBox->Checked[2], user.misc, UTF8);
+        SetBit( TerminalCheckListBox->Checked[3], user.misc, ANSI);
+        SetBit( TerminalCheckListBox->Checked[4], user.misc, PETSCII);
+        SetBit( TerminalCheckListBox->Checked[5], user.misc, COLOR);
+        SetBit( TerminalCheckListBox->Checked[6], user.misc, ICE_COLOR);
+        SetBit( TerminalCheckListBox->Checked[7], user.misc, RIP);
+		SetBit( TerminalCheckListBox->Checked[8], user.misc, MOUSE);
+		SetBit( TerminalCheckListBox->Checked[9], user.misc, SWAP_DELETE);
+        SetBit( TerminalCheckListBox->Checked[10], user.misc, UPAUSE);
+        SetBit( TerminalCheckListBox->Checked[11], user.misc, SPIN);
 
         SetBit(MessageCheckListBox->Checked[0], user.misc, NETMAIL);
         SetBit(MessageCheckListBox->Checked[1], user.misc, CLRSCRN);

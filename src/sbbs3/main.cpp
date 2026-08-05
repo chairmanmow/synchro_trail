@@ -88,7 +88,7 @@ void ssh_session_destroy(SOCKET sock, CRYPT_SESSION session, int line)
 	#define SSH_END(x)
 #endif
 
-int64_t                    uptime = 0;
+time_t                     uptime = 0;
 volatile uint              served = 0;
 
 static std::atomic<time_t> event_thread_tick;
@@ -119,6 +119,8 @@ static str_list_t          shutdown_semfiles;
 static str_list_t          clear_attempts_semfiles;
 static link_list_t         current_logins;
 static link_list_t         current_connections;
+static link_list_t         max_concurrent_attempts;
+static void                clearMaxConcurrentAttempt(const char* host_ip);
 
 static trashCan            ip_can;
 static trashCan            ip_silent_can;
@@ -361,7 +363,7 @@ int sbbs_t::lputs(int level, const char* str)
 	SAFEPRINTF3(msg, "%s%s%s", prefix, user_str, str);
 	strip_ctrl(msg, msg);
 	if (is_event_thread) {
-		if (level <= startup->event_log_level) {
+		if (startup != nullptr && level <= startup->event_log_level) {
 			if (logfile_fp == nullptr) {
 				char str[128];
 				if(startup->first_node > 1)
@@ -457,7 +459,7 @@ SOCKET accept_socket(SOCKET s, union xp_sockaddr* addr, socklen_t* addrlen)
 {
 	SOCKET sock;
 
-	sock = accept(s, &addr->addr, addrlen);
+	sock = accept(s, (struct sockaddr*)addr, addrlen);
 	if (sock != INVALID_SOCKET)
 		call_socket_open_callback(true);
 
@@ -479,10 +481,9 @@ int close_socket(SOCKET sock)
 	return result;
 }
 
-/* TODO: IPv6 */
-in_addr_t resolve_ip(char *addr)
+in_addr_t resolve_ipv4(const char *addr)
 {
-	char*    p;
+	const char* p;
 	struct addrinfo* res;
 	struct addrinfo hints = {0};
 	in_addr_t ipa = INADDR_NONE;
@@ -1183,6 +1184,7 @@ js_alert(JSContext *cx, uintN argc, jsval *arglist)
 	if (sbbs->online != ON_REMOTE)
 		sbbs->lputs(LOG_WARNING, cstr);
 	else {
+		sbbs->term->cond_newline();
 		sbbs->attr(sbbs->cfg.color[clr_err]);
 		sbbs->bputs(cstr);
 		sbbs->attr(LIGHTGRAY);
@@ -1438,6 +1440,7 @@ JSContext* sbbs_t::js_init(JSRuntime** runtime, JSObject** glob, const char* des
 	js_callback.yield_interval = startup->js.yield_interval;
 	js_callback.terminated = &terminated;
 	js_callback.auto_terminate = true;
+	js_callback.terminate_on_disconnect = true;  // abort terminal scripts when the user disconnects (peer of auto_terminate)
 	js_callback.events_supported = true;
 
 	bool success = false;
@@ -1547,7 +1550,7 @@ bool js_CreateCommonObjects(JSContext* js_cx
                                        , scfg_t* cfg                /* common */
                                        , scfg_t* node_cfg           /* node-specific */
                                        , jsSyncMethodSpec* methods  /* global */
-                                       , int64_t uptime             /* system */
+                                       , time_t uptime              /* system */
                                        , const char* host_name      /* system */
                                        , const char* socklib_desc   /* system */
                                        , js_callback_t* cb          /* js */
@@ -1616,6 +1619,12 @@ bool js_CreateCommonObjects(JSContext* js_cx
 		if (js_CreateFileClass(js_cx, *glob) == NULL)
 			break;
 
+#ifdef USE_SQLITE
+		/* SQLite Class */
+		if (js_CreateSQLiteClass(js_cx, *glob) == NULL)
+			break;
+#endif
+
 		/* Archive Class */
 		if (js_CreateArchiveClass(js_cx, *glob, cfg->supported_archive_formats) == NULL)
 			break;
@@ -1640,10 +1649,8 @@ bool js_CreateCommonObjects(JSContext* js_cx
 		if (js_CreateCryptCertClass(js_cx, *glob) == NULL)
 			break;
 
-#if defined USE_MOSQUITTO
 		if (js_CreateMQTTClass(js_cx, *glob) == NULL)
 			break;
-#endif
 		/* Area Objects */
 		if (!js_CreateUserObjects(js_cx, *glob, cfg, user, client, startup == NULL ? NULL :startup->web_file_vpath_prefix, /* subscan: */ NULL, mqtt))
 			break;
@@ -2036,8 +2043,11 @@ static int crypt_pop_channel_data(sbbs_t *sbbs, char *inbuf, int want, int *got)
 					continue;
 				if (cid == sbbs->sftp_channel) {
 					pthread_mutex_unlock(&sbbs->ssh_mutex);
-					if (!sftps_recv(sbbs->sftp_state, reinterpret_cast<uint8_t *>(inbuf), tgot))
+					SFTPS_OUTCOME_DECL(out, 256);
+					if (!sftps_recv(sbbs->sftp_state, reinterpret_cast<uint8_t *>(inbuf), tgot, out)) {
+						lprintf(LOG_NOTICE, "sftp recv: %s", out->estr);
 						sbbs->sftp_end();
+					}
 					pthread_mutex_lock(&sbbs->ssh_mutex);
 				}
 				else if (cid == sbbs->session_channel) {
@@ -2056,8 +2066,11 @@ static int crypt_pop_channel_data(sbbs_t *sbbs, char *inbuf, int want, int *got)
 						if (sbbs->init_sftp(cid)) {
 							if (tgot > 0) {
 								pthread_mutex_unlock(&sbbs->ssh_mutex);
-								if (!sftps_recv(sbbs->sftp_state, reinterpret_cast<uint8_t *>(inbuf), tgot))
+								SFTPS_OUTCOME_DECL(out2, 256);
+								if (!sftps_recv(sbbs->sftp_state, reinterpret_cast<uint8_t *>(inbuf), tgot, out2)) {
+									lprintf(LOG_NOTICE, "sftp recv: %s", out2->estr);
 									sbbs->sftp_end();
+								}
 								pthread_mutex_lock(&sbbs->ssh_mutex);
 							}
 							sbbs->sftp_channel = cid;
@@ -2114,7 +2127,7 @@ static int crypt_pop_channel_data(sbbs_t *sbbs, char *inbuf, int want, int *got)
 				if (sbbs->sftp_channel != -1) {
 					if (!channel_open(sbbs, sbbs->sftp_channel)) {
 						if (cryptStatusOK(cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL, sbbs->sftp_channel)))
-							cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE, 0);
+							(void)cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE, 0);
 						sbbs->sftp_channel = -1;
 						closed = true;
 					}
@@ -2122,7 +2135,7 @@ static int crypt_pop_channel_data(sbbs_t *sbbs, char *inbuf, int want, int *got)
 				if (sbbs->session_channel != -1) {
 					if (!channel_open(sbbs, sbbs->session_channel)) {
 						if (cryptStatusOK(cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL, sbbs->session_channel)))
-							cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE, 0);
+							(void)cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL_ACTIVE, 0);
 						sbbs->session_channel = -1;
 						closed = true;
 					}
@@ -2134,6 +2147,10 @@ static int crypt_pop_channel_data(sbbs_t *sbbs, char *inbuf, int want, int *got)
 		}
 		if (ret == CRYPT_ENVELOPE_RESOURCE)
 			return CRYPT_ERROR_TIMEOUT;
+		/* sftp_state->mtx is acquired+released entirely inside sftps_recv;
+		 * crypt_pop_channel_data never holds it across return. The caller
+		 * owns ssh_mutex and re-takes it after each sftps_recv call. */
+		// coverity[LOCK:SUPPRESS]
 		return ret;
 	}
 	return CRYPT_ERROR_TIMEOUT;
@@ -2149,6 +2166,10 @@ void input_thread(void *arg)
 	uint          total_pkts = 0;
 	sbbs_t*       sbbs = (sbbs_t*) arg;
 	SOCKET        sock;
+#ifdef USE_CRYPTLIB
+	// cryptPopData() returns after one SSH packet even if more plaintext is buffered.
+	bool          drain_ssh = false;
+#endif
 #ifdef PREFER_POLL
 	struct pollfd fds[2];
 	int           nfds;
@@ -2180,24 +2201,34 @@ void input_thread(void *arg)
 		}
 
 #ifdef _WIN32   // No spy sockets
-		if (!socket_readable(sbbs->client_socket, 1000)) {
-			++sbbs->socket_inactive;
-			continue;
+#ifdef USE_CRYPTLIB
+		if (!drain_ssh)
+#endif
+		{
+			if (!socket_readable(sbbs->client_socket, 1000)) {
+				++sbbs->socket_inactive;
+				continue;
+			}
 		}
 #else
 #ifdef PREFER_POLL
-		fds[0].fd = sbbs->client_socket;
-		fds[0].events = POLLIN;
-		nfds = 1;
-		if (uspy_socket[sbbs->cfg.node_num - 1] != INVALID_SOCKET) {
-			fds[1].fd = uspy_socket[sbbs->cfg.node_num - 1];
-			fds[1].events = POLLIN;
-			nfds++;
-		}
+#ifdef USE_CRYPTLIB
+		if (!drain_ssh)
+#endif
+		{
+			fds[0].fd = sbbs->client_socket;
+			fds[0].events = POLLIN;
+			nfds = 1;
+			if (uspy_socket[sbbs->cfg.node_num - 1] != INVALID_SOCKET) {
+				fds[1].fd = uspy_socket[sbbs->cfg.node_num - 1];
+				fds[1].events = POLLIN;
+				nfds++;
+			}
 
-		if (poll(fds, nfds, 1000) < 1) {
-			++sbbs->socket_inactive;
-			continue;
+			if (poll(fds, nfds, 1000) < 1) {
+				++sbbs->socket_inactive;
+				continue;
+			}
 		}
 #else
 #error Spy sockets without poll() was removed in commit 3971ef4dcc3db19f400a648b6110718e56a64cf3
@@ -2221,28 +2252,41 @@ void input_thread(void *arg)
  *         ------------
  */
 
+		// Remember which socket was selected here: don't re-compare 'sock'
+		// against the atomic client_socket later, as another thread (e.g.
+		// sbbs_t::hangup) may have stored INVALID_SOCKET by then, misrouting
+		// an ordinary client disconnect into spy-socket handling (issue #1184).
+		bool spy_sock = false;
+#ifdef USE_CRYPTLIB
+		if (drain_ssh)
+			sock = sbbs->client_socket;
+		else
+#endif
+		{
 #ifdef _WIN32   // No spy sockets
-		sock = sbbs->client_socket;
+			sock = sbbs->client_socket;
 #else
 #ifdef PREFER_POLL
-		if (fds[0].revents & POLLIN)
-			sock = sbbs->client_socket;
-		else if (uspy_socket[sbbs->cfg.node_num - 1] != INVALID_SOCKET && fds[1].revents & POLLIN) {
-			if (socket_recvdone(uspy_socket[sbbs->cfg.node_num - 1], 0)) {
-				close_socket(uspy_socket[sbbs->cfg.node_num - 1]);
-				lprintf(LOG_NOTICE, "Node %d Closing local spy socket: %d", sbbs->cfg.node_num, uspy_socket[sbbs->cfg.node_num - 1]);
-				uspy_socket[sbbs->cfg.node_num - 1] = INVALID_SOCKET;
+			if (fds[0].revents & POLLIN)
+				sock = sbbs->client_socket;
+			else if (uspy_socket[sbbs->cfg.node_num - 1] != INVALID_SOCKET && fds[1].revents & POLLIN) {
+				if (socket_recvdone(uspy_socket[sbbs->cfg.node_num - 1], 0)) {
+					close_socket(uspy_socket[sbbs->cfg.node_num - 1]);
+					lprintf(LOG_NOTICE, "Node %d Closing local spy socket: %d", sbbs->cfg.node_num, uspy_socket[sbbs->cfg.node_num - 1]);
+					uspy_socket[sbbs->cfg.node_num - 1] = INVALID_SOCKET;
+					continue;
+				}
+				sock = uspy_socket[sbbs->cfg.node_num - 1];
+				spy_sock = true;
+			}
+			else {
 				continue;
 			}
-			sock = uspy_socket[sbbs->cfg.node_num - 1];
-		}
-		else {
-			continue;
-		}
 #else
 #error Spy sockets without poll() was removed in commit 3971ef4dcc3db19f400a648b6110718e56a64cf3
 #endif
 #endif
+		}
 		avail = RingBufFree(&sbbs->inbuf);
 
 		if (avail < 1) { // input buffer full
@@ -2264,8 +2308,9 @@ void input_thread(void *arg)
 
 		int rd; // number of bytes read
 #ifdef USE_CRYPTLIB
-		if (sbbs->ssh_mode && sock == sbbs->client_socket) {
+		if (sbbs->ssh_mode && !spy_sock) {
 			int err;
+			drain_ssh = false;
 			if (WaitForEvent(sbbs->ssh_active, 1000) == WAIT_TIMEOUT) {
 				pthread_mutex_unlock(&sbbs->input_thread_mutex);
 				continue;
@@ -2294,6 +2339,7 @@ void input_thread(void *arg)
 						sbbs->errormsg(WHERE, ERR_UNLOCK, "input_thread_mutex", 0);
 					continue;
 				}
+				drain_ssh = true;
 				rd = i;
 			}
 		}
@@ -2310,7 +2356,7 @@ void input_thread(void *arg)
 		if (rd == SOCKET_ERROR)
 		{
 #ifdef __unix__
-			if (sock == sbbs->client_socket)  {
+			if (!spy_sock)  {
 #endif
 			if (!sbbs->online)      // sbbs_t::hangup() called?
 				break;
@@ -2341,7 +2387,7 @@ void input_thread(void *arg)
 #endif
 		}
 
-		if (rd == 0 && sock == sbbs->client_socket)
+		if (rd == 0 && !spy_sock)
 		{
 			lprintf(LOG_NOTICE, "Node %d disconnected", sbbs->cfg.node_num);
 			break;
@@ -2353,7 +2399,7 @@ void input_thread(void *arg)
 		// telbuf and wr are modified to reflect telnet escaped data
 		wr = rd;
 #ifdef __unix__
-		if (sock != sbbs->client_socket)
+		if (spy_sock)
 			wrbuf = inbuf;
 		else
 #endif
@@ -2537,10 +2583,28 @@ void passthru_thread(void* arg)
 	thread_down();
 }
 
+// Wait for the output ring buffer to empty *and* for the output_thread to
+// transmit its linear buffer.  WaitForOutbufEmpty() alone only confirms the
+// ring buffer was drained into output_thread's linear buffer (that's when
+// empty_event fires), not that those bytes have actually been sent; closing
+// the socket in that window loses the unsent output (GitLab #1157).
+bool sbbs_t::WaitForOutbufDrained(int timeout)
+{
+	if (!WaitForOutbufEmpty(timeout))
+		return false;
+	msclock_t start = msclock();
+	while (output_thread_busy && output_thread_running) {
+		if ((int)(msclock() - start) >= timeout)
+			return false;
+		SLEEP(1);
+	}
+	return true;
+}
+
 void output_thread(void* arg)
 {
 	char node[128];
-	char errmsg[128];
+	char errmsg[SOCKET_STRERROR_BUFLEN];
 	char stats[128];
 	char spy_topic[128];
 	BYTE buf[IO_THREAD_BUF_SIZE];
@@ -2640,6 +2704,11 @@ void output_thread(void* arg)
 				continue;
 			}
 
+			/* Mark busy *before* draining the ring buffer (which fires
+			 * empty_event), so WaitForOutbufDrained() can't mistake the
+			 * ring->linear hand-off for "everything sent" (GitLab #1157). */
+			sbbs->output_thread_busy = true;
+
 			/*
 			 * At this point, there's something to send and,
 			 * if the highwater mark is set, the timeout has
@@ -2656,8 +2725,10 @@ void output_thread(void* arg)
 				avail = mss;
 			buftop = RingBufRead(&sbbs->outbuf, buf, avail);
 			bufbot = 0;
-			if (buftop == 0)
+			if (buftop == 0) {
+				sbbs->output_thread_busy = false;
 				continue;
+			}
 		}
 
 		/* Check socket for writability */
@@ -2665,6 +2736,7 @@ void output_thread(void* arg)
 			continue;
 		}
 
+		uint sendbytes = buftop - bufbot;   // Bytes offered to the transport this iteration
 #ifdef USE_CRYPTLIB
 		if (sbbs->ssh_mode) {
 			int err;
@@ -2678,27 +2750,32 @@ void output_thread(void* arg)
 				continue;
 			}
 			if (sbbs->session_channel == -1) {
-				i = buftop - bufbot;    // Pretend we sent it all
+				i = sendbytes;    // Pretend we sent it all
 			}
 			else {
 				if (cryptStatusError((err = cryptSetAttribute(sbbs->ssh_session, CRYPT_SESSINFO_SSH_CHANNEL, sbbs->session_channel)))) {
 					GCESSTR(err, node, sbbs->ssh_session, "setting channel");
 					sbbs->online = false;
-					i = buftop - bufbot;    // Pretend we sent it all
+					i = sendbytes;    // Pretend we sent it all
 				}
 				else {
 					/*
 					 * Limit as per js_socket.c.
 					 * Sure, this is TLS, not SSH, but we see weird stuff here in sz file transfers.
 					 */
-					size_t sendbytes = buftop - bufbot;
 					if (sendbytes > 0x2000)
 						sendbytes = 0x2000;
-					if (cryptStatusError((err = cryptPushData(sbbs->ssh_session, (char*)buf + bufbot, buftop - bufbot, &i)))) {
-						/* Handle the SSH error here... */
+					if (cryptStatusError((err = cryptPushData(sbbs->ssh_session, (char*)buf + bufbot, sendbytes, &i)))) {
+						/* Handle the SSH error here. The lprintf inside GCESSTR
+						 * runs while ssh_mutex is held; releasing+reacquiring it
+						 * across the error report would make the error-handling
+						 * sequence racy (ssh_errors++, online=FALSE) and is the
+						 * wrong tradeoff for a fast log write. */
+						// coverity[SLEEP:SUPPRESS]
 						GCESSTR(err, node, sbbs->ssh_session, "pushing data");
 						sbbs->online = false;
-						i = buftop - bufbot;    // Pretend we sent it all
+						sendbytes = buftop - bufbot;
+						i = sendbytes;    // Pretend we sent it all
 					}
 					else {
 						// READ = WRITE TIMEOUT HACK... REMOVE WHEN FIXED
@@ -2712,7 +2789,8 @@ void output_thread(void* arg)
 							GCESSTR(err, node, sbbs->ssh_session, "flushing data");
 							if (err != CRYPT_ERROR_TIMEOUT) {
 								sbbs->online = false;
-								i = buftop - bufbot;    // Pretend we sent it all
+								sendbytes = buftop - bufbot;
+								i = sendbytes;    // Pretend we sent it all
 							}
 						}
 						// READ = WRITE TIMEOUT HACK... REMOVE WHEN FIXED
@@ -2725,20 +2803,26 @@ void output_thread(void* arg)
 		}
 		else
 #endif
-		i = sendsocket(sbbs->client_socket, (char*)buf + bufbot, buftop - bufbot);
+		// coverity[INTEGER_OVERFLOW:SUPPRESS] bufbot < buftop and 0 <= i <= sendbytes by loop invariant
+		i = sendsocket(sbbs->client_socket, (char*)buf + bufbot, sendbytes);
 		if (i == SOCKET_ERROR) {
+			SOCKET sock = sbbs->client_socket.load();
 			if (SOCKET_ERRNO == ENOTSOCK)
-				lprintf(LOG_NOTICE, "%s client socket closed on send", node);
+				lprintf(LOG_NOTICE, "%04d %s [%s] client socket closed on send", sock, sbbs->client.protocol, sbbs->client_ipaddr);
 			else if (SOCKET_ERRNO == ECONNRESET)
-				lprintf(LOG_NOTICE, "%s connection reset by peer on send", node);
+				lprintf(LOG_NOTICE, "%04d %s [%s] connection reset by peer on send", sock, sbbs->client.protocol, sbbs->client_ipaddr);
 			else if (SOCKET_ERRNO == ECONNABORTED)
-				lprintf(LOG_NOTICE, "%s connection aborted by peer on send", node);
+				lprintf(LOG_NOTICE, "%04d %s [%s] connection aborted by peer on send", sock, sbbs->client.protocol, sbbs->client_ipaddr);
+			else if (SOCKET_ERRNO == ESHUTDOWN)
+				lprintf(LOG_NOTICE, "%04d %s [%s] socket shutdown on send", sock, sbbs->client.protocol, sbbs->client_ipaddr);
+			else if (SOCKET_ERRNO == EINVAL)
+				lprintf(LOG_NOTICE, "%04d %s [%s] socket invalid on send", sock, sbbs->client.protocol, sbbs->client_ipaddr);
 			else
-				lprintf(LOG_WARNING, "%s !ERROR %d (%s) sending on socket %d"
-				        , node, SOCKET_ERRNO, SOCKET_STRERROR(errmsg, sizeof errmsg), sbbs->client_socket.load());
+				lprintf(LOG_WARNING, "%04d %s [%s] !ERROR %d (%s) on send"
+				        , sock, sbbs->client.protocol, sbbs->client_ipaddr, SOCKET_ERRNO, SOCKET_STRERROR(errmsg, sizeof errmsg));
 			sbbs->online = false;
 			/* was break; on 4/7/00 */
-			i = buftop - bufbot;    // Pretend we sent it all
+			i = sendbytes;    // Pretend we sent it all
 		}
 
 		if (sbbs->cfg.node_num > 0 && !(sbbs->sys_status & SS_FILEXFER)) {
@@ -2758,6 +2842,7 @@ void output_thread(void* arg)
 					        , node, result, errno, i, spy_topic);
 			}
 			if (spy_socket[sbbs->cfg.node_num - 1] != INVALID_SOCKET)
+				// coverity[INTEGER_OVERFLOW:SUPPRESS] bufbot < buftop and 0 <= i <= sendbytes by loop invariant
 				if (sendsocket(spy_socket[sbbs->cfg.node_num - 1], (char*)buf + bufbot, i) != i && SOCKET_ERRNO != EPIPE)
 					errprintf(LOG_ERR, WHERE, "%s ERROR %d writing to spy socket", node, SOCKET_ERRNO);
 #ifdef __unix__
@@ -2767,14 +2852,16 @@ void output_thread(void* arg)
 #endif
 		}
 
-		if (i != (int)(buftop - bufbot)) {
+		if (i != (int)sendbytes) {
 			lprintf(LOG_WARNING, "%s !Short socket send (%u instead of %u)"
-			        , node, i, buftop - bufbot);
+			        , node, i, sendbytes);
 			short_sends++;
 		}
 		bufbot += i;
 		total_sent += i;
 		total_pkts++;
+		if (bufbot == buftop)   // linear buffer fully transmitted
+			sbbs->output_thread_busy = false;
 	}
 
 	sbbs->spymsg("Disconnected");
@@ -3405,9 +3492,11 @@ void event_thread(void* arg)
 									sbbs->lprintf(LOG_ERR, "!ERROR interrupting node %d (%s)", j, node_status);
 							}
 							if (now - start > (60 * 60) && node_socket[j - 1] != INVALID_SOCKET) {
-								sbbs->lprintf(LOG_WARNING, "!TIRED of waiting for node %d to become inactive (%s), closing socket %d"
+								sbbs->lprintf(LOG_WARNING, "!TIRED of waiting for node %d to become inactive (%s), shutting down socket %d"
 								              , j, node_status, node_socket[j - 1]);
-								close_socket(node_socket[j - 1]);
+								// Shutdown (don't close) to wake the node's blocked reads: the
+								// node thread owns and closes this descriptor in its own teardown
+								shutdown(node_socket[j - 1], SHUT_RDWR);
 								node_socket[j - 1] = INVALID_SOCKET;
 							}
 							if (now - start > (90 * 60)) {
@@ -3882,6 +3971,8 @@ sbbs_t::~sbbs_t()
 	/* Free allocated class members */
 	/********************************/
 
+	/* nodefile_mutex is confined to getnodedat/putnodedat — not held here. */
+	// coverity[SLEEP:SUPPRESS]
 	js_cleanup();
 
 	/* Reset text.dat */
@@ -4083,6 +4174,16 @@ void sbbs_t::hangup(void)
 	if (online) {
 		term->clear_hotspots();
 		lprintf(LOG_DEBUG, "disconnecting client");
+		// Wait for the last of the output -- e.g. the echoed command key of a
+		// fast log-off (/O), which is the only output that command produces --
+		// to be *transmitted* before tearing the connection down.  Do this
+		// while still online: flush_output() short-circuits on !online.
+		// WaitForOutbufEmpty() alone would not be enough either; it returns in
+		// the gap between output_thread's ring->linear read and its send
+		// (GitLab #1157), and on SSH the ssh_session_destroy() below then
+		// discards those still-untransmitted bytes.
+		if (client_socket != INVALID_SOCKET)
+			WaitForOutbufDrained(1000);
 		online = false;   // moved from the bottom of this function on Jan-25-2009
 	}
 	if (client_socket_dup != INVALID_SOCKET && client_socket_dup != client_socket)
@@ -4090,7 +4191,6 @@ void sbbs_t::hangup(void)
 	client_socket_dup = INVALID_SOCKET;
 
 	if (client_socket != INVALID_SOCKET) {
-		mswait(1000);   /* Give socket output buffer time to flush */
 		client_off(client_socket);
 		if (ssh_mode) {
 			pthread_mutex_lock(&ssh_mutex);
@@ -4110,6 +4210,8 @@ int sbbs_t::incom(unsigned int timeout)
 	uchar ch;
 
 	if (!online)
+		return NOINP;
+	if (term_output_disabled)
 		return NOINP;
 
 	// If we think we may have some input, send all our output
@@ -4147,6 +4249,8 @@ int sbbs_t::_outcom(uchar ch)
 int sbbs_t::outcom(uchar ch)
 {
 	int i = 0;
+	if (term_output_disabled)
+		return 0; // "Success"
 	while (_outcom(ch) != 0) {
 		if (!online)
 			break;
@@ -4396,6 +4500,9 @@ void sbbs_t::logoffstats()
 		if (fp == NULL)
 			continue;
 		if (!fread_dstats(fp, &stats)) {
+			/* nodefile_mutex is confined to getnodedat/putnodedat (which
+			 * lock+unlock atomically). No nodefile_mutex is held here. */
+			// coverity[LOCK:SUPPRESS]
 			errormsg(WHERE, ERR_READ, "dsts.ini", i);
 		} else {
 			stats.total.timeon += minutes_used;
@@ -4414,6 +4521,9 @@ void sbbs_t::register_login()
 		return;
 	if (useron.pass[0]) {
 		loginSuccess(startup->login_attempt_list, &client_addr);
+		clearMaxConcurrentAttempt(client.addr);
+		mqtt_pub_login_attempt_clear(mqtt, client.addr);
+		mqtt_pub_max_concurrent_clear(mqtt, client.addr);
 		listAddNodeData(&current_logins, client.addr, strlen(client.addr) + 1, cfg.node_num, LAST_NODE);
 	}
 #ifdef _WIN32
@@ -4429,7 +4539,7 @@ void node_thread(void* arg)
 	int file;
 	int curshell = -1;
 	node_t node;
-	uint login_attempts;
+	long login_attempts;
 	sbbs_t*         sbbs = (sbbs_t*) arg;
 
 	update_clients();
@@ -4451,9 +4561,12 @@ void node_thread(void* arg)
 
 	if (startup->login_attempt.throttle
 	    && (login_attempts = loginAttempts(startup->login_attempt_list, &sbbs->client_addr)) > 1) {
-		lprintf(LOG_DEBUG, "Node %d Throttling suspicious connection from: %s (%u login attempts)"
+		lprintf(LOG_DEBUG, "Node %d Throttling suspicious connection from: %s (%ld login attempts)"
 		        , sbbs->cfg.node_num, sbbs->client_ipaddr, login_attempts);
-		mswait(login_attempts * startup->login_attempt.throttle);
+		for (long i = 0; i < login_attempts; ++i) {
+			mswait(startup->login_attempt.throttle);
+			sbbs->socket_inactive = 0;
+		}
 	}
 
 	if (sbbs->answer()) {
@@ -4633,7 +4746,15 @@ void node_thread(void* arg)
 			sbbs->errormsg(WHERE, "truncating", "logfile", 0);
 	}
 
-	if (sbbs->getnodedat(sbbs->cfg.node_num, &node, true)) {
+	// Retry the node status reset: giving up here strands the node record
+	// in-use (e.g. when node.dab is briefly locked or inaccessible during
+	// an exclusive event), later "corrected" on connect - see issue #1178
+	bool node_status_reset = false;
+	for (int attempt = 1; attempt <= 3 && !node_status_reset; attempt++) {
+		if (attempt > 1)
+			SLEEP(500);
+		if (!sbbs->getnodedat(sbbs->cfg.node_num, &node, true))
+			continue;
 		node_socket[sbbs->cfg.node_num - 1] = INVALID_SOCKET;
 		if (node.misc & NODE_DOWN)
 			node.status = NODE_OFFLINE;
@@ -4643,8 +4764,13 @@ void node_thread(void* arg)
 		               | NODE_UDAT | NODE_POFF | NODE_AOFF | NODE_EXT);
 		/*	node.useron=0; needed for hang-ups while in multinode chat */
 		sbbs->putnodedat(sbbs->cfg.node_num, &node);
-	} else
+		node_status_reset = true;
+	}
+	if (!node_status_reset) {
 		node_socket[sbbs->cfg.node_num - 1] = INVALID_SOCKET;
+		lprintf(LOG_ERR, "Node %d thread terminated without resetting node status"
+		        , sbbs->cfg.node_num);
+	}
 
 	{
 		uint32_t remain = protected_uint32_adjust_fetch(&node_threads_running, -1);
@@ -4694,10 +4820,8 @@ void sbbs_t::daily_maint(void)
 
 	if (cfg.user_backup_level && (lastusernum = lastuser(&cfg)) > 0) {
 		lputs(LOG_DEBUG, "DAILY: Backing up user data...");
-		SAFEPRINTF(str, "%suser/" USER_DATA_FILENAME, cfg.data_dir);
-		int64_t bytes = backup(str, cfg.user_backup_level, false);
-		SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg.data_dir);
-		bytes += backup(str, cfg.user_backup_level, false);
+		int64_t bytes = backup(userdat_filename(&cfg, str, sizeof str), cfg.user_backup_level, false);
+		bytes += backup(useridx_filename(&cfg, str, sizeof str), cfg.user_backup_level, false);
 		lprintf(LOG_INFO, "DAILY: Backed up %s bytes of user data (%u users)"
 			, byte_estimate_to_str(bytes, str, sizeof str, 1024 * 1024, 1)
 			, lastusernum);
@@ -4706,6 +4830,8 @@ void sbbs_t::daily_maint(void)
 	if (cfg.mail_backup_level && getmail(&cfg, 0, false, /* attr: */ 0) > 0) {
 		lputs(LOG_DEBUG, "DAILY: Backing up mail data...");
 		smb_t mail;
+		/* nodefile_mutex is confined to getnodedat/putnodedat — not held here. */
+		// coverity[SLEEP:SUPPRESS]
 		int result = smb_open_sub(&cfg, &mail, INVALID_SUB);
 		if (result != SMB_SUCCESS)
 			errprintf(LOG_ERR, WHERE, "ERROR %d (%s) opening mail base", result, mail.last_error);
@@ -4955,6 +5081,7 @@ static void cleanup(int code)
 
 	listFree(&current_logins);
 	listFree(&current_connections);
+	listFree(&max_concurrent_attempts);
 
 	protected_uint32_destroy(node_threads_running);
 	protected_uint32_destroy(ssh_sessions);
@@ -4973,6 +5100,59 @@ static void cleanup(int code)
 	host_exempt.reset();
 
 	mqtt_shutdown(&mqtt);
+}
+
+/* Per-IP tracker for "max concurrent connections" hits.
+   Each node's data is a max_concurrent_attempt_t. */
+typedef struct {
+	char     ip[INET6_ADDRSTRLEN];
+	uint32_t count;
+} max_concurrent_attempt_t;
+
+/* Increment the strike counter for host_ip. Returns the new count, or 0 on error. */
+static uint32_t bumpMaxConcurrentAttempt(const char* host_ip)
+{
+	list_node_t*              node;
+	max_concurrent_attempt_t* att;
+	uint32_t                  count = 0;
+
+	if (!listLock(&max_concurrent_attempts))
+		return 0;
+	for (node = max_concurrent_attempts.first; node != NULL; node = node->next) {
+		att = (max_concurrent_attempt_t*)node->data;
+		if (att != NULL && strcmp(att->ip, host_ip) == 0) {
+			att->count++;
+			count = att->count;
+			break;
+		}
+	}
+	if (node == NULL) {
+		max_concurrent_attempt_t entry;
+		memset(&entry, 0, sizeof(entry));
+		SAFECOPY(entry.ip, host_ip);
+		entry.count = 1;
+		if (listPushNodeData(&max_concurrent_attempts, &entry, sizeof(entry)) != NULL)
+			count = 1;
+	}
+	listUnlock(&max_concurrent_attempts);
+	return count;
+}
+
+/* Remove the strike-counter entry for host_ip (called after the IP has been filtered). */
+static void clearMaxConcurrentAttempt(const char* host_ip)
+{
+	list_node_t* node;
+
+	if (!listLock(&max_concurrent_attempts))
+		return;
+	for (node = max_concurrent_attempts.first; node != NULL; node = node->next) {
+		max_concurrent_attempt_t* att = (max_concurrent_attempt_t*)node->data;
+		if (att != NULL && strcmp(att->ip, host_ip) == 0) {
+			listRemoveNode(&max_concurrent_attempts, node, /* free_data: */ true);
+			break;
+		}
+	}
+	listUnlock(&max_concurrent_attempts);
 }
 
 void bbs_thread(void* arg)
@@ -5210,7 +5390,7 @@ void bbs_thread(void* arg)
 			        , startup->max_session_inactivity, scfg.max_getkey_inactivity);
 		}
 		if (uptime == 0)
-			uptime = xp_fast_timer64();
+			uptime = time(NULL);
 
 		if (startup->last_node > scfg.sys_nodes) {
 			lprintf(LOG_NOTICE, "Specified last_node (%d) > sys_nodes (%d), auto-corrected"
@@ -5452,6 +5632,7 @@ NO_SSH:
 
 		listInit(&current_logins, LINK_LIST_MUTEX);
 		listInit(&current_connections, LINK_LIST_MUTEX);
+		listInit(&max_concurrent_attempts, LINK_LIST_MUTEX);
 
 #ifdef __unix__ //	unix-domain spy sockets
 		for (int i = first_node; i <= last_node && !(startup->options & BBS_OPT_NO_SPY_SOCKETS); i++)  {
@@ -5463,7 +5644,7 @@ NO_SSH:
 				continue;
 			}
 			else  {
-				if (xpms_add(ts_set, PF_UNIX, SOCK_STREAM, 0, str, 0, "Spy Socket", NULL, sock_cb, NULL, &uspy_cb[i - 1]))
+				if (xpms_add(ts_set, PF_UNIX, SOCK_STREAM, 0, str, 0, "Spy Socket", &terminate_server, sock_cb, NULL, &uspy_cb[i - 1]))
 					lprintf(LOG_INFO, "Node %d local spy using socket %s", i, str);
 				else
 					lprintf(LOG_ERR, "Node %d !ERROR %d (%s) creating local spy socket %s"
@@ -5475,21 +5656,35 @@ NO_SSH:
 		lprintf(LOG_INFO, "Terminal Server thread started for nodes %d through %d", first_node, last_node);
 		mqtt_client_max(&mqtt, (last_node - first_node) + 1);
 
+		bool recycle_pending = false;
 		while (!terminate_server) {
 			YIELD();
 			/* check for re-run flags and recycle/shutdown sem files */
-			if (!(startup->options & BBS_OPT_NO_RECYCLE)
-			    && protected_uint32_value(node_threads_running) == 0) {
+			if (!(startup->options & BBS_OPT_NO_RECYCLE)) {
+				bool recycle = false;
 				if ((p = semfile_list_check(&initialized, recycle_semfiles)) != NULL) {
 					lprintf(LOG_INFO, "Recycle semaphore file (%s) detected"
 					        , p);
-					break;
+					recycle = true;
 				}
 				if (startup->recycle_now == true) {
 					lprintf(LOG_INFO, "Recycle semaphore signaled");
 					startup->recycle_now = false;
-					break;
+					recycle = true;
 				}
+				if (recycle) {
+					recycle_pending = true;
+					/* Flag this server's nodes to re-read their configuration
+					   on their next connection, so configuration changes reach
+					   new logins without waiting for the terminal server to
+					   drain to idle (the full server recycle below still waits
+					   until all nodes are idle). */
+					for (int i = first_node; i <= last_node; i++)
+						set_node_rerun(&scfg, i, /* set: */ true);
+				}
+				if (recycle_pending
+				    && protected_uint32_value(node_threads_running) == 0)
+					break;
 			}
 			if (((p = semfile_list_check(&initialized, shutdown_semfiles)) != NULL
 			     && lprintf(LOG_INFO, "Shutdown semaphore file (%s) detected"
@@ -5548,9 +5743,51 @@ NO_SSH:
 				break;
 			}
 
-			if ((p = semfile_list_check(&initialized, clear_attempts_semfiles)) != NULL) {
-				lprintf(LOG_INFO, "Clear Failed Login Attempts semaphore file (%s) detected", p);
-				loginAttemptListClear(startup->login_attempt_list);
+			{
+				char  clear_ip[INET6_ADDRSTRLEN] = {0};
+				bool  do_clear = false;
+				if ((p = semfile_list_check(&initialized, clear_attempts_semfiles)) != NULL) {
+					semfile_first_line(p, clear_ip, sizeof(clear_ip));
+					lprintf(LOG_INFO, "Clear Failed Login Attempts semaphore file (%s) detected%s%s"
+					        , p, clear_ip[0] ? " for IP " : "", clear_ip);
+					do_clear = true;
+				}
+				if (startup->clear_attempts_now) {
+					if (clear_ip[0] == '\0' && mqtt.clear_attempts_ip[0] != '\0')
+						SAFECOPY(clear_ip, mqtt.clear_attempts_ip);
+					lprintf(LOG_INFO, "Clear Failed Login Attempts signaled%s%s"
+					        , clear_ip[0] ? " for IP " : "", clear_ip);
+					startup->clear_attempts_now = false;
+					mqtt.clear_attempts_ip[0] = '\0';
+					do_clear = true;
+				}
+				if (do_clear) {
+					if (clear_ip[0] != '\0') {
+						long removed = loginAttemptListClearAddr(startup->login_attempt_list, clear_ip);
+						if (removed < 0)
+							lprintf(LOG_WARNING, "Failed to clear login attempts for IP %s (invalid address?)", clear_ip);
+						else
+							lprintf(removed == 0 ? LOG_DEBUG : LOG_INFO
+							        , "Cleared %ld login attempt(s) for IP %s", removed, clear_ip);
+						clearMaxConcurrentAttempt(clear_ip);
+						mqtt_pub_login_attempt_clear(&mqtt, clear_ip);
+						mqtt_pub_max_concurrent_clear(&mqtt, clear_ip);
+					} else {
+						mqtt_clear_login_attempt_list(&mqtt, startup->login_attempt_list);
+						/* max_concurrent_attempts is term-server-only, so walk it here.    */
+						/* Skip the per-IP walk when MQTT isn't publishing.                 */
+						listLock(&max_concurrent_attempts);
+						if (mqtt.connected) {
+							for (list_node_t* n = max_concurrent_attempts.first; n != NULL; n = n->next) {
+								const max_concurrent_attempt_t* a = (const max_concurrent_attempt_t*)n->data;
+								if (a != NULL && a->ip[0] != '\0')
+									mqtt_pub_max_concurrent_clear(&mqtt, a->ip);
+							}
+						}
+						listFreeNodes(&max_concurrent_attempts);
+						listUnlock(&max_concurrent_attempts);
+					}
+				}
 			}
 
 			if (client_socket == INVALID_SOCKET)
@@ -5653,6 +5890,25 @@ NO_SSH:
 				if (connections - logins >= (int)startup->max_concurrent_connections) {
 					lprintf(LOG_NOTICE, "%04d %s !Maximum concurrent connections without login (%u) reached from host: %s"
 					        , client_socket, client.protocol, startup->max_concurrent_connections, host_ip);
+					if (startup->max_concurrent.filter_threshold > 0) {
+						uint32_t strikes = bumpMaxConcurrentAttempt(host_ip);
+						mqtt_pub_max_concurrent(&mqtt, host_ip, strikes);
+						if (strikes >= startup->max_concurrent.filter_threshold) {
+							char reason[128];
+							SAFEPRINTF2(reason, "exceeding max concurrent connection limit (%u) %u times"
+							            , startup->max_concurrent_connections, strikes);
+							const char* can_fname = startup->max_concurrent.filter_silent
+							                          ? ip_silent_can.fname : ip_can.fname;
+							if (filter_ip(&scfg, client.protocol, reason, /* host: */ NULL, host_ip
+							              , /* user: */ NULL, can_fname
+							              , startup->max_concurrent.filter_duration)) {
+								lprintf(LOG_NOTICE, "%04d %s !BLOCKING IP ADDRESS: %s in %s"
+								        , client_socket, client.protocol, host_ip, can_fname);
+								clearMaxConcurrentAttempt(host_ip);
+								mqtt_pub_max_concurrent_clear(&mqtt, host_ip);
+							}
+						}
+					}
 					close_socket(client_socket);
 					continue;
 				}
@@ -5666,6 +5922,8 @@ NO_SSH:
 			sbbs->term->cols = startup->default_term_width;
 
 			sbbs->client_socket = client_socket; // required for output to the user
+			SAFECOPY(sbbs->client.protocol, client.protocol);
+			SAFECOPY(sbbs->client_ipaddr, host_ip);
 			if (!ssh)
 				sbbs->online = ON_REMOTE;
 
@@ -5695,6 +5953,8 @@ NO_SSH:
 					lprintf(LOG_NOTICE, "%04d %s [%s] !CLIENT BLOCKED in %s %s", client_socket, client.protocol, host_ip, ip_can.fname, trash_details(&trash, details, sizeof details));
 					sbbs->trashcan_msg("ip");
 				}
+				// Drop any unsent badip.msg residue so output_thread doesn't try to send it on the closed FD
+				sbbs->rioctl(IOFB);
 				close_socket(client_socket);
 				continue;
 			}
@@ -5780,6 +6040,8 @@ NO_SSH:
 							, client_socket, client.protocol, host_ip, host_name, host_can.fname, trash_details(&trash, details, sizeof details));
 					sbbs->trashcan_msg("host");
 				}
+				// Drop any unsent badhost.msg residue so output_thread doesn't try to send it on the closed FD
+				sbbs->rioctl(IOFB);
 				SSH_END(client_socket);
 				close_socket(client_socket);
 				continue;
@@ -5844,8 +6106,8 @@ NO_SSH:
 					node_socket[node_num - 1] = client_socket;
 					sbbs->putnodedat(node_num, &node);
 					if (corrected) // lprintf/lputs only after unlocking the node.dab
-						lprintf(LOG_CRIT, "%04d !Node %d status with invalid socket corrected (was %d)"
-								, client_socket, node_num, corrected);
+						lprintf(LOG_ERR, "%04d !Node %d status with invalid socket corrected (was %d)"
+						        , client_socket, node_num, corrected);
 					break;
 				}
 				else
@@ -5861,7 +6123,11 @@ NO_SSH:
 					sbbs->cp437_out("\r\nSorry, all terminal nodes are in use or otherwise unavailable.\r\n");
 					sbbs->cp437_out("Please try again later.\r\n");
 				}
-				sbbs->flush_output(3000);
+				// Wait for nonodes.txt to be fully transmitted (not just moved
+				// out of the ring buffer) before closing the socket (#1157)
+				sbbs->WaitForOutbufDrained(3000);
+				// Drop any unsent goodbye output so output_thread doesn't try to send it on the closed FD
+				sbbs->rioctl(IOFB);
 				client_off(client_socket);
 				SSH_END(client_socket);
 				close_socket(client_socket);
@@ -5935,7 +6201,11 @@ NO_SSH:
 					sbbs->printfile(str, P_NOABORT | P_MODS);
 				else
 					sbbs->cp437_out("\r\nSorry, initialization failed. Try again later.\r\n");
-				sbbs->flush_output(3000);
+				// Wait for the message to be fully transmitted (not just moved
+				// out of the ring buffer) before closing the socket (#1157)
+				sbbs->WaitForOutbufDrained(3000);
+				// Drop any unsent goodbye output so output_thread doesn't try to send it on the closed FD
+				sbbs->rioctl(IOFB);
 				if (sbbs->getnodedat(new_node->cfg.node_num, &node, true)) {
 					node.status = NODE_WFC;
 					sbbs->putnodedat(new_node->cfg.node_num, &node);
@@ -6061,8 +6331,17 @@ NO_PASSTHRU:
 					new_node->online = ON_REMOTE;
 				}
 				/* Wait for pending data to be sent then turn off ssh_mode for uber-output */
-				while (sbbs->output_thread_running && RingBufFull(&sbbs->outbuf))
-					SLEEP(1);
+				// ...but not forever: a dead SSH peer never drains the outbuf, which would
+				// wedge this node thread in a SLEEP(1) spin.  Bail on server shutdown or
+				// after a bounded wait.  (Cf. websrvr close_session_socket.)
+				{
+					time_t ssh_drain_timeout = time(NULL) + 60;
+					while (sbbs->output_thread_running && RingBufFull(&sbbs->outbuf)) {
+						if (terminate_server || time(NULL) >= ssh_drain_timeout)
+							break;
+						SLEEP(1);
+					}
+				}
 				pthread_mutex_lock(&sbbs->ssh_mutex);
 				sbbs->ssh_mode = false;
 				sbbs->ssh_session = 0; // Don't allow subsequent SSH connections to affect this one (!)
@@ -6090,11 +6369,15 @@ NO_PASSTHRU:
 
 		set_state(terminate_server ? SERVER_STOPPING : SERVER_RELOADING);
 
-		// Close all open sockets
+		// Shutdown (don't close) all open client sockets to wake and disconnect
+		// the node threads: each node's own teardown (sbbs_t::hangup) owns and
+		// closes its client socket descriptor.  Closing it here too would
+		// double-close (EBADF log noise on *nix) and, worse, allow the fd
+		// number to be reused and then closed out from under its new owner.
 		for (int i = 0; i < MAX_NODES; i++)  {
 			if (node_socket[i] != INVALID_SOCKET) {
-				lprintf(LOG_INFO, "Closing node %d socket %d", i + 1, node_socket[i]);
-				close_socket(node_socket[i]);
+				lprintf(LOG_INFO, "Shutting down node %d socket %d", i + 1, node_socket[i]);
+				shutdown(node_socket[i], SHUT_RDWR);
 				node_socket[i] = INVALID_SOCKET;
 			}
 #ifdef __unix__

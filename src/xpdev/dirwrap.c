@@ -71,7 +71,7 @@
 #include "filewrap.h"   /* stat */
 
 #if !defined(S_ISDIR)
-	#define S_ISDIR(x)  ((x)&S_IFDIR)
+	#define S_ISDIR(x)  ((x) & S_IFDIR)
 #endif
 
 /****************************************************************************/
@@ -657,7 +657,7 @@ static bool getfilecase(char *path, bool dir)
 	if (path[0] == 0)      /* work around glibc bug 574274 */
 		return false;
 
-	if (!filename_has_wildcard(path) && filename_exists(path))
+	if (!filename_has_wildcard(path) && filename_exists(path) && isdir(path) == dir)
 		return true;
 
 	SAFECOPY(globme, path);
@@ -683,7 +683,8 @@ static bool getfilecase(char *path, bool dir)
 
 	int flags = GLOB_MARK;
 #if defined GLOB_ONLYDIR
-	if (dir) flags |= GLOB_ONLYDIR;
+	if (dir)
+		flags |= GLOB_ONLYDIR;
 #endif
 	if (glob(globme, flags, NULL, &glb) != 0)
 		return false;
@@ -960,9 +961,9 @@ typedef BOOL (WINAPI * GetDiskFreeSpaceEx_t)
 static uint64_t getdiskspace(const char* path, uint64_t unit, bool freespace)
 {
 #if defined(_WIN32)
-	uint64_t             total;
-	ULARGE_INTEGER       avail;
-	ULARGE_INTEGER       size;
+	uint64_t       total;
+	ULARGE_INTEGER avail;
+	ULARGE_INTEGER size;
 
 	if (!GetDiskFreeSpaceExA(
 			path,   /* pointer to the directory name */
@@ -1063,6 +1064,7 @@ char * _fullpath(char *target, const char *path, size_t size)  {
 		else {
 			p = getcwd(NULL, size);
 			if (p == NULL || strlen(p) + strlen(path) >= size) {
+				free(p);
 				if (target_alloced)
 					free(target);
 				return NULL;
@@ -1264,10 +1266,11 @@ BOOL CopyFile(const char* src, const char* dest, BOOL failIfExists)
 	fprintf(stderr, "%s not implemented\n", __func__);
 	return FALSE;
 #else
-	uint8_t buf[256 * 1024];
-	FILE*   in;
-	FILE*   out;
-	BOOL    success = TRUE;
+	uint8_t     buf[256 * 1024];
+	FILE*       in;
+	FILE*       out;
+	BOOL        success = TRUE;
+	struct stat st;
 
 	if (failIfExists && fexist(dest))
 		return FALSE;
@@ -1279,6 +1282,10 @@ BOOL CopyFile(const char* src, const char* dest, BOOL failIfExists)
 	}
 
 	time_t ftime = filetime(fileno(in));
+	/* fopen() created the destination with 0666 & ~umask, losing (among others)
+	   the execute bits. The set-user/group-ID bits are deliberately not copied. */
+	if (fstat(fileno(in), &st) == 0)
+		fchmod(fileno(out), st.st_mode & 0777);
 	while (!feof(in)) {
 		size_t rd = fread(buf, sizeof(uint8_t), sizeof(buf), in);
 		if (rd < 1)

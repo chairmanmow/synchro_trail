@@ -46,6 +46,8 @@ bool new_sub(int new_subnum, int group_num, sub_t* pasted_sub, long misc)
 			*new_subboard = *cfg.sub[u];
 			new_subboard->misc &= ~SUB_TEMPLATE;
 			new_subboard->arstr[0] = 0;
+			new_subboard->area_tag[0] = 0;
+			new_subboard->newsgroup[0] = 0;
 			if (cfg.sub[u]->misc & SUB_TEMPLATE) /* Use this sub (not last) if marked as template */
 				break;
 		}
@@ -656,8 +658,77 @@ void sub_cfg(int grpnum)
 						uifc.helpbuf =
 							"`Sub-board Toggle Options:`\n"
 							"\n"
-							"This menu allows you to toggle certain options for the selected\n"
-							"sub-board between two or more settings, such as `Yes` and `No`.\n"
+							"Per-sub-board behavior knobs for posting, scanning, formatting, and\n"
+							"message storage.  Each toggle applies to this single sub-board;\n"
+							"system-wide defaults are set under `Message Options`.\n"
+							"\n"
+							"`Allow Private Posts`: whether users may flag a post as private (only\n"
+							"visible to the addressee).  `Only` forces every post on this sub to be\n"
+							"private.\n"
+							"\n"
+							"`Allow Anonymous Posts`: whether users with the `A` exemption may post\n"
+							"anonymously.  `Only` forces every post anonymous.\n"
+							"\n"
+							"`Post Using Real Names`: posts on this sub display the user's real\n"
+							"name rather than their alias.\n"
+							"\n"
+							"`Users Can Edit Posts`: whether posters may edit their own messages\n"
+							"after posting.  `Last` restricts edits to only the most-recent post.\n"
+							"\n"
+							"`Users Can Delete Posts`: same idea for deletion.\n"
+							"\n"
+							"`Default On for New Scan`: include this sub in the user's \"new\n"
+							"messages\" scan by default (user can untoggle).\n"
+							"\n"
+							"`Forced On for New Scan`: always include in new-messages scan (user\n"
+							"cannot untoggle).\n"
+							"\n"
+							"`Default On for Your Scan`: include this sub in the user's \"messages\n"
+							"to me\" scan by default.\n"
+							"\n"
+							"`Public 'To' User`: show the recipient name on each post header in\n"
+							"public listings (otherwise hidden for private/anonymous posts).\n"
+							"\n"
+							"`Allow Message Voting`: allow users to attach poll responses / votes\n"
+							"to messages.  Disable on subs where voting metadata isn't wanted.\n"
+							"\n"
+							"`Allow Message Quoting`: allow users to quote prior messages when\n"
+							"composing replies (uses the editor's quote facility).\n"
+							"\n"
+							"`Allow Message Tagging`: allow users to add tags to messages (useful\n"
+							"for thread categorization and search).\n"
+							"\n"
+							"`Suppress User Signatures`: strip the user's configured signature\n"
+							"block from posts to this sub.\n"
+							"\n"
+							"`Permanent Operator Msgs`: protect operator (sysop) posts on this sub\n"
+							"from being deleted by user action or message-base aging.\n"
+							"\n"
+							"`Compress Messages (LZH)`: store message bodies LZH-compressed in the\n"
+							"message base.  Trades CPU for disk space.\n"
+							"\n"
+							"`Apply Markup Codes`: process Ctrl-A markup codes embedded in posts.\n"
+							"`Hide` keeps the codes in the message but doesn't render them.\n"
+							"\n"
+							"`Word-wrap Messages`: re-wrap message bodies for the reader's terminal\n"
+							"width on display (vs storing line breaks as-posted).\n"
+							"\n"
+							"`Format Output for 80 Columns`: force output to fit 80 columns,\n"
+							"overriding the reader's actual terminal width.\n"
+							"\n"
+							"`Auto-detect UTF-8 Msgs`: detect UTF-8 encoded message bodies and\n"
+							"render them appropriately (otherwise treated as CP437).\n"
+							"\n"
+							"`Expand @-codes in Sysop Msgs`: process @-code substitutions (e.g.\n"
+							"`@USER@`) in posts authored by sysops.  Disabled by default for\n"
+							"safety on user-posted content.\n"
+							"\n"
+							"`Template for New Subs`: when copying / templating a new sub-board\n"
+							"from this one, carry the entire toggle set across.\n"
+							"\n"
+							"`Extra Attribute Codes...`: enable support for other BBS programs'\n"
+							"color-code syntaxes (WWIV, PCBoard, Wildcat, Celerity, Renegade) in\n"
+							"messages on this sub.\n"
 						;
 						n = uifc.list(WIN_ACT | WIN_SAV | WIN_RHT | WIN_BOT, 0, 0, 0, &tog_dflt, &tog_bar
 						              , "Toggle Options", opt);
@@ -1579,7 +1650,7 @@ void sub_cfg(int grpnum)
 									"  space as it imports messages by using deleted message header and data\n"
 									"  blocks for new messages automatically. If you use this storage method,\n"
 									"  you will not need to run `smbutil p` on this message base unless you\n"
-									"  accumilate a large number of deleted message blocks and wish to free\n"
+									"  accumulate a large number of deleted message blocks and wish to free\n"
 									"  that disk space. You can switch from self-packing to fast allocation\n"
 									"  storage method and back again as you wish.\n"
 									"`Fast Allocation` is faster than self-packing because it does not search\n"
@@ -1655,7 +1726,8 @@ void sub_cfg(int grpnum)
 									"\n"
 									"This is a filename that will be created as a semaphore (signal) to an\n"
 									"external program or event whenever a message is posted in this\n"
-									"sub-board.\n"
+									"sub-board.  This path/filename may utilize command-line specifiers.\n"
+									SCFG_CMDLINE_SPEC_HELP
 								;
 								uifc.input(WIN_MID | WIN_SAV, 0, 17, "Semaphore File"
 								           , cfg.sub[i]->post_sem, sizeof(cfg.sub[i]->post_sem) - 1, K_EDIT);
@@ -1667,6 +1739,9 @@ void sub_cfg(int grpnum)
 									"You should normally have no reason to modify this value. If you get\n"
 									"crossed-up or duplicate ptridx values, then you may want to adjust\n"
 									"this value, but do so with great care and trepidation.\n"
+									"\n"
+									"In Synchronet v3.20 and later, this value is only used for `qnet/*.ptr`\n"
+									"pointer files for QWK networking and is ignored for all other purposes.\n"
 								;
 								sprintf(str, "%u", cfg.sub[i]->ptridx);
 								if (uifc.input(WIN_MID | WIN_SAV, 0, 17

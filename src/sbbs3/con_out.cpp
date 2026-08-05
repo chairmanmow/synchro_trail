@@ -805,7 +805,6 @@ int sbbs_t::outcp(enum unicode_codepoint codepoint, const char* cp437_fallback)
 		if (len < 1)
 			return len;
 		term_out(str, len);
-		term->inc_column(unicode_width(codepoint, unicode_zerowidth));
 		return 0;
 	}
 	if (cp437_fallback == NULL)
@@ -1082,13 +1081,15 @@ void sbbs_t::ctrl_a(char x)
 /****************************************************************************/
 /* Sends terminal control codes to change remote terminal colors/attributes */
 /****************************************************************************/
-int sbbs_t::attr(int atr)
+int sbbs_t::attr(uint atr)
 {
 	char str[128];
 
-	term->attrstr(atr, str, sizeof(str));
-	term_out(str);
-	curatr = atr;
+	if (atr != curatr) {
+		term->attrstr(atr, str, sizeof(str));
+		term_out(str);
+		curatr = atr;
+	}
 	return 0;
 }
 
@@ -1158,7 +1159,7 @@ void sbbs_t::progress(const char* text, int count, int total, int interval)
 		return;
 	if (text == NULL)
 		text = "";
-	float pct = total ? ((float)count / total) * 100.0F : 100.0F;
+	float pct = total && count < total ? ((float)count / total) * 100.0F : 100.0F;
 	SAFEPRINTF2(str, "[ %-8s %5.1f%% ]", text, pct);
 	term->cond_newline();
 	term->cursor_left(backfill(str, pct, cfg.color[clr_progress_full], cfg.color[clr_progress_empty]));

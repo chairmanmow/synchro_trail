@@ -20,6 +20,7 @@
   </ItemGroup>
 
   <PropertyGroup Label="Globals">
+    <PreferredToolArchitecture Condition="'$([System.Environment]::Is64BitProcess)'=='true'">x64</PreferredToolArchitecture>
     <VCProjectVersion>17.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>

@@ -1,4 +1,5 @@
 #define WIN32_LEAN_AND_MEAN
+#include <limits.h>
 #include <stdbool.h>
 #include <windows.h>
 #include <wincon.h>
@@ -8,7 +9,7 @@
 #include "bbslist.h"
 #include "conn.h"
 #include "fonts.h"
-#include "uifcinit.h"
+#include "host_ui.h"
 #include "window.h"
 
 HANDLE inputRead, inputWrite, outputRead, outputWrite;
@@ -81,10 +82,10 @@ conpty_input_thread(void *args)
 			break;
 		buffered = 0;
 		while (!conn_api.terminate && buffered < sz) {
-			assert_pthread_mutex_lock(&(conn_inbuf.mutex));
+			assert_pthread_mutex_lock(&(conn_inbuf.write_mutex));
 			buffer = conn_buf_wait_free(&conn_inbuf, sz - buffered, 100);
 			buffered += conn_buf_put(&conn_inbuf, cps + buffered, buffer);
-			assert_pthread_mutex_unlock(&(conn_inbuf.mutex));
+			assert_pthread_mutex_unlock(&(conn_inbuf.write_mutex));
 		}
 		fill -= utf8_span;
 		if (fill)
@@ -112,12 +113,12 @@ conpty_output_thread(void *args)
 		else {
 			break;
 		}
-		assert_pthread_mutex_lock(&(conn_outbuf.mutex));
+		assert_pthread_mutex_lock(&(conn_outbuf.read_mutex));
 		ret = 0;
 		wr = conn_buf_wait_bytes(&conn_outbuf, 1, 100);
 		if (wr) {
 			wr = conn_buf_get(&conn_outbuf, conn_api.wr_buf, conn_api.wr_buf_size);
-			assert_pthread_mutex_unlock(&(conn_outbuf.mutex));
+			assert_pthread_mutex_unlock(&(conn_outbuf.read_mutex));
 			size_t sz;
 			uint8_t *utf = cp_to_utf8(codepage, conn_api.wr_buf, wr, &sz);
 			if (utf == NULL)
@@ -133,7 +134,7 @@ conpty_output_thread(void *args)
 			free(utf);
 		}
 		else {
-			assert_pthread_mutex_unlock(&(conn_outbuf.mutex));
+			assert_pthread_mutex_unlock(&(conn_outbuf.read_mutex));
 		}
 	}
 	conn_api.terminate = true;
@@ -162,7 +163,7 @@ int conpty_connect(struct bbslist *bbs)
 	InitializeProcThreadAttributeList(NULL, 1, 0, &sz);
 	si.lpAttributeList = HeapAlloc(heap, 0, sz);
 	if (si.lpAttributeList == NULL) {
-		uifcmsg("TODO", "HeapAlloc Failed");
+		host_ui_alert("Shell Error", "HeapAlloc failed");
 		return -1;
 	}
 
@@ -170,18 +171,18 @@ int conpty_connect(struct bbslist *bbs)
 	if (cmd[0] == 0)
 		cmd = getenv("ComSpec");
 	if (cmd == NULL)  {
-		uifcmsg("TODO", "cmd Failed");
+		host_ui_alert("Shell Error", "No command shell found");
 		return -1;
 	}
 	if (!CreatePipe(&inputRead, &inputWrite, NULL, 0)) {
-		uifcmsg("TODO", "CreatePipe (input) Failed");
+		host_ui_alert("Shell Error", "CreatePipe (input) failed");
 		return -1;
 	}
 	if (!CreatePipe(&outputRead, &outputWrite, NULL, 0)) {
 		CloseHandle(inputRead);
 		CloseHandle(inputWrite);
 		HeapFree(heap, 0, si.lpAttributeList);
-		uifcmsg("TODO", "CreatePipe (output) Failed");
+		host_ui_alert("Shell Error", "CreatePipe (output) failed");
 		return -1;
 	}
 	if (FAILED(CreatePseudoConsole(size, inputRead, outputWrite, 0, &cpty))) {
@@ -190,7 +191,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
 		HeapFree(heap, 0, si.lpAttributeList);
-		uifcmsg("TODO", "CreatePseudoConsole Failed");
+		host_ui_alert("Shell Error", "CreatePseudoConsole failed");
 		return -1;
 	}
 	if (!InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &sz)) {
@@ -199,7 +200,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
 		HeapFree(heap, 0, si.lpAttributeList);
-		uifcmsg("TODO", "InitializeProcThreadAttributeList2 Failed");
+		host_ui_alert("Shell Error", "InitializeProcThreadAttributeList failed");
 		return -1;
 	}
 
@@ -210,7 +211,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
 		HeapFree(heap, 0, si.lpAttributeList);
-		uifcmsg("TODO", "UpdateProcThreadAttribute Failed");
+		host_ui_alert("Shell Error", "UpdateProcThreadAttribute failed");
 		return -1;
 	}
 
@@ -221,7 +222,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
 		HeapFree(heap, 0, si.lpAttributeList);
-		uifcmsg("TODO", "CreateProcessA Failed");
+		host_ui_alert("Shell Error", "CreateProcessA failed");
 		return -1;
 	}
 	DeleteProcThreadAttributeList(si.lpAttributeList);
@@ -231,7 +232,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(inputWrite);
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
-		uifcmsg("TODO", "create_conn_buf (input) Failed");
+		host_ui_alert("Shell Error", "create_conn_buf (input) failed");
 		return -1;
 	}
 	if (!create_conn_buf(&conn_outbuf, BUFFER_SIZE)) {
@@ -240,7 +241,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(inputWrite);
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
-		uifcmsg("TODO", "create_conn_buf (output) Failed");
+		host_ui_alert("Shell Error", "create_conn_buf (output) failed");
 		return -1;
 	}
 	if (!(conn_api.rd_buf = (unsigned char *)malloc(BUFFER_SIZE))) {
@@ -250,7 +251,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(inputWrite);
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
-		uifcmsg("TODO", "malloc (input) Failed");
+		host_ui_alert("Shell Error", "malloc (input) failed");
 		return -1;
 	}
 	conn_api.rd_buf_size = BUFFER_SIZE;
@@ -262,7 +263,7 @@ int conpty_connect(struct bbslist *bbs)
 		CloseHandle(inputWrite);
 		CloseHandle(outputRead);
 		CloseHandle(outputWrite);
-		uifcmsg("TODO", "malloc (output) Failed");
+		host_ui_alert("Shell Error", "malloc (output) failed");
 		return -1;
 	}
 	conn_api.wr_buf_size = BUFFER_SIZE;
@@ -271,6 +272,25 @@ int conpty_connect(struct bbslist *bbs)
 	_beginthread(conpty_input_thread, 0, NULL);
 
 	return 0;
+}
+
+/* Resize the child console via ResizePseudoConsole.  Pixel args are
+ * ignored — conpty is cell-based.  No-op on any failure. */
+void
+conpty_send_window_change(int text_cols, int text_rows,
+    int pixel_cols, int pixel_rows)
+{
+	(void)pixel_cols;
+	(void)pixel_rows;
+	if (text_cols <= 0 || text_rows <= 0)
+		return;
+	if (text_cols > SHRT_MAX || text_rows > SHRT_MAX)
+		return;
+
+	COORD size;
+	size.X = (SHORT)text_cols;
+	size.Y = (SHORT)text_rows;
+	(void)ResizePseudoConsole(cpty, size);
 }
 
 int

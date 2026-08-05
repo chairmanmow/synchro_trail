@@ -32,6 +32,7 @@
 #undef SBBS /* this shouldn't be defined unless building sbbs.dll/libsbbs.so */
 #include "sbbs.h"
 #include "mailsrvr.h"
+#include "mail_dkim.h"
 #include "utf8.h"
 #include "mime.h"
 #include "md5.h"
@@ -49,6 +50,7 @@
 #include "cryptlib.h"
 #include "filterfile.hpp"
 #include "ratelimit.hpp"
+#include "ratelimit_filter.hpp"
 #include "git_branch.h"
 #include "git_hash.h"
 
@@ -89,10 +91,11 @@ static volatile bool      sendmail_running = false;
 static bool               terminate_server = false;
 static volatile bool      terminate_sendmail = false;
 static sem_t              sendmail_wakeup_sem;
-static int64_t            uptime;
+static time_t             uptime;
 static str_list_t         pause_semfiles;
 static str_list_t         recycle_semfiles;
 static str_list_t         shutdown_semfiles;
+static str_list_t         clear_attempts_semfiles;
 static int                mailproc_count;
 static js_server_props_t  js_server_props;
 static link_list_t        current_logins;
@@ -398,6 +401,11 @@ int mail_close_socket(SOCKET *sock, int *sess)
 	return result;
 }
 
+/* When set (only during the DKIM sign/send two-pass, per-thread), sockprintf
+ * routes each formatted line to this capture instead of/in addition to sending
+ * it.  NULL on every other path, so POP3 and non-signing sends are unaffected. */
+static thread_local dkim_capture_t* tls_dkim_cap = NULL;
+
 extern "C" int sockprintf(SOCKET sock, const char* prot, CRYPT_SESSION sess, const char *fmt, ...)
 {
 	int     len;
@@ -410,8 +418,10 @@ extern "C" int sockprintf(SOCKET sock, const char* prot, CRYPT_SESSION sess, con
 		return 0;
 	}
 
-	/* Check socket for writability */
-	if (!socket_writable(sock, 300000)) {
+	/* Check socket for writability (skipped during the DKIM capture pass, which
+	 * diverts every line and transmits nothing) */
+	if ((tls_dkim_cap == NULL || !dkim_capture_diverts(tls_dkim_cap))
+	    && !socket_writable(sock, 300000)) {
 		lprintf(LOG_NOTICE, "%04d %-5s !NOTICE socket did not become writable"
 		        , sock, prot);
 		return 0;
@@ -428,6 +438,18 @@ extern "C" int sockprintf(SOCKET sock, const char* prot, CRYPT_SESSION sess, con
 	}
 	if (startup->options & MAIL_OPT_DEBUG_TX)
 		lprintf(LOG_DEBUG, "%04d %-5s TX: %.*s", sock, prot, len, sbuf);
+	if (tls_dkim_cap != NULL) {     /* DKIM sign/send two-pass observer */
+		int act = dkim_capture_line(tls_dkim_cap, sbuf, (size_t)len);
+		if (act == DKIM_LINE_DIVERT) {  /* pass 1: capture only, do not transmit */
+			free(sbuf);
+			return len + 2;             /* mimic the content+CRLF success length */
+		}
+		if (act == DKIM_LINE_ABORT) {   /* pass 2 verify mismatch: suppress + fail */
+			free(sbuf);
+			return 0;
+		}
+		/* DKIM_LINE_SEND: fall through and transmit normally */
+	}
 	char* newp = static_cast<char *>(realloc(sbuf, len + 2)); // "\r\n"
 	if (newp == NULL) { /* format error or allocation error */
 		errprintf(LOG_CRIT, WHERE, "%04d %-5s %s re-allocation failure of %d bytes", sock, prot, __FUNCTION__, len + 2);
@@ -906,8 +928,9 @@ static ulong sockmimetext(SOCKET socket, const char* prot, CRYPT_SESSION sess, s
 		np = msgtxt;
 	long bytes = 0;
 	while (*np && lines < maxlines) {
+		const int avail = (int)strnlen(np, RFC822_MAX_LINE_LEN);
 		len = 0;
-		while (len < RFC822_MAX_LINE_LEN && *(np + len) != 0 && *(np + len) != '\n')
+		while (len < avail && *(np + len) != '\n')
 			len++;
 
 		tlen = len;
@@ -940,7 +963,8 @@ static ulong sockmimetext(SOCKET socket, const char* prot, CRYPT_SESSION sess, s
 			if (!mimeattach(socket, prot, sess, mime_boundary, file_list[i]))
 				errprintf(LOG_ERR, WHERE, "%04u %s !ERROR opening/encoding/sending %s", socket, prot, file_list[i]);
 			else {
-				if (msg->hdr.auxattr & MSG_KILLFILE)
+				/* don't delete during the DKIM capture pass - pass 2 still needs it */
+				if (tls_dkim_cap == NULL && (msg->hdr.auxattr & MSG_KILLFILE))
 					if (remove(file_list[i]) != 0)
 						lprintf(LOG_WARNING, "%04u %s !ERROR %d (%s) removing %s", socket, prot, errno, strerror(errno), file_list[i]);
 			}
@@ -965,7 +989,9 @@ static ulong sockmsgtxt(SOCKET socket, const char* prot, CRYPT_SESSION sess, smb
 		else
 			SAFEPRINTF2(dirname, "%sfile/%04u.out", scfg.data_dir, msg->idx.from);
 
-		boundary = mimegetboundary();
+		/* seed deterministically from the message so the boundary is identical
+		 * if this message is rendered more than once (DKIM sign/send two-pass) */
+		boundary = mimegetboundary(msg->hdr.number ^ msg->hdr.when_written.time);
 		file_list = strListInit();
 
 		/* filename(s) in subject */
@@ -1064,6 +1090,7 @@ static void badlogin(SOCKET sock, CRYPT_SESSION sess, const char* resp
 	if (addr != NULL) {
 		SAFEPRINTF(reason, "%s LOGIN", client->protocol);
 		count = loginFailure(startup->login_attempt_list, addr, client->protocol, user, passwd, &attempt);
+		mqtt_pub_login_attempt(&mqtt, &attempt);
 		if (count > 1)
 			lprintf(LOG_NOTICE, "%04d %-5s [%s] !%lu " STR_FAILED_LOGIN_ATTEMPTS " in %s"
 			        , sock, client->protocol, client->addr, count
@@ -1079,7 +1106,9 @@ static void badlogin(SOCKET sock, CRYPT_SESSION sess, const char* resp
 		if (startup->login_attempt.filter_threshold && count >= startup->login_attempt.filter_threshold) {
 			snprintf(reason, sizeof reason, "%lu " STR_FAILED_LOGIN_ATTEMPTS " in %s"
 			         , count, duration_estimate_to_str(attempt.time - attempt.first, tmp, sizeof tmp, 1, 1));
-			filter_ip(&scfg, client->protocol, reason, client->host, client->addr, user, /* fname: */ NULL, startup->login_attempt.filter_duration);
+			if (filter_ip(&scfg, client->protocol, reason, client->host, client->addr, user, /* fname: */ NULL, startup->login_attempt.filter_duration))
+				lprintf(LOG_NOTICE, "%04d %-5s !BLOCKING IP ADDRESS: %s in %s"
+				        , sock, client->protocol, client->addr, ip_can.fname);
 		}
 	}
 
@@ -1121,7 +1150,7 @@ static bool pop3_client_thread(pop3_t* pop3)
 	mail_t*           mail;
 	login_attempt_t   attempted;
 	CRYPT_SESSION     session = -1;
-	bool              nodelay = true;
+	int               nodelay = true;
 	ulong             nb = 0;
 	int               stat;
 	union xp_sockaddr server_addr;
@@ -1188,6 +1217,8 @@ static bool pop3_client_thread(pop3_t* pop3)
 	}
 
 	if (!host_exempt.listed(host_ip, host_name)) {
+		/* loginBanned acquires and releases list->mutex internally — no caller-held lock. */
+		// coverity[LOCK:SUPPRESS]
 		ulong banned = loginBanned(&scfg, startup->login_attempt_list, socket, host_name, startup->login_attempt, &attempted);
 		if (banned) {
 			char ban_duration[128];
@@ -1247,6 +1278,9 @@ static bool pop3_client_thread(pop3_t* pop3)
 		safe_snprintf(challenge, sizeof(challenge), "<%x%x%lx%lx@%.128s>"
 		              , rand(), socket, (ulong)time(NULL), (ulong)clock(), server_host_name());
 
+		/* The earlier loginBanned() call locked+unlocked the list internally; the
+		 * mutex is NOT held here, so this network I/O cannot block under it. */
+		// coverity[SLEEP:SUPPRESS]
 		sockprintf(socket, client.protocol, session, "+OK Synchronet %s Server %s%c-%s Ready %s"
 		           , client.protocol, VERSION, REVISION, PLATFORM_DESC, challenge);
 
@@ -1395,6 +1429,7 @@ static bool pop3_client_thread(pop3_t* pop3)
 
 		if (user.pass[0]) {
 			loginSuccess(startup->login_attempt_list, &pop3->client_addr);
+			mqtt_pub_login_attempt_clear(&mqtt, client.addr);
 			listAddNodeData(&current_logins, client.addr, strlen(client.addr) + 1, socket, LAST_NODE);
 		}
 
@@ -1469,11 +1504,19 @@ static bool pop3_client_thread(pop3_t* pop3)
 			truncsp(buf);
 			if (startup->options & MAIL_OPT_DEBUG_POP3)
 				lprintf(LOG_DEBUG, "%04d %-5s RX: %s", socket, client.protocol, buf);
-			if (!host_exempt.listed(host_ip, host_name) && request_rate_limiter->allowRequest(host_ip) == false) {
-				lprintf(LOG_NOTICE, "%04d %-5s [%s] <%s> Too many requests per rate limit (%u over %us)"
-					, socket, client.protocol, host_ip, user.alias, request_rate_limiter->maxRequests, request_rate_limiter->timeWindowSeconds);
-				sockprintf(socket, client.protocol, session, "-ERR too many requests, try again later");
-				break;
+			if (!host_exempt.listed(host_ip, host_name)) {
+				std::string rl_key = rate_limit_key(host_ip, &startup->rate_limit);
+				unsigned    denials = 0;
+				if (request_rate_limiter->allowRequest(rl_key, &denials
+				        , rl_key == host_ip ? std::string() : std::string(host_ip)) == false) {
+					lprintf(LOG_NOTICE, "%04d %-5s [%s] <%s> Too many requests per rate limit (%u over %us) for %s"
+						, socket, client.protocol, host_ip, user.alias
+						, request_rate_limiter->maxRequests, request_rate_limiter->timeWindowSeconds, rl_key.c_str());
+					rate_limit_filter(socket, &scfg, client.protocol, host_ip, host_name, rl_key, denials, request_rate_limiter
+					    , &startup->rate_limit, lprintf);
+					sockprintf(socket, client.protocol, session, "-ERR too many requests, try again later");
+					break;
+				}
 			}
 			if (smb_islocked(&smb)) {
 				lprintf(LOG_WARNING, "%04d %-5s [%s] <%s> !MAIL BASE LOCKED: %s", socket, client.protocol, host_ip, user.alias, smb.last_error);
@@ -1544,8 +1587,8 @@ static bool pop3_client_thread(pop3_t* pop3)
 				if (IS_DIGIT(*p)) {
 					msgnum = strtoul(p, NULL, 10);
 					if (msgnum < 1 || msgnum > msgs) {
-						lprintf(LOG_NOTICE, "%04d %-5s <%s> !INVALID message #%" PRIu32
-						        , socket, client.protocol, user.alias, msgnum);
+						lprintf(LOG_NOTICE, "%04d %-5s <%s> !INVALID message #%" PRIu32 " of %" PRIu32 " with command: %s"
+						        , socket, client.protocol, user.alias, msgnum, msgs, buf);
 						sockprintf(socket, client.protocol, session, "-ERR no such message");
 						continue;
 					}
@@ -1635,8 +1678,8 @@ static bool pop3_client_thread(pop3_t* pop3)
 					lines = atol(p);
 				}
 				if (msgnum < 1 || msgnum > msgs) {
-					lprintf(LOG_NOTICE, "%04d %-5s <%s> !ATTEMPTED to retrieve an INVALID message #%" PRIu32
-					        , socket, client.protocol, user.alias, msgnum);
+					lprintf(LOG_NOTICE, "%04d %-5s <%s> !ATTEMPTED to retrieve an INVALID message #%" PRIu32 " of %" PRIu32 " with command: %s"
+					        , socket, client.protocol, user.alias, msgnum, msgs, buf);
 					sockprintf(socket, client.protocol, session, "-ERR no such message");
 					continue;
 				}
@@ -1731,8 +1774,8 @@ static bool pop3_client_thread(pop3_t* pop3)
 				msgnum = strtoul(p, NULL, 10);
 
 				if (msgnum < 1 || msgnum > msgs) {
-					lprintf(LOG_NOTICE, "%04d %-5s <%s> !ATTEMPTED to delete an INVALID message #%" PRIu32
-					        , socket, client.protocol, user.alias, msgnum);
+					lprintf(LOG_NOTICE, "%04d %-5s <%s> !ATTEMPTED to delete an INVALID message #%" PRIu32 " of %" PRIu32 " with command: %s"
+					        , socket, client.protocol, user.alias, msgnum, msgs, buf);
 					sockprintf(socket, client.protocol, session, "-ERR no such message");
 					continue;
 				}
@@ -1788,6 +1831,13 @@ static bool pop3_client_thread(pop3_t* pop3)
 				sockprintf(socket, client.protocol, session, "+OK");
 				if (startup->options & MAIL_OPT_DEBUG_POP3)
 					lprintf(LOG_INFO, "%04d %-5s <%s> message deleted", socket, client.protocol, user.alias);
+				continue;
+			}
+			if (strnicmp(buf, "USER ", 5) == 0 || strnicmp(buf, "PASS ", 5) == 0) {
+				/* RFC 1939: USER/PASS are only valid in AUTHORIZATION state.
+				 * Some clients (e.g. Thunderbird) reuse a connected socket and
+				 * re-issue these commands; respond with -ERR but keep the session. */
+				sockprintf(socket, client.protocol, session, "-ERR already authenticated");
 				continue;
 			}
 			lprintf(LOG_NOTICE, "%04d %-5s <%s> !UNSUPPORTED COMMAND: '%s'"
@@ -2010,7 +2060,10 @@ static void parse_mail_address(const char* p
 		SAFECOPY(tmp, p);
 		p = tmp;
 		/* Get the "name" (if possible) */
-		if ((tp = (char*)strchr(p, '"')) != NULL) {  /* name in quotes? */
+		// A quote at or after '<' is quoting the address's local part, not a name
+		char* lt = (char*)strchr(p, '<');
+		tp = (char*)strchr(p, '"');
+		if (tp != NULL && (lt == NULL || tp < lt)) {  /* name in quotes? */
 			p = tp + 1;
 			tp = (char*)strchr(p, '"');
 		} else if ((tp = (char*)strchr(p, '(')) != NULL) {   /* name in parenthesis? */
@@ -3014,7 +3067,7 @@ static bool smtp_client_thread(smtp_t* smtp)
 	struct mailproc*  mailproc;
 	login_attempt_t   attempted;
 	int               session = -1;
-	bool              nodelay = true;
+	int               nodelay = true;
 	ulong             nb = 0;
 	unsigned          with_val;
 	int               cstat;
@@ -4012,6 +4065,9 @@ static bool smtp_client_thread(smtp_t* smtp)
 							truncstr(rcpt_name, "@");
 						}
 					}
+					// The envelope, not the To: header, names the user on the QWKnet system
+					else if (nettype == NET_QWK)
+						SAFECOPY(rcpt_name, rcpt_to);
 					smb_hfield_str(&newmsg, RECIPIENT, rcpt_name);
 					if (forward_path[0] != 0)
 						smb_hfield_str(&newmsg, SMTPFORWARDPATH, forward_path);
@@ -4164,11 +4220,19 @@ static bool smtp_client_thread(smtp_t* smtp)
 			hdr_lines++;
 			continue;
 		}
-		if (!host_exempt.listed(host_ip, host_name) && request_rate_limiter->allowRequest(host_ip) == false) {
-			lprintf(LOG_NOTICE, "%04d %-5s %s Too many requests per rate limit (%u over %us)"
-				, socket, client.protocol, client_id, request_rate_limiter->maxRequests, request_rate_limiter->timeWindowSeconds);
-			sockprintf(socket, client.protocol, session, "421 too many requests, try again later");
-			break;
+		if (!host_exempt.listed(host_ip, host_name)) {
+			std::string rl_key = rate_limit_key(host_ip, &startup->rate_limit);
+			unsigned    denials = 0;
+			if (request_rate_limiter->allowRequest(rl_key, &denials
+			        , rl_key == host_ip ? std::string() : std::string(host_ip)) == false) {
+				lprintf(LOG_NOTICE, "%04d %-5s %s Too many requests per rate limit (%u over %us) for %s"
+					, socket, client.protocol, client_id
+					, request_rate_limiter->maxRequests, request_rate_limiter->timeWindowSeconds, rl_key.c_str());
+				rate_limit_filter(socket, &scfg, client.protocol, host_ip, host_name, rl_key, denials, request_rate_limiter
+				    , &startup->rate_limit, lprintf);
+				sockprintf(socket, client.protocol, session, "421 too many requests, try again later");
+				break;
+			}
 		}
 		if (strlen(buf) > SMTP_MAX_CMD_LEN) {
 			lprintf(LOG_NOTICE, "%04d %-5s %s sent an ILLEGALLY-LONG command line (%d chars > %d): '%s'"
@@ -4331,6 +4395,7 @@ static bool smtp_client_thread(smtp_t* smtp)
 
 			if (relay_user.pass[0]) {
 				loginSuccess(startup->login_attempt_list, &smtp->client_addr);
+				mqtt_pub_login_attempt_clear(&mqtt, client.addr);
 				listAddNodeData(&current_logins, client.addr, strlen(client.addr) + 1, socket, LAST_NODE);
 			}
 
@@ -4439,6 +4504,7 @@ static bool smtp_client_thread(smtp_t* smtp)
 
 			if (relay_user.pass[0]) {
 				loginSuccess(startup->login_attempt_list, &smtp->client_addr);
+				mqtt_pub_login_attempt_clear(&mqtt, client.addr);
 				listAddNodeData(&current_logins, client.addr, strlen(client.addr) + 1, socket, LAST_NODE);
 			}
 
@@ -4664,9 +4730,9 @@ static bool smtp_client_thread(smtp_t* smtp)
 				if (relay_user.number == 0) {
 					strcpy(tmp, "IGNORED");
 					if (dnsbl_result.s_addr == 0                       /* Don't double-filter */
-					    && !spam_block_exempt)  {
+					    && !spam_block_exempt
+					    && filter_ip(&scfg, client.protocol, reason, host_name, host_ip, reverse_path, spam_block.fname, startup->spam_block_duration)) {
 						lprintf(LOG_NOTICE, "%04d %-5s !BLOCKING IP ADDRESS: %s in %s", socket, client.protocol, client_id, spam_block.fname);
-						filter_ip(&scfg, client.protocol, reason, host_name, host_ip, reverse_path, spam_block.fname, startup->spam_block_duration);
 						strcat(tmp, " and BLOCKED");
 					}
 					spamlog(&scfg, &mqtt, client.protocol, tmp, "Attempted recipient in SPAM BAIT list"
@@ -5337,15 +5403,29 @@ static int remove_msg_intransit(smb_t* smb, smbmsg_t* msg)
 void get_dns_server(char* dns_server, size_t len)
 {
 	str_list_t list;
+	str_list_t ipv4;
 	size_t     count;
 
 	sprintf(dns_server, "%.*s", (int)len - 1, startup->dns_server);
 	if (!IS_ALPHANUMERIC(dns_server[0])) {
 		if ((list = getNameServerList()) != NULL) {
-			if ((count = strListCount(list)) > 0) {
-				sprintf(dns_server, "%.*s", (int)len, list[xp_random(count)]);
-				lprintf(LOG_DEBUG, "0000 SEND using auto-detected DNS server address: %s"
-				        , dns_server);
+			if ((ipv4 = strListInit()) != NULL) {
+				struct in_addr addr;
+				// dns_getmx() speaks IPv4 only
+				for (size_t i = 0; list[i] != NULL; i++) {
+					if (xp_inet_pton(AF_INET, list[i], &addr) == 1)
+						strListPush(&ipv4, list[i]);
+				}
+				if ((count = strListCount(ipv4)) > 0) {
+					sprintf(dns_server, "%.*s", (int)len - 1, ipv4[xp_random(count)]);
+					lprintf(LOG_DEBUG, "0000 SEND using auto-detected DNS server address: %s"
+					        , dns_server);
+				}
+				else if (strListCount(list) > 0) {
+					lprintf(LOG_WARNING, "0000 !SEND none of the auto-detected DNS server "
+					        "addresses are IPv4");
+				}
+				strListFree(&ipv4);
 			}
 			freeNameServerList(list);
 		}
@@ -5397,7 +5477,7 @@ static SOCKET sendmail_negotiate(CRYPT_SESSION *session, smb_t *smb, smbmsg_t *m
 	union xp_sockaddr server_addr;
 	char              server_ip[INET6_ADDRSTRLEN];
 	bool              success;
-	bool              nodelay = true;
+	int               nodelay = true;
 	ulong             nb = 0;
 	int               status;
 	char              buf[512];
@@ -5608,6 +5688,7 @@ static void sendmail_thread(void* arg)
 	bool          sending_locally = false;
 	link_list_t   failed_server_list;
 	CRYPT_SESSION session = -1;
+	dkim_signer_t* dkim_signer = NULL;
 
 	SetThreadName("sbbs/sendMail");
 	thread_up(true /* setuid */);
@@ -5620,6 +5701,20 @@ static void sendmail_thread(void* arg)
 	memset(&smb, 0, sizeof(smb));
 
 	listInit(&failed_server_list, /* flags: */ 0);
+
+	if (startup->dkim_sign) {
+		if (!dkim_available())
+			lprintf(LOG_WARNING, "!DKIM signing enabled in [Mail] but this build lacks OpenSSL support - sending unsigned");
+		else {
+			char keyfile[MAX_PATH + 1];
+			SAFEPRINTF2(keyfile, "%sdkim_%s.pem", scfg.ctrl_dir, startup->dkim_selector);
+			dkim_signer = dkim_signer_open(startup->dkim_domain, startup->dkim_selector, keyfile);
+			if (dkim_signer == NULL)
+				lprintf(LOG_ERR, "!DKIM signing enabled but failed to load key '%s' - sending unsigned", keyfile);
+			else
+				lprintf(LOG_INFO, "DKIM signing enabled (d=%s s=%s)", startup->dkim_domain, startup->dkim_selector);
+		}
+	}
 
 	while ((!terminated) && !terminate_sendmail) {
 		YIELD();
@@ -5956,7 +6051,40 @@ static void sendmail_thread(void* arg)
 			bytes = strlen(msgtxt);
 			lprintf(LOG_DEBUG, "%04d %-5s sending message text (%lu bytes) begin"
 			        , sock, prot, bytes);
+			dkim_capture_t* sign_cap = NULL;
+			dkim_capture_t* verify_cap = NULL;
+			char*           saved_subj = NULL;
+			if (dkim_signer != NULL && (sign_cap = dkim_capture_new(DKIM_CAP_SIGN)) != NULL) {
+				char dkimhdr[8192];
+				/* sockmsgtxt mutates msg.subj while parsing attachment filenames;
+				 * preserve it so pass 2 (and the Subject header) are unchanged */
+				if (msg.subj != NULL)
+					saved_subj = strdup(msg.subj);
+				/* pass 1: render to the capture only (nothing transmitted) */
+				tls_dkim_cap = sign_cap;
+				sockmsgtxt(sock, prot, session, &msg, msgtxt, /* max_lines: */ -1);
+				tls_dkim_cap = NULL;
+				if (saved_subj != NULL)
+					strcpy(msg.subj, saved_subj);
+				if (dkim_capture_sign(sign_cap, dkim_signer, time(NULL), dkimhdr, sizeof dkimhdr)) {
+					/* prepend the DKIM-Signature header (sockprintf adds the CRLF) */
+					sockprintf(sock, prot, session, "%s", dkimhdr);
+					/* pass 2 re-hashes the body and aborts on a mismatch */
+					if ((verify_cap = dkim_capture_new(DKIM_CAP_VERIFY)) != NULL) {
+						dkim_capture_expect(verify_cap, dkim_capture_bodyhash(sign_cap));
+						tls_dkim_cap = verify_cap;
+					}
+				} else
+					lprintf(LOG_WARNING, "%04d %-5s !DKIM signing failed - sending unsigned", sock, prot);
+			}
 			lines = sockmsgtxt(sock, prot, session, &msg, msgtxt, /* max_lines: */ -1);
+			tls_dkim_cap = NULL;
+			if (verify_cap != NULL && dkim_capture_mismatch(verify_cap))
+				lprintf(LOG_ERR, "%04d %-5s !DKIM body hash changed between sign and send - message delivery aborted"
+				        , sock, prot);
+			dkim_capture_free(verify_cap);
+			dkim_capture_free(sign_cap);
+			free(saved_subj);
 			lprintf(LOG_DEBUG, "%04d %-5s send of message text (%lu bytes, %lu lines) complete, waiting for acknowledgment (250)"
 			        , sock, prot, bytes, lines);
 			if (!sockgetrsp(sock, prot, session, "250", buf, sizeof(buf))) {
@@ -6000,6 +6128,8 @@ static void sendmail_thread(void* arg)
 	if (sock != INVALID_SOCKET)
 		mail_close_socket(&sock, &session);
 
+	dkim_signer_close(dkim_signer);
+
 	listFree(&failed_server_list);
 
 	smb_freemsgtxt(msgtxt);
@@ -6037,6 +6167,7 @@ static void cleanup(int code)
 	semfile_list_free(&pause_semfiles);
 	semfile_list_free(&recycle_semfiles);
 	semfile_list_free(&shutdown_semfiles);
+	semfile_list_free(&clear_attempts_semfiles);
 
 	if (mailproc_list != NULL) {
 		for (i = 0; i < mailproc_count; i++) {
@@ -6347,7 +6478,7 @@ void mail_server(void* arg)
 		}
 
 		if (uptime == 0)
-			uptime = xp_fast_timer64();
+			uptime = time(NULL);
 
 		if (startup->max_clients == 0) {
 			startup->max_clients = scfg.sys_nodes;
@@ -6423,6 +6554,7 @@ void mail_server(void* arg)
 		shutdown_semfiles = semfile_list_init(scfg.ctrl_dir, "shutdown", server_abbrev);
 		pause_semfiles = semfile_list_init(scfg.ctrl_dir, "pause", server_abbrev);
 		recycle_semfiles = semfile_list_init(scfg.ctrl_dir, "recycle", server_abbrev);
+		clear_attempts_semfiles = semfile_list_init(scfg.ctrl_dir, "clear", server_abbrev);
 		semfile_list_add(&recycle_semfiles, startup->ini_fname);
 		SAFEPRINTF(path, "%smailsrvr.rec", scfg.ctrl_dir);    /* legacy */
 		semfile_list_add(&recycle_semfiles, path);
@@ -6430,6 +6562,7 @@ void mail_server(void* arg)
 		if (!initialized) {
 			semfile_list_check(&initialized, recycle_semfiles);
 			semfile_list_check(&initialized, shutdown_semfiles);
+			semfile_list_check(&initialized, clear_attempts_semfiles);
 		}
 
 		pthread_mutex_init(&savemsg_mutex, NULL);
@@ -6470,6 +6603,37 @@ void mail_server(void* arg)
 				set_state(SERVER_PAUSED);
 				SLEEP(startup->sem_chk_freq * 1000);
 				continue;
+			}
+			{
+				char clear_ip[INET6_ADDRSTRLEN] = {0};
+				bool do_clear = false;
+				if ((p = semfile_list_check(&initialized, clear_attempts_semfiles)) != NULL) {
+					semfile_first_line(p, clear_ip, sizeof(clear_ip));
+					lprintf(LOG_INFO, "Clear Failed Login Attempts semaphore file (%s) detected%s%s"
+					        , p, clear_ip[0] ? " for IP " : "", clear_ip);
+					do_clear = true;
+				}
+				if (startup->clear_attempts_now) {
+					if (clear_ip[0] == '\0' && mqtt.clear_attempts_ip[0] != '\0')
+						SAFECOPY(clear_ip, mqtt.clear_attempts_ip);
+					lprintf(LOG_INFO, "Clear Failed Login Attempts signaled%s%s"
+					        , clear_ip[0] ? " for IP " : "", clear_ip);
+					startup->clear_attempts_now = false;
+					mqtt.clear_attempts_ip[0] = '\0';
+					do_clear = true;
+				}
+				if (do_clear) {
+					if (clear_ip[0] != '\0') {
+						long removed = loginAttemptListClearAddr(startup->login_attempt_list, clear_ip);
+						if (removed < 0)
+							lprintf(LOG_WARNING, "Failed to clear login attempts for IP %s (invalid address?)", clear_ip);
+						else
+							lprintf(removed == 0 ? LOG_DEBUG : LOG_INFO
+							        , "Cleared %ld login attempt(s) for IP %s", removed, clear_ip);
+						mqtt_pub_login_attempt_clear(&mqtt, clear_ip);
+					} else
+						mqtt_clear_login_attempt_list(&mqtt, startup->login_attempt_list);
+				}
 			}
 			if (startup->max_requests_per_period > 0 && startup->request_rate_limit_period > 0
 				&& time(NULL) - last_rate_limit_report >= startup->sem_chk_freq) {

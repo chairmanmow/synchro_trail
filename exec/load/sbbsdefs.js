@@ -366,7 +366,7 @@ var XTRN_REALNAME	=(1<<7);	/* Use real name in drop file				*/
 var XTRN_SWAP		=(1<<8);	/* Swap for this door						*/
 var XTRN_FREETIME	=(1<<9);	/* Free time while in this door 			*/
 var XTRN_QUICKBBS	=(1<<10);	/* QuickBBS style editor					*/
-var XTRN_EXPANDLF	=(1<<11);	/* Expand LF to CRLF editor 				*/
+var XTRN_BIN		=(1<<11);	/* Binary I/O: no charset/LF translation (EX_BIN)	*/
 var XTRN_QUOTEALL	=(1<<12);	/* Automatically quote all of msg			*/
 var XTRN_QUOTENONE	=(1<<13);	/* Automatically quote none of msg			*/
 var XTRN_NATIVE		=(1<<14);	/* Native application (EX_NATIVE)			*/
@@ -380,6 +380,10 @@ var XTRN_QUOTEWRAP	=(1<<21);	/* Word-wrap quoted message text			*/
 var XTRN_SAVECOLUMNS=(1<<22);	/* Save/share current terminal width to msg	*/
 var XTRN_UTF8		=(1<<23);	/* External program supports UTF-8			*/
 var XTRN_TEMP_DIR	=(1<<24);	/* Place drop files in temp dir				*/
+var XTRN_UART		=(1<<25);	/* Enable the virtual UART driver			*/
+var XTRN_FOSSIL		=(1<<26);	/* Enable the int14h/FOSSIL driver			*/
+var XTRN_NODISPLAY	=(1<<27);	/* Disable local screen/display				*/
+var XTRN_CONIO		=(1<<31);	/* Intercept Windows Console I/O (Drwy)		*/
 					    		/********************************************/
 
 								/********************************************/
@@ -429,6 +433,8 @@ var   EX_BG			=(1<<10);	/* Back-ground/detached process				*/
 var   EX_BIN		=(1<<11);	/* Binary mode (no Unix LF to CR/LF)		*/
 var   EX_NATIVE		=(1<<14);	/* Native 32-bit application (XTRN_NATIVE)	*/
 var   EX_CHKTIME	=(1<<16);	/* Check time left (XTRN_CHKTIME)			*/
+var   EX_NODISPLAY	=(1<<27);	/* Disable local screen/display (XTRN_NODISPLAY):
+									   on Windows, no console window (CREATE_NO_WINDOW) */
 var   EX_NOLOG      =(1<<30);	/* Don't log intercepted stdio              */
 					    		/********************************************/
 

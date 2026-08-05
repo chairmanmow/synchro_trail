@@ -3,7 +3,9 @@ cmake_minimum_required(VERSION 3.11)
 project (ConIOLib C)
 
 set(WITHOUT_GDI OFF CACHE BOOL "Disable GDI video support")
+set(WITHOUT_QUARTZ OFF CACHE BOOL "Disable Quartz video support")
 set(WITHOUT_SDL OFF CACHE BOOL "Disable SDL video support")
+set(WITHOUT_WAYLAND OFF CACHE BOOL "Disable Wayland video support")
 set(WITHOUT_X11 OFF CACHE BOOL "Disable X11 video support")
 set(WITHOUT_XRANDR OFF CACHE BOOL "Disable X11 video support")
 set(WITHOUT_XRENDER OFF CACHE BOOL "Disable X11 video support")
@@ -30,6 +32,9 @@ if(NOT WITHOUT_SDL)
 		find_package(SDL2 CONFIG PATHS /Library/Frameworks)
 	endif()
 endif()
+if(NOT WITHOUT_WAYLAND)
+	pkg_check_modules(WAYLAND_CLIENT wayland-client)
+endif()
 if(NOT WITHOUT_X11)
 	if(NOT WITHOUT_XRENDER)
 		pkg_check_modules(XRENDER xrender)
@@ -49,6 +54,13 @@ set(SOURCE
 	ciolib.c
 	ciolib.rc
 	cterm.c
+	cterm_ecma48.c
+	cterm_dec.c
+	cterm_cterm.c
+	cterm_vt52.c
+	cterm_atascii.c
+	cterm_petscii.c
+	cterm_prestel.c
 	mouse.c
 	syncicon64.c
 	utf8_codepages.c
@@ -58,6 +70,7 @@ set(SOURCE
 set(HEADER
 	ciolib.h
 	cterm.h
+	evdev_codes.h
 	keys.h
 	mouse.h
 	utf8_codepages.h
@@ -65,6 +78,7 @@ set(HEADER
 )
 
 if(WIN32)
+	set(NEED_KEY_EVENTS TRUE)
 	if(NOT WITHOUT_GDI)
 		list(APPEND SOURCE win32gdi.c)
 		if(WITHOUT_SDL)
@@ -94,11 +108,37 @@ else()
 	endif()
 endif()
 
+if(NOT WITHOUT_WAYLAND)
+	if(WAYLAND_CLIENT_FOUND)
+		list(APPEND SOURCE
+			wl_dynload.c
+			wl_cio.c
+			wl_events.c
+			wl_proto.c
+		)
+		set(NEED_BITMAP TRUE)
+		set(NEED_SCALE TRUE)
+		set(NEED_KEY_EVENTS TRUE)
+		set(WL_FOUND TRUE)
+	endif()
+endif()
+
+if(NOT WITHOUT_QUARTZ)
+	if(APPLE)
+		list(APPEND SOURCE cg_cio.m cg_events.m)
+		set(NEED_BITMAP TRUE)
+		set(NEED_SCALE TRUE)
+		set(NEED_KEY_EVENTS TRUE)
+		set(CG_FOUND TRUE)
+	endif()
+endif()
+
 if(NOT WITHOUT_X11)
 	if(X11_FOUND)
 		list(APPEND SOURCE x_events.c x_cio.c)
 		set(NEED_BITMAP TRUE)
 		set(NEED_SCALE TRUE)
+		set(NEED_KEY_EVENTS TRUE)
 	endif()
 endif()
 
@@ -111,6 +151,7 @@ if(NOT WITHOUT_SDL)
 		endif()
 		set(NEED_BITMAP TRUE)
 		set(NEED_SCALE TRUE)
+		set(NEED_KEY_EVENTS TRUE)
 	endif()
 endif()
 
@@ -124,6 +165,10 @@ if(NEED_BITMAP)
 	list(APPEND SOURCE bitmap_con.c)
 endif()
 
+if(NEED_KEY_EVENTS)
+	list(APPEND SOURCE key.c)
+endif()
+
 if(NEED_SCALE)
 	list(APPEND SOURCE scale.c xbr.c)
 endif()
@@ -132,6 +177,10 @@ check_symbol_exists(vasprintf stdio.h HAVE_VASPRINTF)
 
 add_library(ciolib OBJECT ${SOURCE})
 target_include_directories(ciolib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+
+if(NEED_KEY_EVENTS)
+	target_compile_definitions(ciolib PUBLIC CIOLIB_KEY_EVENTS)
+endif()
 
 if(WITHOUT_X11)
 	target_compile_definitions(ciolib PRIVATE NO_X)
@@ -159,6 +208,16 @@ else()
 		target_compile_definitions(ciolib PUBLIC DISABLE_X11=1)
 		set(WITHOUT_X11 ON CACHE BOOL "Disable X11 video support" FORCE)
 	endif()
+endif()
+
+if(WL_FOUND)
+	target_compile_definitions(ciolib PUBLIC WITH_WAYLAND)
+	target_include_directories(ciolib PRIVATE ${WAYLAND_CLIENT_INCLUDE_DIRS})
+endif()
+
+if(CG_FOUND)
+	target_compile_definitions(ciolib PUBLIC WITH_QUARTZ)
+	target_link_libraries(ciolib "-framework Cocoa" "-framework Carbon")
 endif()
 
 if(NOT WITHOUT_SDL)
@@ -215,3 +274,13 @@ if(HAVE_VASPRINTF)
 endif()
 target_link_libraries(ciolib ${CMAKE_THREAD_LIBS_INIT})
 target_link_libraries(ciolib hash encode xpdev)
+
+add_executable(scale_spinner scale_spinner.c)
+target_link_libraries(scale_spinner ciolib xpdev)
+
+if(UNIX AND SDL2_FOUND)
+	enable_testing()
+	add_executable(cterm_test cterm_test.c)
+	target_link_libraries(cterm_test ciolib encode hash xpdev)
+	add_test(NAME cterm_test COMMAND cterm_test)
+endif()

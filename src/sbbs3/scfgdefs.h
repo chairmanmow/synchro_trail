@@ -26,7 +26,7 @@
 
 typedef struct {							/* Message sub board info */
 	char		code[LEN_EXTCODE+1];		/* Internal code (with optional lib prefix) */
-	char		code_suffix[LEN_CODE+1];	/* Eight character code suffix */
+	char		code_suffix[LEN_CODE+1];	/* Sixteen character code suffix */
 	char		lname[LEN_SLNAME+1],		/* Long name - used for listing */
 				sname[LEN_SSNAME+1],		/* Short name - used for prompts */
 				arstr[LEN_ARSTR+1],			/* Access requirements */
@@ -73,7 +73,7 @@ typedef struct {							/* Message group info */
 
 typedef struct {							/* Transfer Directory Info */
 	char		code[LEN_EXTCODE+1];		/* Internal code (with optional lib prefix) */
-	char		code_suffix[LEN_CODE+1];	/* Eight character code suffix */
+	char		code_suffix[LEN_CODE+1];	/* Sixteen character code suffix */
 	char		vdir[LEN_DIR+1];			/* Virtual Directory name (dynamically generated) */
 	char		vdir_name[LEN_DIR+1];		/* Sysop-defined Virtual Directory name */
 	char		vshortcut[LEN_DIR+1];		/* Sysop-defined Virtual Directory shortcut (from root) */
@@ -132,7 +132,7 @@ typedef struct {							/* Transfer Library Information */
 } lib_t;
 
 typedef struct {							/* Gfile Section Information */
-	char		code[LEN_CODE+1];			/* Eight character code */
+	char		code[LEN_CODE+1];			/* Sixteen character code */
 	char		name[41],					/* Name of section */
 				arstr[LEN_ARSTR+1];			/* Access requirements */
 	uchar		ar[LEN_ARSTR+1];
@@ -140,7 +140,7 @@ typedef struct {							/* Gfile Section Information */
 } txtsec_t;
 
 typedef struct {							/* External Section Information */
-	char		code[LEN_CODE+1];			/* Eight character code	*/
+	char		code[LEN_CODE+1];			/* Sixteen character code */
 	char		name[41],					/* Name of section */
 				arstr[LEN_ARSTR+1];			/* Access requirements */
 	uchar		ar[LEN_ARSTR+1];
@@ -205,6 +205,7 @@ typedef struct {							/* Gurus */
 	char		name[26],
 				arstr[LEN_ARSTR+1];
 	uchar		ar[LEN_ARSTR+1];
+	char		module[LEN_CODE+1];			/* JS module (no .js); empty = legacy pattern engine */
 
 } guru_t;
 
@@ -370,6 +371,7 @@ typedef struct {							/* Command Shells */
 typedef struct {
 	uchar		key;
 	char		cmd[LEN_CMD+1];
+	uint32_t	misc;						/* Intercept I/O */
 } hotkey_t;
 
 enum mqtt_tls_mode {
@@ -381,6 +383,7 @@ enum mqtt_tls_mode {
 
 struct mqtt_cfg {
 	bool		enabled;
+	bool		internal_broker;
 	bool		verbose;
 	char		broker_addr[128];
 	uint16_t	broker_port;

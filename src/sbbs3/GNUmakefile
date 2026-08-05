@@ -104,6 +104,13 @@ ifndef WITHOUT_MOSQUITTO
   endif
  endif
 endif
+ifndef WITHOUT_SQLITE
+ ifeq ($(shell pkg-config sqlite3 --exists && echo "yes"),yes)
+  CFLAGS += -DUSE_SQLITE
+  CFLAGS += $(shell pkg-config sqlite3 --cflags)
+  JS_LIBS += $(shell pkg-config sqlite3 --libs)
+ endif
+endif
 ifeq ($(shell pkg-config libarchive --exists && echo "yes"),yes)
  CFLAGS += $(shell pkg-config libarchive --cflags)
  FILE_LIBS	= $(shell pkg-config libarchive --libs)
@@ -155,6 +162,13 @@ endif
 
 CFLAGS	+=	$(JS_CFLAGS) $(CRYPT_CFLAGS) $(UIFC-MT_CFLAGS) $(XPDEV-MT_CFLAGS) $(SMBLIB_CFLAGS) $(CIOLIB-MT_CFLAGS) $(ENCODE_CFLAGS) $(HASH_CFLAGS)
 CFLAGS	+=	-I../comio
+# DKIM outbound signing needs OpenSSL's EVP for the raw RSA-PKCS#1 signature
+# (Synchronet's servers otherwise use cryptlib only, which can't emit one).  Gate
+# it on libcrypto being available; without it, mail_dkim.c compiles to a no-op stub.
+ifeq ($(shell pkg-config --atleast-version=3.0 libcrypto 2>/dev/null && echo yes),yes)
+ CFLAGS	+=	-DDKIM_OPENSSL $(shell pkg-config --cflags libcrypto)
+ DKIM_LIBS :=	$(shell pkg-config --libs libcrypto)
+endif
 vpath %.c ../comio
 ifeq ($(os), win32)
 OBJS	+= $(MTOBJODIR)/comio_win32$(OFILE)
@@ -184,7 +198,7 @@ $(FTPSRVR): $(MTOBJODIR)/ftpsrvr.o
 # Mail Server Link Rule
 $(MAILSRVR): $(MAIL_OBJS)
 	@echo Linking $@
-	$(QUIET)$(MKSHPPLIB) $(LDFLAGS) $(MAIL_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs
+	$(QUIET)$(MKSHPPLIB) $(LDFLAGS) $(MAIL_OBJS) $(SHLIBOPTS) $(LIB_RPATH) -o $@ -lsbbs $(DKIM_LIBS)
 
 # Web Server Link Rule
 $(WEBSRVR): $(WEB_OBJS)
@@ -339,7 +353,7 @@ $(UPGRADE_TO_V320): $(UPGRADE_TO_V320_OBJS) $(OBJODIR) | $(EXEODIR)
 
 ifdef SBBS_OFFICIAL
 ifdef SBBSCTRL
-$(EXEODIR)/textgen: $(TEXTGEN_OBJS)
+$(EXEODIR)/textgen: $(TEXTGEN_OBJS) $(ENCODE_LIB)
 	@echo Linking $@
 	$(QUIET)$(CC) -o $@ $(TEXTGEN_OBJS) $(XPDEV_LIB) $(ENCODE_LIB) -lm
 

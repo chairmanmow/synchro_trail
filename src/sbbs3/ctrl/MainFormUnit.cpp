@@ -343,7 +343,44 @@ static void logged_msgs(TRichEdit* Log)
 
 static void bbs_log_msg(log_msg_t* msg)
 {
+	static FILE* LogStream;
+
+    if(msg==NULL) {
+        if(LogStream!=NULL)
+            fclose(LogStream);
+        LogStream=NULL;
+        return;
+    }
+
 	log_msg(TelnetForm->Log, msg);
+
+    if(MainForm->TelnetLogFile) {
+        AnsiString LogFileName
+            =AnsiString(MainForm->cfg.logs_dir)
+            +"LOGS\\TS"
+            +SystemTimeToDateTime(msg->time).FormatString("mmddyy")
+            +".LOG";
+
+        if(!FileExists(LogFileName)) {
+            FileClose(FileCreate(LogFileName));
+            if(LogStream!=NULL) {
+                fclose(LogStream);
+                LogStream=NULL;
+            }
+        }
+        if(LogStream==NULL)
+            LogStream=_fsopen(LogFileName.c_str(),"a",SH_DENYNONE);
+
+        if(LogStream!=NULL) {
+            AnsiString Line=SystemTimeToDateTime(msg->time).FormatString("hh:mm:ss")+"  ";
+            Line+=AnsiString(msg->buf).Trim();
+			if(msg->repeated)
+				Line += " [x" + AnsiString(msg->repeated + 1) + "]";
+            Line+="\n";
+        	fwrite(AnsiString(Line).c_str(),1,Line.Length(),LogStream);
+        	fflush(LogStream);
+        }
+	}
 }
 
 static const char* server_state_str(enum server_state state)
@@ -485,7 +522,7 @@ static void mail_log_msg(log_msg_t* msg)
 
 	log_msg(MailForm->Log, msg);
 
-    if(MainForm->MailLogFile && MainForm->MailStop->Enabled) {
+    if(MainForm->MailLogFile) {
         AnsiString LogFileName
             =AnsiString(MainForm->cfg.logs_dir)
             +"LOGS\\MS"
@@ -508,6 +545,7 @@ static void mail_log_msg(log_msg_t* msg)
 				Line += " [x" + AnsiString(msg->repeated + 1) + "]";
 	        Line+="\n";
         	fwrite(AnsiString(Line).c_str(),1,Line.Length(),LogStream);
+        	fflush(LogStream);
         }
 	}
 }
@@ -581,7 +619,7 @@ static void ftp_log_msg(log_msg_t* msg)
 
 	log_msg(FtpForm->Log, msg);
 
-    if(MainForm->FtpLogFile && MainForm->FtpStop->Enabled) {
+    if(MainForm->FtpLogFile) {
         AnsiString LogFileName
             =AnsiString(MainForm->cfg.logs_dir)
             +"LOGS\\FS"
@@ -605,6 +643,7 @@ static void ftp_log_msg(log_msg_t* msg)
 				Line += " [x" + AnsiString(msg->repeated + 1) + "]";
             Line+="\n";
         	fwrite(AnsiString(Line).c_str(),1,Line.Length(),LogStream);
+        	fflush(LogStream);
         }
 	}
 }
@@ -677,6 +716,34 @@ static void web_log_msg(log_msg_t* msg)
     }
 
 	log_msg(WebForm->Log, msg);
+
+    if(MainForm->WebLogFile) {
+        AnsiString LogFileName
+            =AnsiString(MainForm->cfg.logs_dir)
+            +"LOGS\\WS"
+            +SystemTimeToDateTime(msg->time).FormatString("mmddyy")
+            +".LOG";
+
+        if(!FileExists(LogFileName)) {
+            FileClose(FileCreate(LogFileName));
+            if(LogStream!=NULL) {
+                fclose(LogStream);
+                LogStream=NULL;
+            }
+        }
+        if(LogStream==NULL)
+            LogStream=_fsopen(LogFileName.c_str(),"a",SH_DENYNONE);
+
+        if(LogStream!=NULL) {
+            AnsiString Line=SystemTimeToDateTime(msg->time).FormatString("hh:mm:ss")+"  ";
+            Line+=AnsiString(msg->buf).Trim();
+			if(msg->repeated)
+				Line += " [x" + AnsiString(msg->repeated + 1) + "]";
+            Line+="\n";
+        	fwrite(AnsiString(Line).c_str(),1,Line.Length(),LogStream);
+        	fflush(LogStream);
+        }
+	}
 }
 
 static void web_set_state(void* p, enum server_state state)
@@ -1475,6 +1542,27 @@ void __fastcall TMainForm::FtpCloseButtonClick(TObject *Sender)
 	ViewFtpServerExecute(Sender);
 }
 //---------------------------------------------------------------------------
+/* total_users() walks the entire user database (one locked record read per user),
+ * which is blocking I/O - slow when the user base is large or data_dir lives on a
+ * network share, and ruinous while the servers are busy (e.g. a web scrape).  Run
+ * on the VCL main thread it froze the GUI for seconds at a time, so StatsTimerTick()
+ * runs it on a background thread instead.  The worker never touches the VCL: it just
+ * publishes the count, and StatsTimerTick() (main thread) picks it up on a later tick. */
+static volatile long	user_count_scanning;	// nonzero while a scan thread is running
+static volatile long	user_count_ready;		// nonzero when user_count_result is fresh
+static volatile int		user_count_result;		// the latest count, published by the worker
+static bool				user_count_valid;		// main-thread only: a result has been shown
+
+static void user_count_thread(void* arg)
+{
+	(void)arg;
+	int total = total_users(&MainForm->cfg);
+	user_count_result = total;	// publish the result before flagging it ready
+	user_count_ready = TRUE;
+	user_count_scanning = FALSE;
+	_endthread();
+}
+//---------------------------------------------------------------------------
 void __fastcall TMainForm::StatsTimerTick(TObject *Sender)
 {
 	char 	str[128];
@@ -1498,10 +1586,22 @@ void __fastcall TMainForm::StatsTimerTick(TObject *Sender)
 	StatsForm->EMailToday->Caption=AnsiString(stats.etoday);
 	StatsForm->TotalFeedback->Caption=AnsiString(getmail(&cfg,1,0,0));
 	StatsForm->FeedbackToday->Caption=AnsiString(stats.ftoday);
-	/* Don't scan a large user database more often than necessary */
-	if(!counter || users<100 || (counter%(users/100))==0 || stats.nusers!=newusers)
-		users=total_users(&cfg);
-    StatsForm->TotalUsers->Caption=AnsiString(users);
+	/* Pick up the result of a completed background scan (see user_count_thread). */
+	if(user_count_ready) {
+		users=user_count_result;
+		user_count_ready=FALSE;
+		user_count_valid=true;
+	}
+	/* Re-scan no more often than necessary, and never while a scan is already
+	 * running, on a background thread so the GUI never blocks on the user-base I/O. */
+	if(!user_count_scanning
+		&& (!counter || users<100 || (counter%(users/100))==0 || stats.nusers!=newusers)) {
+		user_count_scanning=TRUE;
+		if(_beginthread(user_count_thread,0,NULL)==(unsigned long)-1)
+			user_count_scanning=FALSE;	// couldn't start a thread; try again next tick
+	}
+	if(user_count_valid)
+	    StatsForm->TotalUsers->Caption=AnsiString(users);
     StatsForm->NewUsersToday->Caption=AnsiString(newusers=stats.nusers);
     StatsForm->PostsToday->Caption=AnsiString(stats.ptoday);
     StatsForm->UploadedFiles->Caption=AnsiString(stats.uls);
@@ -1909,6 +2009,16 @@ void __fastcall TMainForm::StartupTimerTick(TObject *Sender)
     else
 		FtpLogFile=true;
 
+    if(Registry->ValueExists("WebLogFile"))
+		WebLogFile=Registry->ReadBool("WebLogFile");
+    else
+		WebLogFile=false;
+
+    if(Registry->ValueExists("TelnetLogFile"))
+		TelnetLogFile=Registry->ReadBool("TelnetLogFile");
+    else
+		TelnetLogFile=false;
+
 	if(Registry->ValueExists("TelnetFormVisible"))
 		ViewTelnet->Checked = Registry->ReadBool("TelnetFormVisible");
 	if(Registry->ValueExists("EventsFormVisible"))
@@ -2258,6 +2368,8 @@ void __fastcall TMainForm::SaveRegistrySettings(TObject* Sender)
 
 	Registry->WriteBool("FtpLogFile", FtpLogFile);
 	Registry->WriteBool("MailLogFile", MailLogFile);
+	Registry->WriteBool("WebLogFile", WebLogFile);
+	Registry->WriteBool("TelnetLogFile", TelnetLogFile);
 
     Registry->WriteInteger("MaxLogLen",MaxLogLen);
 
@@ -2393,6 +2505,7 @@ void __fastcall TMainForm::ImportSettings(TObject* Sender)
 
     ImportFormSettings(IniFile,section="TelnetForm",TelnetForm);
     ImportFont(IniFile,section,"LogFont",TelnetForm->Log->Font);
+	TelnetLogFile=IniFile->ReadBool(section,"LogFile",false);
     TelnetForm->Log->Color=StringToColor(IniFile->ReadString(section,"LogColor",clWindow));
 
     ImportFormSettings(IniFile,section="EventsForm",EventsForm);
@@ -2410,6 +2523,7 @@ void __fastcall TMainForm::ImportSettings(TObject* Sender)
 
     ImportFormSettings(IniFile,section="WebForm",WebForm);
     ImportFont(IniFile,section,"LogFont",WebForm->Log->Font);
+	WebLogFile=IniFile->ReadBool(section,"LogFile",false);
     WebForm->Log->Color=StringToColor(IniFile->ReadString(section,"LogColor",clWindow));
 
     ImportFormSettings(IniFile,section="MailForm",MailForm);
@@ -2831,9 +2945,11 @@ void __fastcall TMainForm::ViewLogClick(TObject *Sender)
     if(tm==NULL)
         return;
 
-    /* Close Mail/FTP logs */
+    /* Close Terminal/Mail/FTP/Web logs */
+    bbs_log_msg(NULL);
     mail_log_msg(NULL);
     ftp_log_msg(NULL);
+    web_log_msg(NULL);
 
     if(strchr(((TMenuItem*)Sender)->Hint.c_str(),'.')==NULL)
         sprintf(filename,"%sLOGS\\%s%02d%02d%02d.LOG"
@@ -3470,11 +3586,16 @@ void __fastcall TMainForm::LogTimerTick(TObject *Sender)
 			logged_msgs(ServicesForm->Log);
     }
 
-	bbs_set_controls(bbs_state);
-	ftp_set_controls(ftp_state);
-	web_set_controls(web_state);
-	mail_set_controls(mail_state);
-	services_set_controls(services_state);
+	if (bbs_svc == NULL)
+		bbs_set_controls(bbs_state);
+	if (ftp_svc == NULL)
+		ftp_set_controls(ftp_state);
+	if (web_svc == NULL)
+		web_set_controls(web_state);
+	if (mail_svc == NULL)
+		mail_set_controls(mail_state);
+	if (services_svc == NULL)
+		services_set_controls(services_state);
 
 	struct client_change* cc;
 	while((cc = (struct client_change*)listShiftNode(&client_change_list)) != NULL) {

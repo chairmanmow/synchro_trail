@@ -1,0 +1,626 @@
+/* SyncSCUMM -- ScummVM as a Synchronet door.
+ * M1 skeleton: OSystem_Termgfx is a null-equivalent backend; the
+ * frame-dump graphics manager (video_dump.cpp) is swapped in by
+ * initBackend(). Terminal I/O via libtermgfx arrives in M2+.
+ * GPLv2+, like the ScummVM tree this compiles into.
+ */
+
+#include <stdlib.h>
+#include <time.h>
+
+#ifdef _MSC_VER
+/* The door's own static libraries and the Win32 system libraries they need.
+ * ScummVM's create_project has no notion of these (they live outside the
+ * vendored tree), so name them here in the one door TU the whole binary always
+ * links; build.bat puts them on the linker's search path (--library-dir). The
+ * vcpkg-provided media libraries are auto-linked by the vcpkg MSBuild props. */
+#pragma comment(lib, "termgfx.lib")        // sixel/JXL/APC/audio encoders
+#pragma comment(lib, "ADLMIDI.lib")        // termgfx's OPL3 MIDI synth
+#pragma comment(lib, "xpdev_static.lib")   // ini_file, sockwrap, genwrap, dirwrap
+#pragma comment(lib, "ws2_32.lib")         // Winsock: termgfx_plat send/recv/WSAStartup
+#pragma comment(lib, "winmm.lib")          // xpdev timers + ScummVM midi/windows
+#pragma comment(lib, "iphlpapi.lib")       // xpdev netwrap: GetNetworkParams()
+#pragma comment(lib, "shlwapi.lib")        // mpg123 (libsndfile mpeg): PathCombineW etc.
+#endif
+
+/* The door's platform seam (monotonic clock, sleep) -- keeps this file free of
+ * <sys/time.h>/<unistd.h>/gettimeofday/usleep, none of which exist under MSVC.
+ * Header-only prototypes over stdint, so no forbidden.h ordering concern. */
+#include "../../termgfx/termgfx_plat.h"
+
+/* xpdev's ini_file.h (-> genwrap.h) declares things like strupr()/strlwr()
+ * and uses printf in an attribute -- names common/forbidden.h poisons into
+ * unusable macros once common/scummsys.h has been included. Pull it in
+ * first, before scummsys.h does that poisoning (ini_file.h wraps itself in
+ * extern "C" already; no wrapper needed here). */
+#include "ini_file.h"
+/* dirwrap.h (mkpath): pulled in here with ini_file.h, before scummsys.h's
+ * forbidden.h poisons libc names, for the same reason ini_file.h is. */
+#include "dirwrap.h"
+
+#define FORBIDDEN_SYMBOL_EXCEPTION_FILE
+#define FORBIDDEN_SYMBOL_EXCEPTION_stdout
+#ifdef _WIN32
+/* On Windows the filesystem backend is backends/fs/windows/windows-fs.h, which
+ * pulls in <windows.h>, <io.h> and <tchar.h> -- system headers that use the
+ * very libc names common/forbidden.h poisons (strncpy_s, etc.), and which are
+ * unavoidably included after scummsys.h -> forbidden.h. ScummVM's own
+ * windows-fs.cpp solves this the same way: blanket-allow forbidden symbols in
+ * this TU. (On POSIX the narrower per-symbol exceptions below suffice, so the
+ * safety net stays in place there -- this door's Unix build is unchanged.) */
+#define FORBIDDEN_SYMBOL_ALLOW_ALL
+#endif
+#define FORBIDDEN_SYMBOL_EXCEPTION_stderr
+#define FORBIDDEN_SYMBOL_EXCEPTION_fputs
+#define FORBIDDEN_SYMBOL_EXCEPTION_exit
+#define FORBIDDEN_SYMBOL_EXCEPTION_time_h
+#define FORBIDDEN_SYMBOL_EXCEPTION_getenv
+/* Sysop subtitles.ini read (resolveSubtitles(), below) opens it with plain
+ * libc stdio -- xpdev's iniReadFile() takes a FILE*, matching the house
+ * pattern in syncduke_config.c/syncretro_config.c/syncmoo1_config.c. */
+#define FORBIDDEN_SYMBOL_EXCEPTION_fopen
+#define FORBIDDEN_SYMBOL_EXCEPTION_fclose
+/* resolveVolumes() logs the applied mixer levels to stderr with fprintf. */
+#define FORBIDDEN_SYMBOL_EXCEPTION_fprintf
+
+#include "common/scummsys.h"
+
+#if defined(USE_TERMGFX_DRIVER)
+
+#include "common/events.h"
+// Filesystem backend is platform-specific: ScummVM compiles fs/windows/* under
+// WIN32 and fs/posix/* under POSIX (backends/module.mk), and only one of the
+// factory .cpp files is in the link -- so the header we pull and the factory we
+// construct must match the platform, or the door won't link.
+#ifdef WIN32
+#include "backends/fs/windows/windows-fs.h"
+#else
+#include "backends/fs/posix/posix-fs.h"
+#endif
+#include "common/fs.h"
+#include "backends/modular-backend.h"
+#include "backends/mutex/null/null-mutex.h"
+#include "backends/saves/default/default-saves.h"
+#include "backends/timer/default/default-timer.h"
+#include "backends/events/default/default-events.h"
+#include "backends/graphics/null/null-graphics.h"
+#include "audio_term.h"
+#include "video_dump.h"
+#include "video_term.h"
+#include "help_term.h"
+#ifdef WIN32
+#include "backends/fs/windows/windows-fs-factory.h"
+#else
+#include "backends/fs/posix/posix-fs-factory.h"
+#endif
+#include "base/main.h"
+#include "common/config-manager.h"
+#include "common/str.h"
+
+extern "C" {
+#include "../../termgfx/termgfx_termio.h"
+
+/* termgfx_select_datadir(): SyncSCUMM's own Talkie/Floppy data-set selection --
+ * a door-specific helper that lived in the retired termgfx_termio.h and is not part
+ * of the shared termgfx_termio surface (other termgfx doors have no such
+ * concept). Declared here, door-side; defined in termgfx/termgfx_termio.c
+ * (moved there with the rest of the engine body, name unchanged). */
+const char *termgfx_select_datadir(const char *base, int audio, char *buf, size_t bufsz);
+}
+
+class OSystem_Termgfx : public ModularMixerBackend, public ModularGraphicsBackend, Common::EventSource {
+public:
+	OSystem_Termgfx();
+	virtual ~OSystem_Termgfx() {}
+
+	void initBackend() override;
+	bool pollEvent(Common::Event &event) override;
+	Common::MutexInternal *createMutex() override;
+	uint32 getMillis(bool skipRecord = false) override;
+	void delayMillis(uint msecs) override;
+	void getTimeAndDate(TimeDate &td, bool skipRecord = false) const override;
+	void quit() override;
+	void logMessage(LogMessageType::Type type, const char *message) override;
+	void addSysArchivesToSearchSet(Common::SearchSet &s, int priority) override;
+
+private:
+	uint32 _startMs;   // monotonic ms at initBackend(), the getMillis() origin
+};
+
+OSystem_Termgfx::OSystem_Termgfx() {
+#ifdef WIN32
+	_fsFactory = new WindowsFilesystemFactory();
+#else
+	_fsFactory = new POSIXFilesystemFactory();
+#endif
+}
+
+// Subtitles: user > sysop > auto (DESIGN.md M2 follow-up). Decides whether
+// dialogue is superimposed as text, since the BASS CD talkie's speech has
+// no audio path to play through until M4.
+//
+// Hook-point safety: called from the top of initBackend(), below. main.cpp
+// makes its own ordering guarantee explicit right at the system.initBackend()
+// call site: "Init the backend. Must take place after all config data
+// (including the command line params) was read." By that point
+// scummvm_main() has already run ConfMan.loadConfigFile()/
+// loadDefaultConfigFile() (the "-c" file) AND Base::processSettings() (which
+// resolves our door's trailing "sky" argument to the active game-domain
+// target -- pulling in that domain's on-disk data if the "-c" file already
+// has a matching "[sky]" section). So every persistent ConfMan domain is
+// fully populated, and nothing has consumed or overwritten "subtitles" yet,
+// by the time initBackend() -- and this function -- run. Doing this lazily
+// on first updateScreen() would work too, but only after already drawing at
+// least one frame with the wrong answer; this hook has no such window.
+static void resolveSubtitles() {
+	// 1) USER: a persistent domain (the active game-domain target loaded
+	// from the "-c" file's own section, or its global "[scummvm]" app
+	// domain) already has an opinion -- leave it alone entirely. Checked
+	// directly against those two Domains (not the generic ConfMan::hasKey(),
+	// which also matches kTransientDomain/kSessionDomain) since this is the
+	// one caller that specifically must NOT see its own not-yet-written
+	// session default and mistake it for a user preference.
+	Common::ConfigManager::Domain *active = ConfMan.getActiveDomain();
+	Common::ConfigManager::Domain *app =
+		ConfMan.getDomain(Common::ConfigManager::kApplicationDomain);
+	bool userSet = (active && active->contains("subtitles")) ||
+	               (app && app->contains("subtitles"));
+	if (userSet) {
+		fputs("syncscumm: subtitles: user preference respected\n", stderr);
+		return;
+	}
+
+	// 2) SYSOP: syncscumm.ini, read relative to CWD -- the door's
+	// startup_dir (see xtrn/syncqueen/install-xtrn.ini's startup_dir comment:
+	// the package directory, i.e. the process's actual CWD when the
+	// Terminal Server execs this binary). A missing file, missing key, or an
+	// explicit "auto" all defer to step 3; only "on"/"off" decide here.
+	int sysopOn = -1;   // -1 = no opinion (auto), 0 = off, 1 = on
+	FILE *f = fopen("syncscumm.ini", "r");
+	if (f != NULL) {
+		str_list_t ini = iniReadFile(f);
+		fclose(f);
+		char val[INI_MAX_VALUE_LEN];
+		iniGetString(ini, ROOT_SECTION, "subtitles", "auto", val);
+		if (scumm_stricmp(val, "on") == 0)
+			sysopOn = 1;
+		else if (scumm_stricmp(val, "off") == 0)
+			sysopOn = 0;
+		strListFree(&ini);
+	}
+	if (sysopOn >= 0) {
+		ConfMan.setBool("subtitles", sysopOn != 0, Common::ConfigManager::kSessionDomain);
+		fputs(sysopOn ? "syncscumm: subtitles: sysop on\n" : "syncscumm: subtitles: sysop off\n", stderr);
+		return;
+	}
+
+	// 3) AUTO: on with no working audio this session, off otherwise. Written
+	// to kSessionDomain -- the same domain ScummVM's own "-n"/"--subtitles"
+	// command-line flag would use for this key (base/commandLine.cpp's
+	// sessionSettings[] list), i.e. never saved to disk, exactly like a
+	// command-line override. termgfx_termio_audio_available() answers for the
+	// SESSION, not just the terminal: a sysop "[audio] enabled = false"
+	// answers instantly with no probe at all, otherwise it briefly waits for
+	// the terminal's capability reply (see termgfx_termio.h) -- a confirmed digital
+	// audio tier resolves off, anything else -- tone-only, silent, headless
+	// -- resolves on.
+	bool audio = termgfx_termio_audio_available() != 0;
+	ConfMan.setBool("subtitles", !audio, Common::ConfigManager::kSessionDomain);
+	fputs(audio ? "syncscumm: subtitles auto -> off (audio available this session)\n"
+	            : "syncscumm: subtitles auto -> on (no audio this session)\n", stderr);
+}
+
+// Mixer volumes: optional per-package syncscumm.ini "[audio]" knobs --
+// music_volume, speech_volume, sfx_volume, each 0-100 (percent of maximum) --
+// so a title whose soundtrack overbears its dialogue (Drascula's loud CD music)
+// can ship a rebalanced default. Outside the SCUMM engine a player cannot
+// easily reach ScummVM's GMM Volume sliders to do it themselves (the GMM's only
+// default key binding is the terminal-absent "Menu" key; the door opens the GMM
+// on F5, but a shipped default spares every player the trip). Absent a knob,
+// that channel keeps ScummVM's own default. These are ScummVM's per-CHANNEL
+// levels, distinct from the "[audio] volume" knob, which scales the whole
+// pre-mixed stream in the player's terminal. Written to kSessionDomain (a door
+// default like a command-line override -- never saved to a player's file).
+static void resolveVolumes() {
+	FILE *f = fopen("syncscumm.ini", "r");
+	if (f == NULL)
+		return;
+	str_list_t ini = iniReadFile(f);
+	fclose(f);
+	static const char *const keys[] = { "music_volume", "speech_volume", "sfx_volume" };
+	for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
+		// -1 sentinel: an absent key leaves that channel's default alone.
+		long pct = iniGetInteger(ini, "audio", keys[i], -1);
+		if (pct < 0)
+			continue;
+		if (pct > 100)
+			pct = 100;
+		// ScummVM stores channel volumes 0..255 (kMaxMixerVolume is 256).
+		int vol = (int)(pct * 255 / 100);
+		ConfMan.setInt(keys[i], vol, Common::ConfigManager::kSessionDomain);
+		fprintf(stderr, "syncscumm: %s: sysop %ld%% (ScummVM %d/255)\n", keys[i], pct, vol);
+	}
+	strListFree(&ini);
+}
+
+// GMM hotkey: reserve a control key to open ScummVM's Global Main Menu (Resume,
+// Save, Load, Options -> Volume, Quit). ScummVM's own "MENU" action defaults to
+// the keyboard "Menu" key, which no terminal sends, so the door provides this
+// instead -- a control byte, so it works on every terminal, not only kitty/
+// evdev. The key is intercepted before the engine (termgfx_termio.c) and delivered as
+// EVENT_MAINMENU (pollEvent, below). Default: Ctrl-G (free in Drascula/SCI/AGI;
+// in SCUMM it takes over the "very fast mode" toggle, leaving Ctrl-F "fast mode"
+// intact). Configurable per package: syncscumm.ini "[input] menu_key =
+// ctrl-<letter>", or "off" to disable. F5 always stays the game's own menu.
+static void resolveMenuKey() {
+	int letter = 'g';   // default: Ctrl-G, even with no syncscumm.ini present
+	FILE *f = fopen("syncscumm.ini", "r");
+	if (f != NULL) {
+		str_list_t ini = iniReadFile(f);
+		fclose(f);
+		char val[INI_MAX_VALUE_LEN];
+		iniGetString(ini, "input", "menu_key", "ctrl-g", val);
+		strListFree(&ini);
+		letter = 0;   // "off"/unparseable disables it
+		if (scumm_strnicmp(val, "ctrl", 4) == 0) {
+			const char *p = val + 4;
+			if (*p == '-' || *p == '+' || *p == ' ')
+				p++;
+			if (*p >= 'A' && *p <= 'Z')
+				letter = *p - 'A' + 'a';
+			else if (*p >= 'a' && *p <= 'z')
+				letter = *p;
+		}
+	}
+	termgfx_termio_set_menu_key(letter);
+	help_term_set_menu_key(letter);   /* so the card names the real key */
+	if (letter)
+		fprintf(stderr, "syncscumm: GMM hotkey: Ctrl-%c\n", letter - 'a' + 'A');
+	else
+		fputs("syncscumm: GMM hotkey: off\n", stderr);
+}
+
+void OSystem_Termgfx::initBackend() {
+	_startMs = termgfx_plat_now_ms();
+	resolveSubtitles();
+	resolveVolumes();
+	resolveMenuKey();
+	_savefileManager = new DefaultSaveFileManager();
+	_timerManager = new DefaultTimerManager();
+	_eventManager = new DefaultEventManager(this);
+	// After resolveSubtitles(), deliberately: that is what decides whether
+	// this session will hear audio -- the sysop switch first, with no
+	// blocking at all when it is off, otherwise a bounded wait for the
+	// terminal's capability reply (see termgfx_termio.h) -- and the answer decides
+	// whether termgfx_termio_audio_stream() streams or discards what we pull.
+	_mixerManager = new SyncscummMixerManager();
+	_mixerManager->init();
+	_graphicsManager = new SyncscummTermGraphicsManager();
+	BaseBackend::initBackend();
+}
+
+/* Where the caller's letterbox/fill choice is remembered: a flag file beside
+ * their saves, present = fill. Same shape as syncconquer's, which is what makes
+ * the preference survive a hang-up rather than being retyped every session.
+ * Empty until --savepath is seen; a run without one simply does not persist. */
+static char g_fit_flag[600];
+
+static void syncscumm_fit_save(void)
+{
+	if (g_fit_flag[0] == '\0')
+		return;
+	if (termgfx_termio_fit_fill()) {
+		FILE *f = fopen(g_fit_flag, "w");
+		if (f != NULL)
+			fclose(f);
+	} else
+		remove(g_fit_flag);
+}
+
+bool OSystem_Termgfx::pollEvent(Common::Event &event) {
+	((DefaultTimerManager *)getTimerManager())->checkTimers();
+	((SyncscummMixerManager *)_mixerManager)->tick();
+
+	termgfx_termio_pump();
+	// Retry any frame a pacing/backpressure gate stranded on a now-static
+	// screen (F5 panel, half-erased speech-toggle X): present() only fires
+	// off the engine's own dirty flag, so nothing else would ever retry it.
+	// Every poll, even on a static screen -- see termgfx_termio_tick()'s doc comment.
+	termgfx_termio_tick();
+	if (termgfx_termio_quit_requested() || termgfx_termio_hung_up()) {
+		static bool sentQuit = false;
+		if (!sentQuit) {
+			sentQuit = true;
+			event.type = Common::EVENT_QUIT;
+			return true;
+		}
+	}
+
+	// Ctrl+<menu_letter> (default Ctrl-G) opens ScummVM's Global Main Menu in
+	// every engine: termgfx_termio.c reserved the key; deliver it as EVENT_MAINMENU,
+	// which the DefaultEventManager turns into openMainMenuDialog().
+	if (termgfx_termio_menu_requested()) {
+		event.type = Common::EVENT_MAINMENU;
+		return true;
+	}
+
+	termgfx_input_event_t iev;
+	if (termgfx_termio_next_event(&iev)) {
+		switch (iev.type) {
+		case TERMGFX_EV_MOUSE_MOVE:
+			_graphicsManager->warpMouse(iev.x, iev.y);   /* compositor draws the cursor here */
+			event.type = Common::EVENT_MOUSEMOVE;
+			event.mouse = Common::Point(iev.x, iev.y);
+			return true;
+		case TERMGFX_EV_MOUSE_DOWN:
+		case TERMGFX_EV_MOUSE_UP: {
+			bool down = (iev.type == TERMGFX_EV_MOUSE_DOWN);
+			event.mouse = Common::Point(iev.x, iev.y);
+			if (iev.button == 0)
+				event.type = down ? Common::EVENT_LBUTTONDOWN : Common::EVENT_LBUTTONUP;
+			else if (iev.button == 2)
+				event.type = down ? Common::EVENT_RBUTTONDOWN : Common::EVENT_RBUTTONUP;
+			else
+				event.type = down ? Common::EVENT_MBUTTONDOWN : Common::EVENT_MBUTTONUP;
+			return true;
+		}
+		case TERMGFX_EV_WHEEL:
+			event.mouse = Common::Point(iev.x, iev.y);
+			event.type = (iev.wheel < 0) ? Common::EVENT_WHEELUP : Common::EVENT_WHEELDOWN;
+			return true;
+		case TERMGFX_EV_KEY_DOWN:
+		case TERMGFX_EV_KEY_UP: {
+			Common::KeyCode kc;
+			uint16 ascii = (iev.ascii != 0) ? (uint16)iev.ascii : 0;
+
+			/* F4 belongs to the door, not the game: it steps the graphics tier,
+			 * matching the key the sibling termgfx doors already use for it.
+			 *
+			 * Worth spending a key on because SyncTERM is the only terminal
+			 * that reaches the JXL tier, so without this it is also the only
+			 * one that never draws a sixel -- including the sixel code written
+			 * specifically for SyncTERM, whose colour registers persist across
+			 * images. That path had no way to be exercised on the terminal it
+			 * was written for.
+			 *
+			 * Swallowed on BOTH edges so a release cannot reach the engine on
+			 * its own. F4 is not a ScummVM global (F5 is the menu); if a game
+			 * ever turns out to want it, move this to another key rather than
+			 * forwarding, or the tier becomes unreachable again. */
+			/* The card is in FRONT of the engine: while it is up ANY key
+			 * takes it down and reaches nothing else. A help page you cannot
+			 * get out of is worse than no help page. */
+			if (help_term_active()) {
+				if (iev.type == TERMGFX_EV_KEY_DOWN)
+					help_term_dismiss();
+				return false;
+			}
+			/* Ctrl-K (0x0b) or F1. Ctrl-K is free in SCUMM; F1 is forwarded to
+			 * the engine today, so it is the one to drop if a game wants it.
+			 * NOT Ctrl-H -- that is Backspace, which SCUMM needs. */
+			if (iev.keycode == TERMGFX_KEY_F1
+			    || (iev.keycode == 'k' && (iev.mods & TERMGFX_MOD_CTRL))) {
+				if (iev.type == TERMGFX_EV_KEY_DOWN)
+					help_term_show();
+				return false;
+			}
+			if (iev.keycode == TERMGFX_KEY_F4) {
+				if (iev.type == TERMGFX_EV_KEY_DOWN)
+					termgfx_termio_tier_cycle();
+				return false;   /* consumed: no ScummVM event from it */
+			}
+			/* Ctrl-F: letterbox <-> fill, the key syncconquer already uses for
+			 * it. Costs SCUMM's Ctrl-F "fast mode", which un-paces the game and
+			 * floods the wire -- not something a door wants offered anyway, and
+			 * its Ctrl-G sibling is already spent on the menu key. */
+			if (iev.keycode == 'f' && (iev.mods & TERMGFX_MOD_CTRL)) {
+				if (iev.type == TERMGFX_EV_KEY_DOWN) {
+					termgfx_termio_fit_cycle();
+					syncscumm_fit_save();
+				}
+				return false;
+			}
+
+			switch (iev.keycode) {
+			case TERMGFX_KEY_UP: kc = Common::KEYCODE_UP; break;
+			case TERMGFX_KEY_DOWN: kc = Common::KEYCODE_DOWN; break;
+			case TERMGFX_KEY_LEFT: kc = Common::KEYCODE_LEFT; break;
+			case TERMGFX_KEY_RIGHT: kc = Common::KEYCODE_RIGHT; break;
+			case TERMGFX_KEY_HOME: kc = Common::KEYCODE_HOME; break;
+			case TERMGFX_KEY_END: kc = Common::KEYCODE_END; break;
+			case TERMGFX_KEY_PAGEUP: kc = Common::KEYCODE_PAGEUP; break;
+			case TERMGFX_KEY_PAGEDOWN: kc = Common::KEYCODE_PAGEDOWN; break;
+			case TERMGFX_KEY_INSERT: kc = Common::KEYCODE_INSERT; break;
+			case TERMGFX_KEY_DELETE: kc = Common::KEYCODE_DELETE; break;
+			case TERMGFX_KEY_KP5: kc = Common::KEYCODE_KP5; break;
+			case TERMGFX_KEY_ENTER: kc = Common::KEYCODE_RETURN; ascii = Common::ASCII_RETURN; break;
+			case TERMGFX_KEY_ESCAPE: kc = Common::KEYCODE_ESCAPE; ascii = Common::ASCII_ESCAPE; break;
+			case TERMGFX_KEY_BACKSPACE: kc = Common::KEYCODE_BACKSPACE; ascii = Common::ASCII_BACKSPACE; break;
+			case TERMGFX_KEY_TAB: kc = Common::KEYCODE_TAB; ascii = Common::ASCII_TAB; break;
+			case TERMGFX_KEY_F1: kc = Common::KEYCODE_F1; break;
+			case TERMGFX_KEY_F2: kc = Common::KEYCODE_F2; break;
+			case TERMGFX_KEY_F3: kc = Common::KEYCODE_F3; break;
+			case TERMGFX_KEY_F4: kc = Common::KEYCODE_F4; break;
+			case TERMGFX_KEY_F5: kc = Common::KEYCODE_F5; break;
+			case TERMGFX_KEY_F6: kc = Common::KEYCODE_F6; break;
+			case TERMGFX_KEY_F7: kc = Common::KEYCODE_F7; break;
+			case TERMGFX_KEY_F8: kc = Common::KEYCODE_F8; break;
+			case TERMGFX_KEY_F9: kc = Common::KEYCODE_F9; break;
+			default:
+				/* printable / control ASCII: keycode == the byte */
+				kc = (Common::KeyCode)iev.keycode;
+				break;
+			}
+			byte flags = 0;
+			if (iev.mods & TERMGFX_MOD_CTRL)  flags |= Common::KBD_CTRL;
+			if (iev.mods & TERMGFX_MOD_ALT)   flags |= Common::KBD_ALT;
+			if (iev.mods & TERMGFX_MOD_SHIFT) flags |= Common::KBD_SHIFT;
+			event.type = (iev.type == TERMGFX_EV_KEY_DOWN) ? Common::EVENT_KEYDOWN : Common::EVENT_KEYUP;
+			event.kbd = Common::KeyState(kc, ascii, flags);
+			return true;
+		}
+		default:
+			break;
+		}
+	}
+	return false;
+}
+
+Common::MutexInternal *OSystem_Termgfx::createMutex() {
+	return new NullMutexInternal();
+}
+
+uint32 OSystem_Termgfx::getMillis(bool skipRecord) {
+	// Monotonic ms since initBackend(); uint32 subtraction is wrap-safe.
+	return termgfx_plat_now_ms() - _startMs;
+}
+
+void OSystem_Termgfx::delayMillis(uint msecs) {
+	termgfx_plat_sleep_ms((int)msecs);
+}
+
+void OSystem_Termgfx::getTimeAndDate(TimeDate &td, bool skipRecord) const {
+	time_t curTime = time(0);
+	struct tm t = *localtime(&curTime);
+	td.tm_sec = t.tm_sec;
+	td.tm_min = t.tm_min;
+	td.tm_hour = t.tm_hour;
+	td.tm_mday = t.tm_mday;
+	td.tm_mon = t.tm_mon;
+	td.tm_year = t.tm_year;
+	td.tm_wday = t.tm_wday;
+}
+
+void OSystem_Termgfx::quit() {
+	destroy();
+	exit(0);
+}
+
+void OSystem_Termgfx::logMessage(LogMessageType::Type type, const char *message) {
+	FILE *output = (type == LogMessageType::kInfo || type == LogMessageType::kDebug)
+		? stdout : stderr;
+	fputs(message, output);
+	fflush(output);
+}
+
+// Engine runtime data (sky.cpt, lure.dat, ...) and, later, GUI themes are
+// found via the search set instead of --extrapath: SYNCSCUMM_DATA names the
+// directory (the door install sets it; dev runs point it at
+// scummvm/dists/engine-data). SearchMan invokes this at priority -1, so
+// explicit game paths always win.
+void OSystem_Termgfx::addSysArchivesToSearchSet(Common::SearchSet &s, int priority) {
+	const char *data = getenv("SYNCSCUMM_DATA");
+	if (data && *data)
+		s.add("syncscumm-data", new Common::FSDirectory(data, 4), priority);
+	// Last resort, matching the default OSystem behavior (cf. null.cpp).
+	s.addDirectory(".", ".", priority - 1);
+}
+
+int main(int argc, char *argv[]) {
+	// Pin the door name termgfx derives its syncscumm.ini, its <DOOR>_* env-vars
+	// and its diagnostic paths from, rather than letting it fall back to
+	// argv[0]'s basename -- the sysop's ini keeps working if the binary is
+	// renamed.
+	termgfx_termio_set_app_name("syncscumm");
+	termgfx_termio_init(argc, argv);
+	atexit(termgfx_termio_shutdown);   /* quit()'s exit(0) still restores the terminal */
+
+	// ScummVM's own argument parser rejects options it doesn't know, so the
+	// door-only argv entries termgfx_termio_init() just resolved (-s<fd>, a
+	// DOOR32.SYS path) must not reach scummvm_main() -- build a filtered
+	// copy with everything termgfx_termio_init() did NOT consume.
+	char *filteredArgv[64];
+	int   filteredArgc = 0;
+	// A door invocation never legitimately has this many args -- fail loudly
+	// rather than silently truncate the game path/options off the end of
+	// filteredArgv (review finding, M2 Task 4).
+	if (argc >= (int)(sizeof(filteredArgv) / sizeof(filteredArgv[0]))) {
+		char msg[96];
+		snprintf(msg, sizeof(msg), "syncscumm: too many arguments (%d >= %d)\n",
+		         argc, (int)(sizeof(filteredArgv) / sizeof(filteredArgv[0])));
+		fputs(msg, stderr);
+		exit(1);
+	}
+	for (int i = 0; i < argc && filteredArgc < (int)(sizeof(filteredArgv) / sizeof(filteredArgv[0])); i++) {
+		if (i == 0 || !termgfx_termio_consumed(i))
+			filteredArgv[filteredArgc++] = argv[i];
+	}
+
+	// Talkie/Floppy: pick the game-data variant from this session's audio
+	// availability before scummvm_main() detects the game from --path. Same
+	// determination that drives subtitles-auto (termgfx_termio_audio_available()): a
+	// session that can play speech gets the Talkie build, one that cannot gets
+	// the Floppy build (guaranteed on-screen text). See termgfx_select_datadir().
+	//
+	// A given --path=<base> is rewritten to <base>/talkie|floppy in place. If NO
+	// --path was passed, the base defaults to the current directory (the door's
+	// startup_dir, where the talkie/ and floppy/ live) and the selected variant
+	// is INSERTED as an early option -- so an xtrn.ini cmd may omit --path
+	// entirely and still get the right variant, rather than ScummVM assuming the
+	// CWD and failing to find the game (which sits one level down in a variant
+	// subdir).
+	static char pathArg[640];
+	bool        havePath = false;
+	int         audioNow = termgfx_termio_audio_available() != 0;
+	for (int i = 1; i < filteredArgc; i++) {
+		char chosen[600];
+		if (strncmp(filteredArgv[i], "--path=", 7) != 0)
+			continue;
+		termgfx_select_datadir(filteredArgv[i] + 7, audioNow, chosen, sizeof chosen);
+		snprintf(pathArg, sizeof pathArg, "--path=%s", chosen);
+		filteredArgv[i] = pathArg;
+		havePath = true;
+		break;
+	}
+	if (!havePath && filteredArgc < (int)(sizeof(filteredArgv) / sizeof(filteredArgv[0]))) {
+		char chosen[600];
+		int  i;
+		termgfx_select_datadir(".", audioNow, chosen, sizeof chosen);
+		snprintf(pathArg, sizeof pathArg, "--path=%s", chosen);
+		for (i = filteredArgc; i > 1; i--)      /* make room right after argv[0] */
+			filteredArgv[i] = filteredArgv[i - 1];
+		filteredArgv[1] = pathArg;
+		filteredArgc++;
+	}
+
+	// Create the per-user directories ScummVM writes into. It REJECTS a
+	// --savepath whose directory does not exist (it will not create it) and
+	// cannot write a -c config file into a missing directory -- and on a
+	// user's first launch data/user/<####>/<game>/ does not yet exist (neither
+	// Synchronet's %j/%4 expansion nor ScummVM makes that leaf). Make them here
+	// before scummvm_main() consumes the options, or the door exits immediately.
+	for (int i = 1; i < filteredArgc; i++) {
+		if (strncmp(filteredArgv[i], "--savepath=", 11) == 0) {
+			mkpath(filteredArgv[i] + 11);
+			snprintf(g_fit_flag, sizeof g_fit_flag, "%s/syncscumm.fill",
+			         filteredArgv[i] + 11);
+		} else if (strcmp(filteredArgv[i], "-c") == 0 && i + 1 < filteredArgc) {
+			char  dir[512];
+			char *sep;
+			snprintf(dir, sizeof dir, "%s", filteredArgv[i + 1]);
+			sep = strrchr(dir, '/');
+#ifdef _WIN32
+			{
+				char *bsep = strrchr(dir, '\\');
+				if (bsep != NULL && (sep == NULL || bsep > sep))
+					sep = bsep;
+			}
+#endif
+			if (sep != NULL) {
+				*sep = '\0';
+				mkpath(dir);
+			}
+		}
+	}
+
+	if (g_fit_flag[0] != '\0' && fexist(g_fit_flag))
+		termgfx_termio_set_fit_fill(1);
+
+	g_system = new OSystem_Termgfx();
+	assert(g_system);
+	int res = scummvm_main(filteredArgc, filteredArgv);
+	g_system->destroy();
+	return res;
+}
+
+#endif /* USE_TERMGFX_DRIVER */

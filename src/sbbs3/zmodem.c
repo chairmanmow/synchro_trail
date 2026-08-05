@@ -239,17 +239,36 @@ void zmodem_flush(zmodem_t* zm)
  * transmit a character.
  * this is the raw modem interface
  */
+
+/* Keep error reporting and uncommon escaping out of the inline data path. */
+#if defined(_MSC_VER)
+	#define ZMODEM_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+	#define ZMODEM_NOINLINE __attribute__((noinline))
+#else
+	#define ZMODEM_NOINLINE
+#endif
+
+static ZMODEM_NOINLINE int zmodem_send_raw_error(zmodem_t* zm, int result)
+{
+	lprintf(zm, LOG_ERR, "zmodem_send_raw ERROR: %d", result);
+	return result;
+}
+
+static inline int zmodem_send_raw_fast(zmodem_t* zm, unsigned char ch)
+{
+	int result = zm->send_byte(zm->cbdata, ch, zm->send_timeout);
+
+	if (result != SEND_SUCCESS)
+		return zmodem_send_raw_error(zm, result);
+	zm->last_sent = ch;
+	return result;
+}
+
 /* Returns 0 on success */
 int zmodem_send_raw(zmodem_t* zm, unsigned char ch)
 {
-	int result;
-
-	if ((result = zm->send_byte(zm->cbdata, ch, zm->send_timeout)) != SEND_SUCCESS)
-		lprintf(zm, LOG_ERR, "%s ERROR: %d", __FUNCTION__, result);
-	else
-		zm->last_sent = ch;
-
-	return result;
+	return zmodem_send_raw_fast(zm, ch);
 }
 
 /*
@@ -274,40 +293,89 @@ int zmodem_send_esc(zmodem_t* zm, unsigned char c)
  * transmit a character; ZDLE escaping if appropriate
  */
 
-int zmodem_tx(zmodem_t* zm, unsigned char c)
+enum zmodem_tx_class {
+	ZMODEM_TX_NORMAL        = 0,
+	ZMODEM_TX_ESCAPE_ALWAYS = 1 << 0,
+	ZMODEM_TX_ESCAPE_CTRL   = 1 << 1,
+	ZMODEM_TX_ESCAPE_CR     = 1 << 2,
+	ZMODEM_TX_ESCAPE_IAC    = 1 << 3,
+};
+
+/*
+ * Classify bytes without a data-dependent decision tree.  Each byte has
+ * exactly one class bit; zmodem_tx() masks that class against the escape
+ * modes active for the current session and previous byte.
+ */
+#define TXN ZMODEM_TX_NORMAL
+#define TXA ZMODEM_TX_ESCAPE_ALWAYS
+#define TXC ZMODEM_TX_ESCAPE_CTRL
+#define TXR ZMODEM_TX_ESCAPE_CR
+#define TXI ZMODEM_TX_ESCAPE_IAC
+static const unsigned char zmodem_tx_classes[256] = {
+	/* 00 */ TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXR, TXC, TXC,
+	/* 10 */ TXA, TXA, TXC, TXA, TXC, TXC, TXC, TXC, TXA, TXC, TXC, TXC, TXC, TXC, TXC, TXC,
+	/* 20 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* 30 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* 40 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* 50 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* 60 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* 70 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* 80 */ TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXR, TXC, TXC,
+	/* 90 */ TXA, TXA, TXC, TXA, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC, TXC,
+	/* A0 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* B0 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* C0 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* D0 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* E0 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN,
+	/* F0 */ TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXN, TXI,
+};
+#undef TXN
+#undef TXA
+#undef TXC
+#undef TXR
+#undef TXI
+
+/*
+ * The escape modes remain fixed throughout a data subpacket.  Include the
+ * conditional CR class here and defer its last_sent test until a CR arrives,
+ * allowing data senders to reuse this mask for every byte.
+ */
+static inline unsigned zmodem_tx_active(const zmodem_t* zm)
+{
+	unsigned escape_ctrl = !!zm->escape_ctrl_chars;
+
+	return ZMODEM_TX_ESCAPE_ALWAYS
+	    | (escape_ctrl * (ZMODEM_TX_ESCAPE_CTRL | ZMODEM_TX_ESCAPE_CR))
+	    | (!!zm->escape_telnet_iac * ZMODEM_TX_ESCAPE_IAC);
+}
+
+static ZMODEM_NOINLINE int zmodem_tx_non_normal(zmodem_t* zm, unsigned char c, unsigned action)
 {
 	int result;
 
-	switch (c) {
-		case DLE:
-		case DLE | 0x80:          /* even if high-bit set */
-		case XON:
-		case XON | 0x80:
-		case XOFF:
-		case XOFF | 0x80:
-		case ZDLE:
-			return zmodem_send_esc(zm, c);
-		case CR:
-		case CR | 0x80:
-			if (zm->escape_ctrl_chars && (zm->last_sent & 0x7f) == '@')
-				return zmodem_send_esc(zm, c);
-			break;
-		case TELNET_IAC:
-			if (zm->escape_telnet_iac) {
-				if ((result = zmodem_send_raw(zm, ZDLE)) != SEND_SUCCESS)
-					return result;
-				return zmodem_send_raw(zm, ZRUB1);
-			}
-			break;
-		default:
-			if (zm->escape_ctrl_chars && (c & 0x60) == 0)
-				return zmodem_send_esc(zm, c);
-			break;
+	if (action == ZMODEM_TX_ESCAPE_CR && (zm->last_sent & 0x7f) != '@')
+		return zmodem_send_raw_fast(zm, c);
+	if (action == ZMODEM_TX_ESCAPE_IAC) {
+		if ((result = zmodem_send_raw_fast(zm, ZDLE)) != SEND_SUCCESS)
+			return result;
+		return zmodem_send_raw_fast(zm, ZRUB1);
 	}
-	/*
-	 * anything that ends here is so normal we might as well transmit it.
-	 */
-	return zmodem_send_raw(zm, c);
+	return zmodem_send_esc(zm, c);
+}
+#undef ZMODEM_NOINLINE
+
+static inline int zmodem_tx_masked(zmodem_t* zm, unsigned char c, unsigned active)
+{
+	unsigned action = zmodem_tx_classes[c] & active;
+
+	if (action != ZMODEM_TX_NORMAL)
+		return zmodem_tx_non_normal(zm, c, action);
+	return zmodem_send_raw_fast(zm, c);
+}
+
+int zmodem_tx(zmodem_t* zm, unsigned char c)
+{
+	return zmodem_tx_masked(zm, c, zmodem_tx_active(zm));
 }
 
 /**********************************************/
@@ -490,14 +558,26 @@ int zmodem_send_data32(zmodem_t* zm, uchar subpkt_type, unsigned char * p, size_
 {
 	int      result;
 	uint32_t crc;
+	unsigned active;
+	unsigned i;
 
 //	lprintf(zm, LOG_DEBUG, __FUNCTION__ " %s (%u bytes)", chr(subpkt_type), l);
 
-	crc = 0xffffffffl;
+	active = zmodem_tx_active(zm);
+	crc    = 0xffffffffl;
 
+	while (l >= 4) {
+		crc = ucrc32_4(p, crc);
+		for (i = 0; i < 4; i++) {
+			if ((result = zmodem_tx_masked(zm, p[i], active)) != SEND_SUCCESS)
+				return result;
+		}
+		p += 4;
+		l -= 4;
+	}
 	while (l > 0) {
 		crc = ucrc32(*p, crc);
-		if ((result = zmodem_tx(zm, *p++)) != SEND_SUCCESS)
+		if ((result = zmodem_tx_masked(zm, *p++, active)) != SEND_SUCCESS)
 			return result;
 		l--;
 	}
@@ -511,27 +591,29 @@ int zmodem_send_data32(zmodem_t* zm, uchar subpkt_type, unsigned char * p, size_
 
 	crc = ~crc;
 
-	if ((result = zmodem_tx(zm, (uchar) ((crc) & 0xff))) != SEND_SUCCESS)
+	if ((result = zmodem_tx_masked(zm, (uchar) ((crc) & 0xff), active)) != SEND_SUCCESS)
 		return result;
-	if ((result = zmodem_tx(zm, (uchar) ((crc >> 8) & 0xff))) != SEND_SUCCESS)
+	if ((result = zmodem_tx_masked(zm, (uchar) ((crc >> 8) & 0xff), active)) != SEND_SUCCESS)
 		return result;
-	if ((result = zmodem_tx(zm, (uchar) ((crc >> 16) & 0xff))) != SEND_SUCCESS)
+	if ((result = zmodem_tx_masked(zm, (uchar) ((crc >> 16) & 0xff), active)) != SEND_SUCCESS)
 		return result;
-	return zmodem_tx(zm, (uchar) ((crc >> 24) & 0xff));
+	return zmodem_tx_masked(zm, (uchar) ((crc >> 24) & 0xff), active);
 }
 
 int zmodem_send_data16(zmodem_t* zm, uchar subpkt_type, unsigned char * p, size_t l)
 {
 	int            result;
 	unsigned short crc;
+	unsigned       active;
 
 //	lprintf(zm, LOG_DEBUG, __FUNCTION__ " %s (%u bytes)", chr(subpkt_type), l);
 
-	crc = 0;
+	active = zmodem_tx_active(zm);
+	crc    = 0;
 
 	while (l > 0) {
 		crc = ucrc16(*p, crc);
-		if ((result = zmodem_tx(zm, *p++)) != SEND_SUCCESS)
+		if ((result = zmodem_tx_masked(zm, *p++, active)) != SEND_SUCCESS)
 			return result;
 		l--;
 	}
@@ -543,9 +625,9 @@ int zmodem_send_data16(zmodem_t* zm, uchar subpkt_type, unsigned char * p, size_
 	if ((result = zmodem_send_raw(zm, subpkt_type)) != SEND_SUCCESS)
 		return result;
 
-	if ((result = zmodem_tx(zm, (uchar)(crc >> 8))) != SEND_SUCCESS)
+	if ((result = zmodem_tx_masked(zm, (uchar)(crc >> 8), active)) != SEND_SUCCESS)
 		return result;
-	return zmodem_tx(zm, (uchar)(crc & 0xff));
+	return zmodem_tx_masked(zm, (uchar)(crc & 0xff), active);
 }
 
 BOOL zmodem_end_of_frame(int subpkt_type)
@@ -594,7 +676,7 @@ int zmodem_send_data(zmodem_t* zm, uchar subpkt_type, unsigned char* data, size_
 	return zmodem_send_data_subpkt(zm, subpkt_type, data, len);
 }
 
-int zmodem_send_pos_header(zmodem_t* zm, int type, int32_t pos, BOOL hex)
+int zmodem_send_pos_header(zmodem_t* zm, int type, uint32_t pos, BOOL hex)
 {
 	uchar header[5];
 
@@ -611,7 +693,7 @@ int zmodem_send_pos_header(zmodem_t* zm, int type, int32_t pos, BOOL hex)
 		return zmodem_send_bin_header(zm, header);
 }
 
-int zmodem_send_ack(zmodem_t* zm, int32_t pos)
+int zmodem_send_ack(zmodem_t* zm, uint32_t pos)
 {
 	return zmodem_send_pos_header(zm, ZACK, pos, /* Hex? */ TRUE);
 }
@@ -645,7 +727,7 @@ int zmodem_send_zskip(zmodem_t* zm)
 int zmodem_send_zeof(zmodem_t* zm)
 {
 	lprintf(zm, LOG_INFO, "%lu Sending End-of-File (ZEOF) frame", (ulong)zm->current_file_pos);
-	return zmodem_send_pos_header(zm, ZEOF, (int32_t)zm->current_file_pos, /* Hex? */ TRUE);
+	return zmodem_send_pos_header(zm, ZEOF, (uint32_t)zm->current_file_pos, /* Hex? */ TRUE);
 }
 
 
@@ -1520,7 +1602,7 @@ BOOL zmodem_handle_zrpos(zmodem_t* zm, uint64_t* pos)
 	if (zm->rxd_header_pos < zm->current_file_size) {
 		if (*pos != zm->rxd_header_pos) {
 			*pos = zm->rxd_header_pos;
-			zm->ack_file_pos = (int32_t)*pos;
+			zm->ack_file_pos = (uint32_t)*pos;
 			lprintf(zm, LOG_INFO, "%lu Resuming transfer from offset: %" PRIu64
 			        , (ulong)zm->current_file_pos, *pos);
 		}
@@ -1667,8 +1749,14 @@ int zmodem_send_from(zmodem_t* zm, FILE* fp, uint64_t pos, uint64_t* sent)
 				tx_type = ZCRCE;
 			else {
 				if (zm->can_overlap_io && !zm->no_streaming && (zm->recv_bufsize == 0 || buf_sent + len < zm->recv_bufsize)) {
-					if (zm->can_full_duplex && zm->max_window_size)
-						tx_type = (subpkts_sent % (zm->max_window_size / zm->block_size / 4)) == 0 ? ZCRCQ : ZCRCG;
+					if (zm->can_full_duplex && zm->max_window_size) {
+						/* A window narrower than 4 blocks has no quarter-window
+						   interval to ACK on; clamp to 1 (GitLab #1197). */
+						unsigned interval = zm->max_window_size / zm->block_size / 4;
+						if (interval < 1)
+							interval = 1;
+						tx_type = (subpkts_sent % interval) == 0 ? ZCRCQ : ZCRCG;
+					}
 					else
 						tx_type = ZCRCG;
 				}
@@ -2403,7 +2491,7 @@ const char* zmodem_source(void)
 
 char* zmodem_ver(char *buf)
 {
-	return strcpy(buf, "2.2");
+	return strcpy(buf, "2.4");
 }
 
 void zmodem_init(zmodem_t* zm, void* cbdata

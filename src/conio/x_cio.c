@@ -195,6 +195,17 @@ void x11_mouse_thread(void *data)
 	}
 }
 
+void x11_key_thread(void *data)
+{
+	uint16_t key = CIO_KEY_KEY_EVENT;
+
+	SetThreadName("X11 Key");
+	while (1) {
+		if (ciokey_wait())
+			write(key_pipe[1], &key, 2);
+	}
+}
+
 static dll_handle dl;
 #ifdef WITH_XRENDER
 static dll_handle dl2;
@@ -269,6 +280,9 @@ int x_initciolib(int mode)
 		xp_dlclose(dl);
 		return(-1);
 	}
+	x11.XkbBell=xp_dlsym(dl,XkbBell);
+	x11.XkbGetKeyboard=xp_dlsym(dl,XkbGetKeyboard);
+	x11.XkbFreeKeyboard=xp_dlsym(dl,XkbFreeKeyboard);
 	if((x11.XLookupString=xp_dlsym(dl,XLookupString))==NULL) {
 		xp_dlclose(dl);
 		return(-1);
@@ -537,6 +551,10 @@ int x_initciolib(int mode)
 		xp_dlclose(dl);
 		return(-1);
 	}
+	if((x11.XKeysymToKeycode=xp_dlsym(dl,XKeysymToKeycode))==NULL) {
+		xp_dlclose(dl);
+		return(-1);
+	}
 #ifdef WITH_XRENDER
 	xrender_found = true;
 	if (dl2 == NULL && (dl2 = xp_dlopen(libnames2,RTLD_LAZY,1)) == NULL)
@@ -722,7 +740,7 @@ int x_initciolib(int mode)
 		return(-1);
 	}
 
-	_beginthread(x11_event_thread,1<<16,(void *)(intptr_t)mode);
+	_beginthread(x11_event_thread, 1 << 18, (void *)(intptr_t)mode);
 	sem_wait(&init_complete);
 	if(!x11_initialized) {
 		xp_dlclose(dl);
@@ -749,7 +767,8 @@ int x_initciolib(int mode)
 		return(-1);
 	}
 	_beginthread(x11_mouse_thread,1<<16,NULL);
-	cio_api.options |= CONIO_OPT_SET_TITLE | CONIO_OPT_SET_NAME | CONIO_OPT_SET_ICON | CONIO_OPT_EXTERNAL_SCALING;
+	_beginthread(x11_key_thread,1<<16,NULL);
+	cio_api.options |= CONIO_OPT_SET_TITLE | CONIO_OPT_SET_NAME | CONIO_OPT_SET_ICON | CONIO_OPT_EXTERNAL_SCALING | CONIO_OPT_KEY_EVENTS;
 	return(0);
 }
 
@@ -793,6 +812,38 @@ double x_getscaling(void)
 	ret = vstat.scaling;
 	assert_rwlock_unlock(&vstatlock);
 	return ret;
+}
+
+void x_setwinsize(int w, int h)
+{
+	double s = bitmap_double_mult_inside(w, h);
+	x_setscaling(s);
+}
+
+void x_setwinposition(int x, int y)
+{
+	struct x11_local_event ev = {0};
+
+	ev.type = X11_LOCAL_SETWINPOSITION;
+	ev.data.winpos.x = x;
+	ev.data.winpos.y = y;
+	if (x11_initialized)
+		write_event(&ev);
+}
+
+int x_get_window_info(int *width, int *height, int *xpos, int *ypos)
+{
+	assert_rwlock_rdlock(&vstatlock);
+	if (width)
+		*width = vstat.winwidth;
+	if (height)
+		*height = vstat.winheight;
+	assert_rwlock_unlock(&vstatlock);
+	if (xpos)
+		*xpos = 0;
+	if (ypos)
+		*ypos = 0;
+	return 1;
 }
 
 int x_mousepointer(enum ciolib_mouse_ptr type)

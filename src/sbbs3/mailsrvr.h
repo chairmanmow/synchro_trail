@@ -84,7 +84,15 @@ typedef struct {
 	uint max_concurrent_connections;
 	uint max_requests_per_period;
 	uint request_rate_limit_period;
+	struct rate_limit_settings rate_limit;
 	uint spam_block_duration;
+
+	/* DKIM outbound signing (appended last to preserve preceding field offsets;
+	 * changing sizeof(mail_startup_t) requires rebuilding the Windows Borland
+	 * sbbsctrl.exe, which size-checks this struct) */
+	bool dkim_sign;
+	char dkim_domain[128];
+	char dkim_selector[64];
 
 } mail_startup_t;
 

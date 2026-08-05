@@ -1,5 +1,6 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -14,7 +15,6 @@
 #include "gen_defs.h"
 #include "telnet.h"
 #include "term.h"
-#include "uifcinit.h"
 
 #ifdef _MSC_VER
 #pragma warning(disable : 4244 4267 4018)
@@ -53,6 +53,47 @@ putcom(char *buf, size_t len)
 {
 	conn_send_raw(buf, len, 10000);
 	return;
+}
+
+/* Send a NAWS (RFC 1073) subnegotiation carrying the current window
+ * size.  Pixel args are accepted for signature compatibility with the
+ * conn-layer callback but ignored (NAWS has no pixel field).  No-op
+ * if the peer never negotiated DO NAWS.  0xFF bytes inside the
+ * subnegotiation are doubled per RFC 855 / RFC 1073. */
+void
+telnet_send_window_change(int text_cols, int text_rows,
+    int pixel_cols, int pixel_rows)
+{
+	(void)pixel_cols;
+	(void)pixel_rows;
+
+	if (telnet_local_option[TELNET_NEGOTIATE_WINDOW_SIZE] != TELNET_DO)
+		return;
+	if (text_cols <= 0 || text_rows <= 0)
+		return;
+
+	uchar raw[4];
+	raw[0] = (text_cols >> 8) & 0xff;
+	raw[1] = text_cols & 0xff;
+	raw[2] = (text_rows >> 8) & 0xff;
+	raw[3] = text_rows & 0xff;
+
+	uchar buf[16];	/* worst case 3 + 4*2 + 2 = 13 bytes */
+	size_t p = 0;
+	buf[p++] = TELNET_IAC;
+	buf[p++] = TELNET_SB;
+	buf[p++] = TELNET_NEGOTIATE_WINDOW_SIZE;
+	for (size_t i = 0; i < sizeof(raw); i++) {
+		buf[p++] = raw[i];
+		if (raw[i] == TELNET_IAC)
+			buf[p++] = TELNET_IAC;
+	}
+	buf[p++] = TELNET_IAC;
+	buf[p++] = TELNET_SE;
+
+	lprintf(LOG_INFO, "TX: Window Size is %u x %u",
+	    (unsigned)text_cols, (unsigned)text_rows);
+	putcom((char *)buf, p);
 }
 
 static void
@@ -101,7 +142,8 @@ request_telnet_opt(uchar cmd, uchar opt)
 }
 
 BYTE *
-telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
+telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen,
+    bool *command_received)
 {
 	BYTE  command;
 	BYTE  option;
@@ -109,6 +151,7 @@ telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
 	BYTE *first_int = NULL;
 	int   i;
 
+	*command_received = false;
 	if (inlen < 1) {
 		*outlen = 0;
 		return inbuf; /* no length? No interpretation */
@@ -187,10 +230,12 @@ telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
 						request_telnet_opt(TELNET_WILL, TELNET_NEGOTIATE_WINDOW_SIZE);
 					}
 					telnet_cmdlen = 0;
+					*command_received = true;
 				}
 			}
 			else if ((telnet_cmdlen == 2) && (inbuf[i] < TELNET_WILL)) {
 				telnet_cmdlen = 0;
+				*command_received = true;
 			}
 			else if (telnet_cmdlen >= 3) { /* telnet option negotiation */
 				lprintf(LOG_INFO, "RX: %s %s",
@@ -218,22 +263,10 @@ telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
 					}
 
 					if ((command == TELNET_DO) && (option == TELNET_NEGOTIATE_WINDOW_SIZE)) {
-						int  rows, cols;
-						BYTE buf[32];
+						int rows, cols;
 
 						get_cterm_size(&cols, &rows, conn_api.nostatus);
-						buf[0] = TELNET_IAC;
-						buf[1] = TELNET_SB;
-						buf[2] = TELNET_NEGOTIATE_WINDOW_SIZE;
-						buf[3] = (cols >> 8) & 0xff;
-						buf[4] = cols & 0xff;
-						buf[5] = (rows >> 8) & 0xff;
-						buf[6] = rows & 0xff;
-						buf[7] = TELNET_IAC;
-						buf[8] = TELNET_SE;
-						lprintf(LOG_INFO, "TX: Window Size is %u x %u",
-						    cols, rows);
-						putcom((char *)buf, 9);
+						telnet_send_window_change(cols, rows, -1, -1);
 					}
 				}
 				else { /* WILL/WONT (remote options) */
@@ -260,6 +293,7 @@ telnet_interpret(BYTE *inbuf, size_t inlen, BYTE *outbuf, size_t *outlen)
 				}
 
 				telnet_cmdlen = 0;
+				*command_received = true;
 			}
 		}
 		else {

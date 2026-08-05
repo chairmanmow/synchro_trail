@@ -1,23 +1,87 @@
-Version 1.8b
+Version 1.10
 ------------
-Support encrypted dialing directories
-Support web-based main dialing directory
-Allow specifying terminal type for each entry
-Add support for DECSCUSR
+BBS cache directories are now deleted/renamed with the entry
+ANSI parser overhaul
+Keystroke handling overhaul
+Add DECRQSS support to show/hide/customize the status line
+Removed support for PortAudio v1.8
+Switched to 16-bit 44.1kHz stereo audio
+Add new APC commands to do audio and audio mixing
+Switch to DeuceSSH + OpenSSL | Botan
+Fully support OOB data in RLogin modes
+Hold Alt during drag-select to copy a rectangular region
+Prototype SFTP client (Alt+S, Alt+B)
+Add Wren scripting engine, REPL console with Ctrl+`
+Make the Wren REPL and error indicator available in the main menu
+Replace the dialing directory and settings UI with a persistent Wren menu
+Isolate trusted menu scripts from per-connection Wren scripts
+Replace the native file picker with an isolated persistent Wren VM
+Remove SyncTERM's UIFC dependency
+Rename the menu and picker colour settings to Classic Theme
+Add process-wide INI themes with preview and selection in SyncTERM Settings
+Add a full theme editor with cascade inspection, import, and undo/redo
+Add a web theme catalog with validated caching and automatic updates
+Add ordered per-connection Wren script loading to directory entries
+Replace the palette-entry editor with an RGB/HSV colour picker
+Remove the nonfunctional -e escape-delay option
+Place Wren UI scrollbars on the right
+Pin SO_SNDBUF and SO_RCVBUF to 1 MiB on all TCP connections
+Add PipeWire support
+Add support for "cursor on mode" to Prestel (ala Acorn manual)
+Add scaling, mirroring, and clipping support to graphics APC draws
+Add Wren pixel buffers, masks, image decoding, capture, and integer blitting
+
+Version 1.9
+-----------
+Add LF Expand option to dialing directory
+Fix error when scrolling with a non-black background colour
+Fix Prestel double-height bottom-half redraw on overwrite
+Fix key repeat on Wayland
+Fix Wayland content size change
+Fix Quartz and Wayland mapping on non-PC charsets (ATASCII etc)
+Fix RTS/CTS handling on close() and in 3-Wire mode
+Change audio backend try-order so PulseAudio is no longer tried first
+Change Qartz to map Command to Alt, not Option per Apple design
+Rework filepick widget
+
+Version 1.8
+-----------
+Add RIPterm v1.54.00 pixel-level compatibility
+Add OSC 8 hyperlink support (clickable URLs)
+Add Ctrl+click detects plain-text URLs in terminal output
+Add Support for encrypted dialing directories
 Add support for explicit sort order
+Add native macOS backend (Quartz display, CoreAudio sound)
+Add Wayland backend
+Add named sort profiles with < and > keys to cycle through them
+Add [ and ] keys to navigate between items in edit submenus
+Add Support for web-based main dialing directory
+Add support to allow specifying terminal type for each entry
 Add default cursor style setting
 Add support for modifying UIFC colours
-Have |# flush RIP immediately
-Fix RIP popups using current font
+Add ECMA-48 screen content readback (SSA/ESA/STS)
+Add DEC rectangular area operations (DECERA, DECFRA, DECCRA, DECIC, DECDC)
+Add DECCARA, DECRARA, DECSACE (change/reverse attributes in rectangular areas)
+Add vertical line tabulation (VTS, CVT)
+Add DECRQM reporting for all ECMA-48 standard modes
+Add DECRQSS queries for communication speed and DECSACE
+Add support for DECSCUSR
 Fix Windows Default Connection Settings
+Fix many security issues found by jquast
+Fix curses CPU spin when PTY is deleted (e.g., ttyd disconnect)
+Fix 9 termcap/terminfo entry bugs, add 5 missing capabilities
+Fix custom entry palette lost on terminal reset
 Fix crash associated with movetext() and custom fonts
 Fix Windows GDI input hang when a key is held down
 Fix black bar at bottom of 132x37 mode
 Fix snapping of height-controlled modes
 Fix delay at end of ZModem transfer
-Fix "Failed to decrypt BBS list" for empty list files
 Fix compatibility with "SSH-2.0-Go"
 Fix curses mode stdio drop detection
+Fix keys stuck after Ctrl+clicking a URL in Win32-GDI
+Fix blank drive list in file picker on Windows
+Fix status bar smear during fast scroll
+Fix zombie process when closing window while connected
 Full code audit by Claude Opus, many fixes
 
 Version 1.7

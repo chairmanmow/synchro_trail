@@ -268,6 +268,28 @@ function str_cmds(str)
 			return;
 		}
 
+		help["XTRN [code]"] = "Run a pre-configured external program";
+		if(word=="XTRN") {
+			if(bbs.check_syspass()) {
+				str = str.substr(5);
+				if(str)
+					str = get_arg(str);
+				else {
+					var codes = [];
+					for(var i in xtrn_area.prog) {
+						console.uselect(codes.length, "Program", i);
+						codes.push(i);
+					}
+					var selection = console.uselect();
+					if(selection >= 0)
+						str = codes[selection];
+					alert(str);
+				}
+				if(str)
+					bbs.exec_xtrn(str);
+			}
+			return;
+		}
 
 		help["NODE [parameters]"] = "Executes the node utility with the passed parameters";
 		if(word=="NODE") {
@@ -388,7 +410,7 @@ function str_cmds(str)
 				str=str.substr(3);
 				writeln("");
 				try {	// May throw on parseInt()
-					if(system.mqtt_enabled)
+					if(system.mqtt_enabled && js.global.MQTT !== undefined)
 						js.exec('mqtt_spy.js', this, parseInt(get_nodenum(str)));
 					else
 						bbs.spy(parseInt(get_nodenum(str)));
@@ -859,7 +881,7 @@ function display_node(node_num)
 {
 	var options = bbs.mods.nodelist_options;
 	if(!options)
-		options = load({}, "nodelist_options.js");
+		options = load("nodelist_options.js");
 	print("Node " + format(options.format, node_num
 		, presence.node_status(system.get_node(node_num), user.is_sysop, options, node_num - 1)));
 }

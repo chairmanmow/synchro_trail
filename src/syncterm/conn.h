@@ -8,8 +8,10 @@
 #endif
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 #include "bbslist.h"
+#include "eventwrap.h"
 #include "sockwrap.h"
 #include "threadwrap.h"
 
@@ -44,6 +46,8 @@ enum {
 	,
 	CONN_TYPE_TELNETS
 	,
+	CONN_TYPE_MQTT
+	,
 	CONN_TYPE_TERMINATOR
 };
 
@@ -55,7 +59,8 @@ enum {
 	((x) == CONN_TYPE_SSH) ||                \
 	((x) == CONN_TYPE_SSHNA) ||               \
 	((x) == CONN_TYPE_MBBS_GHOST) ||           \
-	((x) == CONN_TYPE_TELNETS))
+	((x) == CONN_TYPE_TELNETS) ||               \
+	((x) == CONN_TYPE_MQTT))
 
 struct conn_api {
 	int               (*connect)(struct bbslist *bbs);
@@ -63,7 +68,14 @@ struct conn_api {
 	void              (*binary_mode_on)(void);
 	void              (*binary_mode_off)(void);
 
-	bool              binary_mode;
+	/* Inform the remote end that the terminal's visible dimensions
+	 * have changed (e.g. DECSSDT status-row toggle).  Pixel args are
+	 * -1 when pixel dimensions are unknown for the current mode.
+	 * NULL for connection types that don't carry window-size info. */
+	void              (*send_window_change)(int text_cols, int text_rows,
+	                                        int pixel_cols, int pixel_rows);
+
+	_Atomic bool      binary_mode;
 
 	void            * (*rx_parse_cb)(const void *inbuf, size_t inlen, size_t *olen);
 	void            * (*tx_parse_cb)(const void *inbuf, size_t inlen, size_t *olen);
@@ -71,6 +83,7 @@ struct conn_api {
 	int               log_level;
 	int               type;
 	int               nostatus;
+	int64_t           connected_at;
 	cterm_emulation_t emulation;
 	atomic_int        input_thread_running;
 	atomic_int        output_thread_running;
@@ -84,12 +97,12 @@ struct conn_api {
 struct conn_buffer {
 	unsigned char  *buf;
 	size_t          bufsize;
-	size_t          buftop;
-	size_t          bufbot;
-	int             isempty;
-	pthread_mutex_t mutex;
-	sem_t           in_sem;
-	sem_t           out_sem;
+	atomic_size_t   head;
+	atomic_size_t   tail;
+	pthread_mutex_t read_mutex;
+	pthread_mutex_t write_mutex;
+	xpevent_t       data_event;
+	xpevent_t       space_event;
 };
 
 /*
@@ -101,9 +114,11 @@ int conn_send_raw(const void *buffer, size_t buflen, unsigned int timeout);
 bool conn_connect(struct bbslist *bbs);
 int conn_close(void);
 bool conn_connected(void);
-size_t conn_data_waiting(void);
+int64_t conn_connected_seconds(void);
 void conn_binary_mode_on(void);
 void conn_binary_mode_off(void);
+void conn_send_window_change(int text_cols, int text_rows,
+                             int pixel_cols, int pixel_rows);
 
 /*
  * For connection providers
@@ -117,7 +132,9 @@ extern struct conn_api    conn_api;
 
 struct conn_buffer *create_conn_buf(struct conn_buffer *buf, size_t size);
 void destroy_conn_buf(struct conn_buffer *buf);
+void conn_buf_reset(struct conn_buffer *buf);
 size_t conn_buf_bytes(struct conn_buffer *buf);
+size_t conn_buf_free(struct conn_buffer *buf);
 size_t conn_buf_peek(struct conn_buffer *buf, void *voutbuf, size_t outlen);
 size_t conn_buf_get(struct conn_buffer *buf, void *outbuf, size_t outlen);
 size_t conn_buf_put(struct conn_buffer *buf, const void *outbuf, size_t outlen);

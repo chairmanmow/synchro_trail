@@ -59,7 +59,7 @@ bool xpms_add(struct xpms_set *xpms_set, int domain, int type,
 	unsigned int         added = 0;
 	int                  ret;
 	char                 port_str[6];
-	char                 err[128];
+	char                 err[SOCKET_STRERROR_BUFLEN];
 
 #ifndef _WIN32
 	struct addrinfo      dummy;
@@ -129,6 +129,14 @@ bool xpms_add(struct xpms_set *xpms_set, int domain, int type,
 			FREE_AND_NULL(xpms_set->socks[xpms_set->sock_count].prot);
 			continue;
 		}
+#ifdef _WIN32
+		/* Prevent spawned child processes (timed events, native externals, CGI)
+		   from inheriting - and thereby leaking - this listen socket.  An
+		   inherited listen socket keeps the port bound in the kernel after we
+		   exit, so an orphaned child can hold every server's ports open.  See
+		   GitLab #1151. */
+		SetHandleInformation((HANDLE)xpms_set->socks[xpms_set->sock_count].sock, HANDLE_FLAG_INHERIT, 0);
+#endif
 		if (sock_init)
 			sock_init(xpms_set->socks[xpms_set->sock_count].sock, cbdata);
 
@@ -258,7 +266,7 @@ static bool read_socket(SOCKET sock, char *buffer, size_t len, int (*lprintf)(in
 	size_t        i;
 	int           rd;
 	unsigned char ch;
-	char          err[128];
+	char          err[SOCKET_STRERROR_BUFLEN];
 
 	for (i = 0; i < len; i++) {
 		if (socket_readable(sock, 1000)) {
@@ -402,10 +410,15 @@ SOCKET xpms_accept(struct xpms_set *xpms_set, union xp_sockaddr * addr,
 #endif
 					if (cb_data)
 						*cb_data = xpms_set->socks[i].cb_data;
-					ret = accept(xpms_set->socks[i].sock, &addr->addr, addrlen);
+					ret = accept(xpms_set->socks[i].sock, (struct sockaddr*)addr, addrlen);
 					if (ret == INVALID_SOCKET) {
 						goto error_return;
 					}
+#ifdef _WIN32
+					/* Likewise, don't let spawned children inherit this
+					   accepted client socket (see GitLab #1151). */
+					SetHandleInformation((HANDLE)ret, HANDLE_FLAG_INHERIT, 0);
+#endif
 
 					// Set host_ip from haproxy protocol, if its used
 					// http://www.haproxy.org/download/1.8/doc/proxy-protocol.txt

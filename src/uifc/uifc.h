@@ -151,6 +151,7 @@
 #define WIN_NODRAW  (1LL << 22) /* Force not to redraw on dynamic window */
 #define WIN_EXTKEYS (1LL << 23) /* Return on any keypress... if it's not handled internally
 	                         * Return value is -2 - keyvalue */
+#define UIFC_EXTKEY(k) (-2 - (k))   /* Decode the api->list() return value when WIN_EXTKEYS is set */
 #define WIN_NOBRDR  (1LL << 24)   /* Do not draw a border around the window */
 #define WIN_FIXEDHEIGHT (1LL << 25)   /* Use list_height from uifc struct */
 #define WIN_UNGETMOUSE  (1LL << 26) /* If the mouse is clicked outside the window, */
@@ -166,6 +167,7 @@
 #define WIN_RIGHTKEY    (1LL << 33)   /* Display right-arrow-key support indicator */
 #define WIN_BLANKOPTS   (1LL << 34)   /* Blank options are allowed (terminate list on NULL only) */
 #define WIN_ATEXIT      (1LL << 35)   /* Do not exit this because UIFC_XF_QUIT is set - for non-exiting menus */
+#define WIN_NOFIND      (1LL << 36)   /* Suppress internal Ctrl-F/Ctrl-G handling; let caller intercept via WIN_EXTKEYS */
 
 #define WIN_MID WIN_L2R | WIN_T2B  /* Place window in middle of screen */
 #define WIN_GET WIN_COPY
@@ -421,6 +423,10 @@ typedef struct {
 /* Allow application override												*/
 /****************************************************************************/
 	char** yesNoOpts;
+	/* Override for the F2 hint text rendered in bottomline() when
+	 * WIN_EDIT is set.  Include trailing spaces for separation.
+	 * NULL = use the default "Edit Item  ". */
+	char*  edit_item;
 
 /****************************************************************************/
 /* Exit/uninitialize function.												*/

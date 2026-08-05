@@ -46,10 +46,19 @@ static const char* strMaxNewUserInactivity = "MaxNewUserInactivity";
 static const char* strMaxSessionInactivity = "MaxSessionInactivity";
 static const char* strMaxSFTPInactivity = "MaxSFTPInactivity";
 static const char* strMaxConConn = "MaxConcurrentConnections";
+static const char* strMaxConConnFilterThreshold = "MaxConConnFilterThreshold";
+static const char* strMaxConConnFilterDuration  = "MaxConConnFilterDuration";
+static const char* strMaxConConnFilterSilent    = "MaxConConnFilterSilent";
 static const char* strMaxRequestPerPeriod = "MaxRequestsPerPeriod";
 static const char* strRequestRateLimitPeriod = "RequestRateLimitPeriod";
 static const char* strMaxConnectsPerPeriod = "MaxConnectsPerPeriod";
 static const char* strConnectRateLimitPeriod = "ConnectRateLimitPeriod";
+static const char* strRateLimitSubnetPrefix4 = "RateLimitSubnetPrefix4";
+static const char* strRateLimitSubnetPrefix6 = "RateLimitSubnetPrefix6";
+static const char* strRateLimitFilterThreshold = "RateLimitFilterThreshold";
+static const char* strRateLimitFilterDuration = "RateLimitFilterDuration";
+static const char* strRateLimitFilterSilent = "RateLimitFilterSilent";
+static const char* strRateLimitFilterSubnetThreshold = "RateLimitFilterSubnetThreshold";
 static const char* strHostName = "HostName";
 static const char* strLogLevel = "LogLevel";
 static const char* strEventLogLevel = "EventLogLevel";
@@ -265,6 +274,38 @@ static void set_login_attempt_settings(str_list_t* lp, const char* section, stru
 	iniSetDuration(lp, section, strLoginAttemptTempBanDuration, settings.tempban_duration, &style);
 	iniSetInteger(lp, section, strLoginAttemptFilterThreshold, settings.filter_threshold, &style);
 	iniSetDuration(lp, section, strLoginAttemptFilterDuration, settings.filter_duration, &style);
+}
+
+static struct rate_limit_settings get_rate_limit_settings(str_list_t list, const char* section)
+{
+	struct rate_limit_settings settings;
+
+	settings.prefix4                 = iniGetUInteger(list, section, strRateLimitSubnetPrefix4, 0);
+	settings.prefix6                 = iniGetUInteger(list, section, strRateLimitSubnetPrefix6, 64);
+	settings.filter                  = iniGetUInteger(list, section, strRateLimitFilterThreshold, 0);
+	settings.filter_duration         = iniGetUInteger(list, section, strRateLimitFilterDuration, 0);
+	settings.filter_silent           = iniGetBool(list, section, strRateLimitFilterSilent, false);
+	settings.filter_subnet_threshold = iniGetUInteger(list, section, strRateLimitFilterSubnetThreshold, 2);
+	if (settings.filter_subnet_threshold < 1)
+		settings.filter_subnet_threshold = 1;
+	return settings;
+}
+
+static bool set_rate_limit_settings(str_list_t* lp, const char* section, struct rate_limit_settings settings, ini_style_t style)
+{
+	if (!iniSetUInteger(lp, section, strRateLimitSubnetPrefix4, settings.prefix4, &style))
+		return false;
+	if (!iniSetUInteger(lp, section, strRateLimitSubnetPrefix6, settings.prefix6, &style))
+		return false;
+	if (!iniSetUInteger(lp, section, strRateLimitFilterThreshold, settings.filter, &style))
+		return false;
+	if (!iniSetUInteger(lp, section, strRateLimitFilterDuration, settings.filter_duration, &style))
+		return false;
+	if (!iniSetBool(lp, section, strRateLimitFilterSilent, settings.filter_silent, &style))
+		return false;
+	if (!iniSetUInteger(lp, section, strRateLimitFilterSubnetThreshold, settings.filter_subnet_threshold, &style))
+		return false;
+	return true;
 }
 
 static const struct in6_addr wildcard6;
@@ -548,6 +589,9 @@ bool sbbs_read_ini(
 
 		bbs->login_attempt = get_login_attempt_settings(list, section, global);
 		bbs->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, 0);
+		bbs->max_concurrent.filter_threshold = iniGetUInteger(list, section, strMaxConConnFilterThreshold, 0);
+		bbs->max_concurrent.filter_duration  = (uint)iniGetDuration(list, section, strMaxConConnFilterDuration, 24 * 60 * 60);
+		bbs->max_concurrent.filter_silent    = iniGetBool(list, section, strMaxConConnFilterSilent, false);
 
 		bbs->max_dumbterm_inactivity = (uint16_t)iniGetDuration(list, section, strMaxDumbTermInactivity, 60);
 		bbs->max_login_inactivity = (uint16_t)iniGetDuration(list, section, strMaxLoginInactivity, 10 * 60);
@@ -630,6 +674,7 @@ bool sbbs_read_ini(
 		ftp->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, 0);
 		ftp->max_requests_per_period = iniGetUInteger(list, section, strMaxRequestPerPeriod, 0);
 		ftp->request_rate_limit_period = iniGetUInteger(list, section, strRequestRateLimitPeriod, 60 * 60);
+		ftp->rate_limit = get_rate_limit_settings(list, section);
 
 	}
 
@@ -704,6 +749,12 @@ bool sbbs_read_ini(
 		SAFECOPY(mail->relay_pass
 		         , iniGetString(list, section, "RelayPassword", nulstr, value));
 
+		mail->dkim_sign = iniGetBool(list, section, "DKIMSign", false);
+		SAFECOPY(mail->dkim_domain
+		         , iniGetString(list, section, "DKIMDomain", nulstr, value));
+		SAFECOPY(mail->dkim_selector
+		         , iniGetString(list, section, "DKIMSelector", "mail", value));
+
 		SAFECOPY(mail->dns_server
 		         , iniGetString(list, section, "DNSServer", nulstr, value));
 
@@ -742,6 +793,7 @@ bool sbbs_read_ini(
 		mail->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, 0);
 		mail->max_requests_per_period = iniGetUInteger(list, section, strMaxRequestPerPeriod, 0);
 		mail->request_rate_limit_period = iniGetUInteger(list, section, strRequestRateLimitPeriod, 60 * 60);
+		mail->rate_limit = get_rate_limit_settings(list, section);
 		mail->spam_block_duration = (uint)iniGetDuration(list, section, "SpamBlockDuration", 0);
 		mail->notify_offline_users = iniGetBool(list, section, "NotifyOfflineUsers", false);
 	}
@@ -796,6 +848,7 @@ bool sbbs_read_ini(
 
 		services->max_connects_per_period = iniGetUInteger(list, section, strMaxConnectsPerPeriod, 0);
 		services->connect_rate_limit_period = iniGetUInteger(list, section, strConnectRateLimitPeriod, 60 * 60);
+		services->rate_limit = get_rate_limit_settings(list, section);
 
 		services->bind_retry_count = iniGetInteger(list, section, strBindRetryCount, global->bind_retry_count);
 		services->bind_retry_delay = iniGetInteger(list, section, strBindRetryDelay, global->bind_retry_delay);
@@ -889,8 +942,11 @@ bool sbbs_read_ini(
 		web->bind_retry_delay = iniGetInteger(list, section, strBindRetryDelay, global->bind_retry_delay);
 		web->login_attempt = get_login_attempt_settings(list, section, global);
 		web->max_concurrent_connections = iniGetUInteger(list, section, strMaxConConn, WEB_DEFAULT_MAX_CON_CONN);
+		web->max_connects_per_period = iniGetUInteger(list, section, strMaxConnectsPerPeriod, 0);
+		web->connect_rate_limit_period = iniGetUInteger(list, section, strConnectRateLimitPeriod, 60 * 60);
 		web->max_requests_per_period = iniGetUInteger(list, section, strMaxRequestPerPeriod, 0);
 		web->request_rate_limit_period = iniGetUInteger(list, section, strRequestRateLimitPeriod, 60 * 60);
+		web->rate_limit = get_rate_limit_settings(list, section);
 		SAFECOPY(web->proxy_ip_header
 		         , iniGetString(list, section, "RemoteIPHeader", nulstr, value));
 		SAFECOPY(web->custom_log_fmt
@@ -1023,6 +1079,12 @@ bool sbbs_write_ini(
 				break;
 			if (!iniSetUInteger(lp, section, strMaxConConn, bbs->max_concurrent_connections, &style))
 				break;
+			if (!iniSetUInteger(lp, section, strMaxConConnFilterThreshold, bbs->max_concurrent.filter_threshold, &style))
+				break;
+			if (!iniSetDuration(lp, section, strMaxConConnFilterDuration, bbs->max_concurrent.filter_duration, &style))
+				break;
+			if (!iniSetBool(lp, section, strMaxConConnFilterSilent, bbs->max_concurrent.filter_silent, &style))
+				break;
 			if (!iniSetDuration(lp, section, strMaxDumbTermInactivity, bbs->max_dumbterm_inactivity, &style))
 				break;
 			if (!iniSetDuration(lp, section, strMaxLoginInactivity, bbs->max_login_inactivity, &style))
@@ -1135,6 +1197,8 @@ bool sbbs_write_ini(
 			if (!iniSetUInteger(lp, section, strMaxRequestPerPeriod, ftp->max_requests_per_period, &style))
 				break;
 			if (!iniSetUInteger(lp, section, strRequestRateLimitPeriod, ftp->request_rate_limit_period, &style))
+				break;
+			if (!set_rate_limit_settings(lp, section, ftp->rate_limit, style))
 				break;
 			if (!iniSetDuration(lp, section, "QwkTimeout", ftp->qwk_timeout, &style))
 				break;
@@ -1272,6 +1336,8 @@ bool sbbs_write_ini(
 				break;
 			if (!iniSetUInteger(lp, section, strRequestRateLimitPeriod, mail->request_rate_limit_period, &style))
 				break;
+			if (!set_rate_limit_settings(lp, section, mail->rate_limit, style))
+				break;
 
 			if (strcmp(mail->host_name, global->host_name) == 0
 			    || (bbs != NULL && strcmp(bbs->host_name, cfg->sys_inetaddr) == 0))
@@ -1296,6 +1362,13 @@ bool sbbs_write_ini(
 			if (!iniSetString(lp, section, "RelayUsername", mail->relay_user, &style))
 				break;
 			if (!iniSetString(lp, section, "RelayPassword", mail->relay_pass, &style))
+				break;
+
+			if (!iniSetBool(lp, section, "DKIMSign", mail->dkim_sign, &style))
+				break;
+			if (!iniSetString(lp, section, "DKIMDomain", mail->dkim_domain, &style))
+				break;
+			if (!iniSetString(lp, section, "DKIMSelector", mail->dkim_selector, &style))
 				break;
 
 			if (!iniSetString(lp, section, "DNSServer", mail->dns_server, &style))
@@ -1417,6 +1490,8 @@ bool sbbs_write_ini(
 				break;
 			if (!iniSetUInteger(lp, section, strConnectRateLimitPeriod, services->connect_rate_limit_period, &style))
 				break;
+			if (!set_rate_limit_settings(lp, section, services->rate_limit, style))
+				break;
 		}
 
 		/***********************************************************************/
@@ -1529,9 +1604,15 @@ bool sbbs_write_ini(
 				break;
 			if (!iniSetUInteger(lp, section, strMaxConConn, web->max_concurrent_connections, &style))
 				break;
+			if (!iniSetUInteger(lp, section, strMaxConnectsPerPeriod, web->max_connects_per_period, &style))
+				break;
+			if (!iniSetUInteger(lp, section, strConnectRateLimitPeriod, web->connect_rate_limit_period, &style))
+				break;
 			if (!iniSetUInteger(lp, section, strMaxRequestPerPeriod, web->max_requests_per_period, &style))
 				break;
 			if (!iniSetUInteger(lp, section, strRequestRateLimitPeriod, web->request_rate_limit_period, &style))
+				break;
+			if (!set_rate_limit_settings(lp, section, web->rate_limit, style))
 				break;
 			if (!iniSetString(lp, section, "RemoteIPHeader", web->proxy_ip_header, &style))
 				break;

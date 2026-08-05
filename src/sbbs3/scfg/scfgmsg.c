@@ -99,7 +99,7 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 	size_t     grpname_len = strlen(cfg.grp[grpnum]->sname);
 	char       duplicate_code[LEN_CODE + 1] = "";
 	uint       duplicate_codes = 0;     // consecutive duplicate codes
-	long       new_sub_misc;
+	long       new_sub_misc = 0;
 	str_list_t ini = NULL;
 	str_list_t list = NULL;
 	uint       i = 0;
@@ -111,6 +111,9 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 
 	// Set the new_sub_misc and perform any necessary preprocessing of the input file
 	switch (type) {
+		case IMPORT_LIST_TYPE_SUBS_TXT:
+			new_sub_misc = 0;
+			break;
 		case IMPORT_LIST_TYPE_NEWSGROUPS:
 			new_sub_misc = SUB_INET;
 			break;
@@ -130,6 +133,8 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 			break;
 		case IMPORT_LIST_TYPE_ECHOSTATS:
 			new_sub_misc = SUB_FIDO;
+			/* intentional fall-through */
+		case IMPORT_LIST_TYPE_SUBS_INI:
 			ini = iniReadFile(stream);
 			if (ini == NULL)
 				return 0;
@@ -168,6 +173,12 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 			else
 				SAFECOPY(tmpsub.area_tag, areatag);
 			SAFECOPY(tmpsub.lname, iniGetString(ini, areatag, "Title", "", value));
+		} else if (type == IMPORT_LIST_TYPE_SUBS_INI) {
+			if (list[i] == NULL)
+				break;
+			SAFECOPY(tmp_code, list[i]);
+			read_sub_ini_section(&cfg, ini, list[i], &tmpsub, tmp_code);
+			i++;
 		} else {
 			if (feof(stream))
 				break;
@@ -177,7 +188,93 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 			if (!str[0])
 				continue;
 
-			if (type == IMPORT_LIST_TYPE_QWK_CONTROL_DAT) {
+			if (type == IMPORT_LIST_TYPE_SUBS_TXT) {
+				sprintf(tmpsub.lname, "%.*s", LEN_SLNAME, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.sname, "%.*s", LEN_SSNAME, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.qwkname, "%.*s", 10, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				SAFECOPY(tmp_code, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.data_dir, "%.*s", LEN_DIR, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.arstr, "%.*s", LEN_ARSTR, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.read_arstr, "%.*s", LEN_ARSTR, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.post_arstr, "%.*s", LEN_ARSTR, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.op_arstr, "%.*s", LEN_ARSTR, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				tmpsub.misc = ahtoul(str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.tagline, "%.*s", 80, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.origline, "%.*s", 50, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.post_sem, "%.*s", LEN_DIR, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				SAFECOPY(tmpsub.newsgroup, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				tmpsub.faddr = smb_atofaddr(NULL, str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				tmpsub.maxmsgs = atol(str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				tmpsub.maxcrcs = atol(str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				tmpsub.maxage = atoi(str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				tmpsub.ptridx = atoi(str);
+				if (!fgets(str, 128, stream))
+					break;
+				truncsp(str);
+				sprintf(tmpsub.mod_arstr, "%.*s", LEN_ARSTR, str);
+
+				while (!feof(stream)
+				       && strcmp(str, "***END-OF-SUB***")) {
+					if (!fgets(str, 128, stream))
+						break;
+					truncsp(str);
+				}
+			}
+			else if (type == IMPORT_LIST_TYPE_QWK_CONTROL_DAT) {
 				if (read_qwk_confs >= total_qwk_confs)
 					break;
 				read_qwk_confs++;
@@ -316,6 +413,8 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 					continue;
 			}
 			if (stricmp(cfg.sub[j]->code_suffix, tmpsub.code_suffix) == 0) {
+				if (type == IMPORT_LIST_TYPE_SUBS_TXT)   /* subs.txt import (don't modify internal code) */
+					break;
 				if (attempts == 0)
 					SAFECOPY(duplicate_code, tmpsub.code_suffix);
 				int code_len = strlen(tmpsub.code_suffix);
@@ -343,20 +442,57 @@ long import_msg_areas(enum import_list_type type, FILE* stream, int grpnum
 			if (added != NULL)
 				(*added)++;
 		}
-		cfg.sub[j]->grp = grpnum;
-		SAFECOPY(cfg.sub[j]->code_suffix, tmpsub.code_suffix);
-		SAFECOPY(cfg.sub[j]->sname, tmpsub.sname);
-		SAFECOPY(cfg.sub[j]->lname, tmpsub.lname);
-		SAFECOPY(cfg.sub[j]->newsgroup, tmpsub.newsgroup);
-		SAFECOPY(cfg.sub[j]->qwkname, tmpsub.qwkname);
-		SAFECOPY(cfg.sub[j]->area_tag, tmpsub.area_tag);
-		if (tmpsub.data_dir[0])
-			SAFECOPY(cfg.sub[j]->data_dir, tmpsub.data_dir);
-		if (strcasestr(tmpsub.lname, "sysop") != NULL && strcasestr(tmpsub.lname, "only") != NULL) {
-			if (cfg.sub[j]->arstr[0]) {
-				SAFECAT(cfg.sub[j]->arstr, " ");
+		if (type == IMPORT_LIST_TYPE_SUBS_TXT || type == IMPORT_LIST_TYPE_SUBS_INI) {
+			/* Complete-detail formats: apply the fields the format carries,     */
+			/* leaving any others intact.  ptridx is deliberately not copied so  */
+			/* the local pointer-file linkage is preserved (the exported ptridx  */
+			/* is meaningless on the importing system).  The legacy subs.txt     */
+			/* format can't express qwkconf/print-modes/area_tag, so a re-import */
+			/* of that format leaves those existing settings untouched.          */
+			sub_t* sub = cfg.sub[j];
+			sub->grp = grpnum;
+			SAFECOPY(sub->code_suffix, tmpsub.code_suffix);
+			SAFECOPY(sub->lname, tmpsub.lname);
+			SAFECOPY(sub->sname, tmpsub.sname);
+			SAFECOPY(sub->qwkname, tmpsub.qwkname);
+			SAFECOPY(sub->data_dir, tmpsub.data_dir);
+			SAFECOPY(sub->arstr, tmpsub.arstr);
+			SAFECOPY(sub->read_arstr, tmpsub.read_arstr);
+			SAFECOPY(sub->post_arstr, tmpsub.post_arstr);
+			SAFECOPY(sub->op_arstr, tmpsub.op_arstr);
+			SAFECOPY(sub->mod_arstr, tmpsub.mod_arstr);
+			sub->misc = tmpsub.misc;
+			SAFECOPY(sub->tagline, tmpsub.tagline);
+			SAFECOPY(sub->origline, tmpsub.origline);
+			SAFECOPY(sub->post_sem, tmpsub.post_sem);
+			SAFECOPY(sub->newsgroup, tmpsub.newsgroup);
+			sub->faddr = tmpsub.faddr;
+			sub->maxmsgs = tmpsub.maxmsgs;
+			sub->maxcrcs = tmpsub.maxcrcs;
+			sub->maxage = tmpsub.maxage;
+			if (type == IMPORT_LIST_TYPE_SUBS_INI) {
+				/* Fields the .ini format carries that subs.txt does not */
+				SAFECOPY(sub->area_tag, tmpsub.area_tag);
+				sub->qwkconf = tmpsub.qwkconf;
+				sub->pmode = tmpsub.pmode;
+				sub->n_pmode = tmpsub.n_pmode;
 			}
-			SAFECAT(cfg.sub[j]->arstr, "SYSOP");
+		} else {
+			cfg.sub[j]->grp = grpnum;
+			SAFECOPY(cfg.sub[j]->code_suffix, tmpsub.code_suffix);
+			SAFECOPY(cfg.sub[j]->sname, tmpsub.sname);
+			SAFECOPY(cfg.sub[j]->lname, tmpsub.lname);
+			SAFECOPY(cfg.sub[j]->newsgroup, tmpsub.newsgroup);
+			SAFECOPY(cfg.sub[j]->qwkname, tmpsub.qwkname);
+			SAFECOPY(cfg.sub[j]->area_tag, tmpsub.area_tag);
+			if (tmpsub.data_dir[0])
+				SAFECOPY(cfg.sub[j]->data_dir, tmpsub.data_dir);
+			if (strcasestr(tmpsub.lname, "sysop") != NULL && strcasestr(tmpsub.lname, "only") != NULL) {
+				if (cfg.sub[j]->arstr[0]) {
+					SAFECAT(cfg.sub[j]->arstr, " ");
+				}
+				SAFECAT(cfg.sub[j]->arstr, "SYSOP");
+			}
 		}
 		if (faddr != NULL && faddr->zone)
 			cfg.sub[j]->faddr = *faddr;
@@ -754,6 +890,8 @@ void msgs_cfg()
 					ported = 0;
 					strcpy(opt[k++], "areas.bbs      SBBSecho Area File");
 					strcpy(opt[k++], "areas.ini      SBBSecho Area File");
+					strcpy(opt[k++], "*subs.ini      Synchronet Shared Config");
+					strcpy(opt[k++], "subs.txt       Synchronet Sub-boards");
 					strcpy(opt[k++], "backbone.na    FidoNet EchoList");
 					strcpy(opt[k++], "newsgroup.lst  USENET Newsgroup List");
 					opt[k][0] = 0;
@@ -772,6 +910,14 @@ void msgs_cfg()
 						"  Area File as used by the Synchronet Fido EchoMail program, `SBBSecho`\n"
 						"  (optionally, as of SBBSecho v3.23).\n"
 						"\n"
+						"`*subs.ini`\n"
+						"  File format supported by Synchronet v3.22 and later for sharing\n"
+						"  sub-board configuration data between Synchronet BBSes.\n"
+						"\n"
+						"`subs.txt`\n"
+						"  Complete details of a group of `Synchronet sub-boards` in the legacy\n"
+						"  line-oriented text format (superseded by `*subs.ini`).\n"
+						"\n"
 						"`backbone.na` (also `fidonet.na` and `badareas.lst`)\n"
 						"  FidoNet standard EchoList containing standardized echo `Area Tags`\n"
 						"  and (optional) descriptions.\n"
@@ -788,9 +934,18 @@ void msgs_cfg()
 						sprintf(str, "%sareas.bbs", cfg.data_dir);
 					else if (k == 1)
 						sprintf(str, "%sareas.ini", cfg.data_dir);
-					else if (k == 2)
-						sprintf(str, "backbone.na");
+					else if (k == 2) {
+						if (cfg.grp[grpnum]->code_prefix[0] == '\0') {
+							snprintf(str, sizeof str, "%s_subs.ini", cfg.grp[grpnum]->sname);
+							replace_chars(str, ' ', '_');
+						} else
+							snprintf(str, sizeof str, "%ssubs.ini", cfg.grp[grpnum]->code_prefix);
+					}
 					else if (k == 3)
+						sprintf(str, "%ssubs.txt", cfg.ctrl_dir);
+					else if (k == 4)
+						sprintf(str, "backbone.na");
+					else if (k == 5)
 						sprintf(str, "newsgroup.lst");
 					if (k == 0 || k == 1) {
 						uifc.helpbuf =
@@ -867,14 +1022,51 @@ void msgs_cfg()
 							fprintf(stream, "\n");
 							continue;
 						}
-						if (k == 2) {      /* BACKBONE.NA */
+						if (k == 2) {      /* subs.ini */
+							str_list_t section = sub_ini_section(&cfg, cfg.sub[j], cfg.sub[j]->code_suffix);
+							strListWriteFile(stream, section, "\n");
+							free(section);
+							continue;
+						}
+						if (k == 3) {      /* subs.txt */
+							fprintf(stream, "%s\n%s\n%s\n%s\n%s\n%s\n"
+							        "%s\n%s\n%s\n"
+							        , cfg.sub[j]->lname
+							        , cfg.sub[j]->sname
+							        , cfg.sub[j]->qwkname
+							        , cfg.sub[j]->code_suffix
+							        , cfg.sub[j]->data_dir
+							        , cfg.sub[j]->arstr
+							        , cfg.sub[j]->read_arstr
+							        , cfg.sub[j]->post_arstr
+							        , cfg.sub[j]->op_arstr
+							        );
+							fprintf(stream, "%" PRIX32 "\n%s\n%s\n%s\n%s\n%s\n"
+							        , cfg.sub[j]->misc
+							        , cfg.sub[j]->tagline
+							        , cfg.sub[j]->origline
+							        , cfg.sub[j]->post_sem
+							        , cfg.sub[j]->newsgroup
+							        , smb_faddrtoa(&cfg.sub[j]->faddr, tmp)
+							        );
+							fprintf(stream, "%" PRIu32 "\n%" PRIu32 "\n%u\n%u\n%s\n"
+							        , cfg.sub[j]->maxmsgs
+							        , cfg.sub[j]->maxcrcs
+							        , cfg.sub[j]->maxage
+							        , cfg.sub[j]->ptridx
+							        , cfg.sub[j]->mod_arstr
+							        );
+							fprintf(stream, "***END-OF-SUB***\n\n");
+							continue;
+						}
+						if (k == 4) {      /* BACKBONE.NA */
 							fprintf(stream, "%-*s %s\n"
 							        , FIDO_AREATAG_LEN
 							        , sub_area_tag(&cfg, cfg.sub[j], str, sizeof(str))
 							        , cfg.sub[j]->lname);
 							continue;
 						}
-						if (k == 3) {      /* newsgroup.lst */
+						if (k == 5) {      /* newsgroup.lst */
 							fprintf(stream, "%s %s\n"
 							        , sub_newsgroup_name(&cfg, cfg.sub[j], str, sizeof(str))
 							        , cfg.sub[j]->lname);
@@ -892,6 +1084,8 @@ void msgs_cfg()
 					strcpy(opt[k++], "control.dat     QWK Conference List");
 					strcpy(opt[k++], "areas.bbs       Generic Area File");
 					strcpy(opt[k++], "areas.bbs       SBBSecho Area File");
+					strcpy(opt[k++], "*subs.ini       Synchronet Shared Config");
+					strcpy(opt[k++], "subs.txt        Synchronet Sub-boards");
 					strcpy(opt[k++], "backbone.na     FidoNet EchoList");
 					strcpy(opt[k++], "badareas.lst    SBBSecho Bad Area List");
 					strcpy(opt[k++], "echostats.ini   SBBSecho EchoMail Statistics");
@@ -905,15 +1099,19 @@ void msgs_cfg()
 						"\n"
 						"The supported message area list file formats to be imported are:\n"
 						"\n"
-						"`subs.txt`\n"
-						"  Complete details of a group of sub-boards as exported from `SCFG`.\n"
-						"\n"
 						"`control.dat`\n"
 						"  Standard file contained within QWK packets (typically ZIP archives).\n"
 						"\n"
 						"`areas.bbs`\n"
 						"  FidoNet EchoMail Area File, in either `Generic` or `SBBSecho` flavors,\n"
 						"  as used by most FidoNet EchoMail Programs or SBBSecho.\n"
+						"\n"
+						"`*subs.ini`\n"
+						"  Complete details of a group of sub-boards as exported from `SCFG`.\n"
+						"\n"
+						"`subs.txt`\n"
+						"  Complete details of a group of sub-boards as exported from `SCFG`, in\n"
+						"  the legacy line-oriented text format (superseded by `*subs.ini`).\n"
 						"\n"
 						"`backbone.na` (also `fidonet.na` and `badareas.lst`)\n"
 						"  FidoNet standard EchoList containing standardized echo `Area Tags`\n"
@@ -940,6 +1138,16 @@ void msgs_cfg()
 							break;
 						case IMPORT_LIST_TYPE_SBBSECHO_AREAS_BBS:
 							snprintf(filename, sizeof filename, "%sareas.bbs", cfg.data_dir);
+							break;
+						case IMPORT_LIST_TYPE_SUBS_INI:
+							if (cfg.grp[grpnum]->code_prefix[0] == '\0') {
+								snprintf(filename, sizeof filename, "%s_subs.ini", cfg.grp[grpnum]->sname);
+								replace_chars(filename, ' ', '_');
+							} else
+								snprintf(filename, sizeof filename, "%ssubs.ini", cfg.grp[grpnum]->code_prefix);
+							break;
+						case IMPORT_LIST_TYPE_SUBS_TXT:
+							snprintf(filename, sizeof filename, "%ssubs.txt", cfg.ctrl_dir);
 							break;
 						case IMPORT_LIST_TYPE_BACKBONE_NA:
 							snprintf(filename, sizeof filename, "backbone.na");
@@ -1090,8 +1298,71 @@ void msg_opts()
 		uifc.helpbuf =
 			"`Message Options:`\n"
 			"\n"
-			"This is a menu of system-wide message related options. Messages include\n"
-			"private E-mail and public posts in public message areas, sub-boards.\n"
+			"System-wide message-base policy applying to both private e-mail and\n"
+			"public sub-board posts.  Per-sub-board overrides (where they exist)\n"
+			"live under each sub's `Toggle Options`.\n"
+			"\n"
+			"`BBS ID for QWK Packets`: short ID (max 8 chars) that identifies this\n"
+			"system in outgoing QWK packets and QWKnet routing.  Must be unique\n"
+			"within any QWKnet you participate in.\n"
+			"\n"
+			"`Maximum Retry Time`: how many seconds to keep trying to open or lock\n"
+			"a message base before giving up.  `10`-`45` is the sweet spot; raise\n"
+			"only if message bases are seeing genuine lock contention.\n"
+			"\n"
+			"`Maximum QWK Messages`: cap on messages (excluding e-mail) any user\n"
+			"may pull in a single QWK packet.  `0` = unlimited.  Does not affect\n"
+			"QWKnet nodes (those with the `Q` restriction).\n"
+			"\n"
+			"`Maximum QWK Message Age`: cap on the age (in days) of messages\n"
+			"included in a QWK packet.  `0` = no age limit.\n"
+			"\n"
+			"`Purge E-mail by Age`: automatically delete e-mail older than the\n"
+			"configured threshold during daily maintenance.\n"
+			"\n"
+			"`Purge SPAM by Age`: automatically delete SPAM-tagged e-mail older\n"
+			"than the configured threshold.\n"
+			"\n"
+			"`Purge Deleted E-mail`: `Immediately` removes deleted messages on the\n"
+			"spot; `Daily` defers physical removal to nightly maintenance (faster\n"
+			"delete UX, briefly recoverable in the meantime).\n"
+			"\n"
+			"`Duplicate E-mail Checking`: keep a rolling CRC list of N recent\n"
+			"e-mails so duplicates can be detected and rejected.  `Disabled` if\n"
+			"the count is `0`.\n"
+			"\n"
+			"`Allow Anonymous E-mail`: permit users with the `A` exemption to send\n"
+			"e-mail anonymously.\n"
+			"\n"
+			"`Allow Quoting in E-mail`: allow users to quote prior messages when\n"
+			"composing e-mail replies.\n"
+			"\n"
+			"`Allow Uploads in E-mail`: allow users to attach files to outgoing\n"
+			"e-mail.\n"
+			"\n"
+			"`Allow Forwarding to NetMail`: allow forwarding of incoming e-mail to\n"
+			"NetMail addresses (e.g. FidoNet) via a user's auto-forward setting.\n"
+			"\n"
+			"`Kill Read E-mail`: automatically mark read e-mail for deletion (per\n"
+			"the `Purge Deleted E-mail` policy above).\n"
+			"\n"
+			"`Receive E-mail by Real Name`: in addition to alias, accept the\n"
+			"user's real name (with spaces or '.' as separators) as a valid\n"
+			"recipient on incoming SMTP mail.\n"
+			"\n"
+			"`Include Signatures in E-mail`: append the sender's configured\n"
+			"signature to outgoing e-mail (otherwise signatures apply only to\n"
+			"sub-board posts).\n"
+			"\n"
+			"`Users Can View Deleted Messages`: who may see messages marked for\n"
+			"deletion -- `Yes` = all users, `Sysops Only`, or `No`.\n"
+			"\n"
+			"`MailBase Storage Method`: `Self-packing` reclaims space as messages\n"
+			"are deleted (more I/O, smaller files); `Fast Allocation` keeps slots\n"
+			"and packs on a schedule (less I/O, larger files).\n"
+			"\n"
+			"`Days of New Messages for Guest`: how many days of message history\n"
+			"a guest (G-restricted) account sees on first scan.  `0` = none.\n"
 		;
 
 		switch (uifc.list(WIN_ORG | WIN_ACT | WIN_MID | WIN_CHE, 0, 0, 72, &msg_dflt, &msg_bar

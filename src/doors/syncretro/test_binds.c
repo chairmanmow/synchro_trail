@@ -1,0 +1,481 @@
+/* test_binds.c -- the binding table is the single source of truth for both the
+ * key handler and the help screen. These assertions pin the bindings that
+ * M2_INPUT.md sec 3 promises the player. */
+#include "syncretro_binds.h"
+#include "syncretro_profile.h"
+#include "syncretro_games.h"
+#include "libretro.h"
+#include "dirwrap.h"
+
+#include <stdio.h>
+#include <string.h>
+
+/* Own fixture directory (not the cwd) so a parallel ctest run cannot race
+ * test_games.c over a shared games.ini. */
+#define FIXTURE_DIR "bindsfx"
+
+static int failures;
+
+static void write_arcade_fixture(void)
+{
+	FILE *f;
+
+	mkpath(FIXTURE_DIR);
+	f = fopen(FIXTURE_DIR "/games.ini", "w");
+
+	fputs("[bzone]\n"
+	      "name     = Battlezone\n"
+	      "button.Y = Fire\n"
+	      "stick2   = Right tread\n", f);
+	fclose(f);
+}
+
+#define CHECK(cond) \
+		do { \
+			if (!(cond)) { \
+				printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #cond); \
+				failures++; \
+			} \
+		} while (0)
+
+static void check_act(int c, sr_act_t want_act, int want_id, int want_port)
+{
+	int      id   = -12345;
+	int      port = -12345;
+	sr_act_t act  = sr_bind_lookup(c, &id, &port);
+
+	if (act != want_act || id != want_id || port != want_port) {
+		printf("FAIL lookup(0x%02x): act=%d id=%d port=%d, want act=%d id=%d port=%d\n",
+		       c, (int)act, id, port, (int)want_act, want_id, want_port);
+		failures++;
+	}
+}
+
+int main(void)
+{
+	const char *key, *desc;
+	int         i, lines = 0;
+
+	/* --- profile selection ---------------------------------------------------
+	 * The lobby's -profile wins; a bare run infers from the core's own name; an
+	 * unknown -profile warns and falls through to inference rather than dying. */
+	sr_profile_select("pad", NULL);
+	CHECK(sr_profile() == SR_PROFILE_PAD);
+	sr_profile_select("intv", NULL);
+	CHECK(sr_profile() == SR_PROFILE_INTV);
+
+	/* THE casing trap: FreeIntv reports "freeintv", lower-case -- not the
+	 * "FreeIntv" spelling used in its repo, RetroArch's core list and our docs.
+	 * A case-sensitive compare would drop the Intellivision to `pad` SILENTLY,
+	 * losing its keypad with no error anywhere. */
+	sr_profile_select(NULL, "freeintv");
+	CHECK(sr_profile() == SR_PROFILE_INTV);
+	sr_profile_select(NULL, "FreeIntv");
+	CHECK(sr_profile() == SR_PROFILE_INTV);
+
+	sr_profile_select(NULL, "FCEUmm");
+	CHECK(sr_profile() == SR_PROFILE_PAD);        /* the NES is a gamepad */
+	sr_profile_select(NULL, NULL);
+	CHECK(sr_profile() == SR_PROFILE_PAD);        /* an unknown core plays anyway */
+	sr_profile_select(NULL, "SomeCoreWeHaveNeverSeen");
+	CHECK(sr_profile() == SR_PROFILE_PAD);
+	sr_profile_select("nonsense", "freeintv");    /* typo: infer, do not die */
+	CHECK(sr_profile() == SR_PROFILE_INTV);
+
+	/* The Intellivision alone reads the analog stick, and alone gives the arrows
+	 * to a SECOND controller. */
+	sr_profile_select("intv", NULL);
+	CHECK(sr_profile_analog() == 1);
+	CHECK(sr_profile_arrow_port() == 1);
+	sr_profile_select("pad", NULL);
+	CHECK(sr_profile_analog() == 0);
+	CHECK(sr_profile_arrow_port() == 0);          /* a solo player's own d-pad */
+
+	/* --- the Intellivision's table (the rest of this file) ------------------- */
+	sr_profile_select("intv", NULL);
+
+	/* Case folding is ALPHA-ONLY. The old `c | 0x20` mangled '\r' into '-' and
+	 * '\t' into ')', so Enter and Tab never reached the pad at all. */
+	CHECK(sr_bind_fold('A') == 'a');
+	CHECK(sr_bind_fold('Z') == 'z');
+	CHECK(sr_bind_fold('a') == 'a');
+	CHECK(sr_bind_fold('\r') == '\r');
+	CHECK(sr_bind_fold('\t') == '\t');
+	CHECK(sr_bind_fold('1') == '1');
+	CHECK(sr_bind_fold('?') == '?');
+	CHECK(sr_bind_fold(0x08) == 0x08);
+
+	/* Player 1 (controller 0): disc. */
+	check_act('w', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_UP,    0);
+	check_act('a', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_LEFT,  0);
+	check_act('s', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_DOWN,  0);
+	check_act('d', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_RIGHT, 0);
+
+	/* Player 1 action buttons. */
+	check_act('z', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A, 0);
+	check_act('x', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B, 0);
+	check_act('c', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_Y, 0);
+
+	/* Player 2 (controller 1) action buttons: , . / */
+	check_act(',', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A, 1);
+	check_act('.', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B, 1);
+	check_act('/', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_Y, 1);
+
+	/* Player 1 analog keypad digits: id is the digit itself. */
+	check_act('1', SR_ACT_DIGIT, 1, 0);
+	check_act('4', SR_ACT_DIGIT, 4, 0);
+	check_act('9', SR_ACT_DIGIT, 9, 0);
+
+	/* ...but 5 and 0 are button bits, never digits. */
+	check_act('5', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_R3, 0);
+	check_act('0', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_L3, 0);
+
+	/* Clear / Enter. Both Backspace encodings must work. */
+	check_act(0x08, SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_L2, 0);
+	check_act(0x7f, SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_L2, 0);
+	check_act('\r', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_R2, 0);
+	check_act('\n', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_R2, 0);
+
+	/* Controller swap -- its own action now (was SELECT sent to the core). */
+	check_act('\t', SR_ACT_SWAP, 0, 0);
+
+	/* Door actions. Help is '?' -- NOT Ctrl-H, which IS 0x08 (Backspace).
+	 *
+	 * Pause is Ctrl-P, not Space: MAME's own keyboard map makes Space player 1's
+	 * button 3, so a player reaching for it means to fire, and a bare key driving
+	 * a door action is the exception the binding table's own rule warns about. */
+	check_act(0x10, SR_ACT_DOOR, SR_DOOR_PAUSE, 0);
+	check_act(' ', SR_ACT_NONE, 0, 0);
+	check_act('?', SR_ACT_DOOR, SR_DOOR_HELP,  0);
+	check_act(0x13, SR_ACT_DOOR, SR_DOOR_STATS, 0);   /* Ctrl-S */
+	check_act(0x12, SR_ACT_DOOR, SR_DOOR_RESET, 0);   /* Ctrl-R */
+	check_act(0x11, SR_ACT_DOOR, SR_DOOR_QUIT,  0);   /* Ctrl-Q */
+
+	/* The core's mini-keypad and its framebuffer pause/help are unreachable:
+	 * nothing may bind L, R, X or START. */
+	for (i = 1; i < 128; i++) {
+		int      id   = -1;
+		int      port = -1;
+		sr_act_t act  = sr_bind_lookup(i, &id, &port);
+
+		if (act != SR_ACT_PAD)
+			continue;
+		CHECK(port == 0 || port == 1);
+		CHECK(id != RETRO_DEVICE_ID_JOYPAD_L);
+		CHECK(id != RETRO_DEVICE_ID_JOYPAD_R);
+		CHECK(id != RETRO_DEVICE_ID_JOYPAD_X);
+		CHECK(id != RETRO_DEVICE_ID_JOYPAD_START);
+	}
+
+	/* Unbound keys stay unbound. */
+	check_act('q', SR_ACT_NONE, 0, 0);   /* freed: used to trip the mini-keypad */
+	check_act('e', SR_ACT_NONE, 0, 0);   /* freed: likewise */
+	check_act('v', SR_ACT_NONE, 0, 0);
+	check_act(0, SR_ACT_NONE, 0, 0);
+
+	/* Help lines exist, are non-empty, and terminate. */
+	for (i = 0; sr_bind_help_line(i, &key, &desc); i++) {
+		CHECK(key != NULL && key[0] != '\0');
+		CHECK(desc != NULL && desc[0] != '\0');
+		lines++;
+	}
+	CHECK(lines >= 8);
+	CHECK(sr_bind_help_line(lines, &key, &desc) == 0);
+
+	/* --- the gamepad's table -------------------------------------------------
+	 * The whole NES: d-pad, B, A, Select, Start. Z=B and X=A come from fceumm's
+	 * own SET_INPUT_DESCRIPTORS (id 0 = "B", id 8 = "A"), not from a guess. */
+	sr_profile_select("pad", NULL);
+
+	check_act('w', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_UP,     0);
+	check_act('a', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_LEFT,   0);
+	check_act('s', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_DOWN,   0);
+	check_act('d', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_RIGHT,  0);
+	check_act('z', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B,      0);
+	check_act('x', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A,      0);
+	check_act('\r', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  0);
+	check_act('\n', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  0);
+	check_act(0x08, SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 0);
+	check_act(0x7f, SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 0);
+
+	/* Case folding still applies to the pad table. */
+	check_act(sr_bind_fold('X'), SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A, 0);
+
+	/* The door keys are the SAME on every console: a player who learns Ctrl-Q on
+	 * one does not have to relearn it on the next. */
+	check_act(0x10, SR_ACT_DOOR, SR_DOOR_PAUSE, 0);   /* Ctrl-P, not Space */
+	check_act(' ',  SR_ACT_NONE, 0, 0);   /* nothing on a console corresponds */
+	check_act('?',  SR_ACT_DOOR, SR_DOOR_HELP,  0);
+	check_act(0x11, SR_ACT_DOOR, SR_DOOR_QUIT,  0);
+	check_act(0x12, SR_ACT_DOOR, SR_DOOR_RESET, 0);
+	check_act(0x13, SR_ACT_DOOR, SR_DOOR_STATS, 0);
+	check_act('\t', SR_ACT_SWAP, 0, 0);
+
+	/* NO keypad digits on a gamepad: the number row is UNBOUND, and must not
+	 * reach the core as a phantom analog deflection. */
+	check_act('1', SR_ACT_NONE, 0, 0);
+	check_act('5', SR_ACT_NONE, 0, 0);
+	check_act('9', SR_ACT_NONE, 0, 0);
+	check_act('0', SR_ACT_NONE, 0, 0);
+
+	/* A console has two ports because two people play Contra on one couch, so
+	 * port 1 gets the arcade table's second panel, key for key -- the layout is
+	 * learned once and works on both. */
+	check_act('i', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_UP,     1);
+	check_act('j', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_LEFT,   1);
+	check_act('k', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_DOWN,   1);
+	check_act('l', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_RIGHT,  1);
+	check_act('m', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B,      1);
+	check_act(',', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A,      1);
+	check_act('.', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_Y,      1);
+	check_act('/', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_X,      1);
+	check_act('u', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_L,      1);
+	check_act('o', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_R,      1);
+	check_act(';', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  1);
+	check_act('\'', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 1);
+
+	/* ...and the arrows stay player 1's. There is usually one player at one
+	 * keyboard, and they are HIS d-pad. */
+	CHECK(sr_profile_arrow_port() == 0);
+	check_act('z', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B,      0);
+	check_act('\r', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START, 0);
+
+	/* The help screen switches WITH the table -- one table drives both, so they
+	 * cannot drift. The pad's help must not mention a keypad. */
+	lines = 0;
+	for (i = 0; sr_bind_help_line(i, &key, &desc); i++) {
+		CHECK(key != NULL && desc != NULL);
+		CHECK(strstr(desc, "keypad") == NULL);
+		lines++;
+	}
+	CHECK(lines > 0);
+
+	/* --- the arcade cabinet's table ------------------------------------------
+	 * Same wiring as `pad` for the stick and buttons -- what differs is the two
+	 * that start a game (a cabinet does nothing until a coin goes in) and the
+	 * SECOND STICK, which a keyboard can only reach as an analog deflection. */
+	sr_profile_select("arcade", NULL);
+	CHECK(sr_profile() == SR_PROFILE_ARCADE);
+	CHECK(sr_profile_analog() == 0);   /* the disc/keypad flag stays OFF here */
+
+	check_act('w', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_UP,     0);
+	check_act('s', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_DOWN,   0);
+	check_act('z', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B,      0);
+	check_act(0x08, SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 0);   /* INSERT COIN */
+	check_act('\r', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  0);
+
+	/* PLAYER 2, on port 1. A cabinet's coin and start buttons are per-player
+	 * inputs, so port 0 alone can start one player and no more: 2-player start
+	 * is START on port 1 and reachable no other way. */
+	check_act('2', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  1);
+	check_act('6', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 1);
+
+	/* The number row spells MAME's own convention, and Bksp / Enter still
+	 * spell what the help screen could name before it existed. */
+	check_act('5', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 0);
+	check_act('1', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  0);
+	check_act(0x7f, SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_SELECT, 0);
+	check_act('\n', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START,  0);
+
+	/* Player 2's panel is player 1's slid five columns right: I J K L is the
+	 * stick, M , . / and U O the six buttons, in the same order. */
+	check_act('i', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_UP,    1);
+	check_act('j', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_LEFT,  1);
+	check_act('k', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_DOWN,  1);
+	check_act('l', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_RIGHT, 1);
+	check_act('m', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B,     1);
+	check_act(',', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A,     1);
+	check_act('.', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_Y,     1);
+	check_act('/', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_X,     1);
+	check_act('u', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_L,     1);
+	check_act('o', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_R,     1);
+
+	/* Space is button 1, MAME's own keyboard map being what a cabinet player's
+	 * fingers already know: it fires there, and pause is Ctrl-P. On a one-button
+	 * cabinet button 1 is THE button, which is why Space aliases it and not
+	 * MAME's literal button 3 -- the door's numbering is not MAME's either. */
+	check_act(' ', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_B, 0);
+	check_act(0x10, SR_ACT_DOOR, SR_DOOR_PAUSE, 0);
+
+	/* Player 1 keeps every key he had. A game that runs both players off port 0
+	 * and alternates turns -- most of them -- plays on these, two-up or solo. */
+	check_act('a', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_LEFT,  0);
+	check_act('d', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_RIGHT, 0);
+	check_act('x', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_A,     0);
+	check_act('v', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_X,     0);
+	check_act('q', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_L,     0);
+	check_act('e', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_R,     0);
+	CHECK(sr_profile_arrow_port() == 0);   /* ...the arrows included */
+
+	/* The second stick. MAME 2003-Plus puts a twin-stick cabinet's other stick
+	 * on the RetroPad's right stick and NOWHERE else, so these two keys are the
+	 * only way a terminal player reaches it -- without them Battlezone's right
+	 * tread is dead and the tank can pivot but never drive. They sit at the far
+	 * right, clear of player 2's panel: a solo player's second stick and a
+	 * second player's first stick both want the space under the right hand. */
+	check_act('p', SR_ACT_AXIS, SR_AXIS_RIGHT_Y_NEG, 0);
+	check_act(';', SR_ACT_AXIS, SR_AXIS_RIGHT_Y_POS, 0);
+
+	/* An axis id is NOT a button id. It rides the pad state array in slots above
+	 * the last RetroPad id, and sr_input_state() refuses to send anything that
+	 * high as a button -- if these ever collided, pressing I would press R3. */
+	CHECK(SR_AXIS_RIGHT_Y_NEG > RETRO_DEVICE_ID_JOYPAD_R3);
+	CHECK(SR_AXIS_RIGHT_Y_POS > RETRO_DEVICE_ID_JOYPAD_R3);
+	CHECK(SR_AXIS_RIGHT_Y_NEG != SR_AXIS_RIGHT_Y_POS);
+
+	/* Nothing else in the cabinet table may resolve to an axis: two keys, and
+	 * the six button keys must stay buttons. */
+	for (i = 1; i < 128; i++) {
+		int      id   = -1;
+		int      port = -1;
+		sr_act_t act  = sr_bind_lookup(i, &id, &port);
+
+		if (act != SR_ACT_AXIS)
+			continue;
+		CHECK(i == 'p' || i == ';');
+		CHECK(port == 0);
+	}
+
+	/* The second stick is the CABINET's. A cartridge console must not grow two
+	 * phantom keys: on those profiles the core reads a centred stick, and P / ;
+	 * stay unbound exactly as they were. */
+	sr_profile_select("pad", NULL);
+	check_act('p', SR_ACT_NONE, 0, 0);
+	/* ...and on a gamepad ';' is player 2's Start, which is a BUTTON: no key on
+	 * a cartridge profile may resolve to an axis at all. */
+	check_act(';', SR_ACT_PAD, RETRO_DEVICE_ID_JOYPAD_START, 1);
+	sr_profile_select("intv", NULL);
+	check_act('p', SR_ACT_NONE, 0, 0);
+	check_act(';', SR_ACT_NONE, 0, 0);
+	for (i = 1; i < 128; i++) {
+		int      id   = -1;
+		int      port = -1;
+
+		CHECK(sr_bind_lookup(i, &id, &port) != SR_ACT_AXIS);
+	}
+	sr_profile_select("pad", NULL);
+	for (i = 1; i < 128; i++) {
+		int      id   = -1;
+		int      port = -1;
+
+		CHECK(sr_bind_lookup(i, &id, &port) != SR_ACT_AXIS);
+	}
+
+	/* The Intellivision keeps its own second panel -- the arrows, , . / and the
+	 * numeric keypad -- because its player 2 holds a hand controller, not a
+	 * joystick. It must not grow an I J K L on top of it. */
+	sr_profile_select("intv", NULL);
+	check_act('i', SR_ACT_NONE, 0, 0);
+	check_act('j', SR_ACT_NONE, 0, 0);
+	check_act('l', SR_ACT_NONE, 0, 0);
+	check_act('m', SR_ACT_NONE, 0, 0);
+	check_act('u', SR_ACT_NONE, 0, 0);
+	check_act('o', SR_ACT_NONE, 0, 0);
+
+	/* --- per-cabinet help labels ---------------------------------------------
+	 * With no cabinet loaded the button rows stay GROUPED, exactly as they are
+	 * for every game whose controls nobody has measured. */
+	sr_profile_select("arcade", NULL);
+	sr_games_load("/nonexistent-directory", NULL);
+	lines = 0;
+	for (i = 0; sr_bind_help_line(i, &key, &desc); i++) {
+		if (strcmp(key, "Z X") == 0)
+			lines++;
+		CHECK(strcmp(key, "P ;") != 0);   /* no second stick: no P/; line */
+	}
+	CHECK(lines == 1);                    /* the grouped row is present */
+
+	/* A labelled cabinet: one line per key, the label as its description, and
+	 * every unlabelled button GONE -- on Battlezone they do nothing, and listing
+	 * them is the confusion this file removes. */
+	write_arcade_fixture();               /* [bzone] button.Y = Fire, stick2 */
+	sr_games_load(FIXTURE_DIR, "bzone.zip");
+	{
+		int saw_fire = 0, saw_stick2 = 0, saw_group = 0, saw_dead = 0;
+		int saw_p2 = 0, p2_lines = 0;
+
+		for (i = 0; sr_bind_help_line(i, &key, &desc); i++) {
+			if (strcmp(key, "C") == 0 && strcmp(desc, "Fire") == 0)
+				saw_fire = 1;
+			if (strcmp(key, "P ;") == 0 && strcmp(desc, "Right tread") == 0)
+				saw_stick2 = 1;
+			if (strcmp(key, "Z X") == 0 || strcmp(key, "C V") == 0)
+				saw_group = 1;
+			if (strcmp(key, "Z") == 0 || strcmp(key, "V") == 0)
+				saw_dead = 1;
+			if (strstr(desc, "player 2") != NULL && strstr(desc, "button") != NULL) {
+				p2_lines++;
+				/* Player 2's buttons trim the same way player 1's do: only
+				 * the one key Battlezone's fire button answers to. */
+				saw_p2 = (strcmp(key, ".") == 0);
+			}
+		}
+		CHECK(saw_fire);
+		CHECK(saw_stick2);
+		CHECK(!saw_group);   /* grouping is off once anything is labelled */
+		CHECK(!saw_dead);    /* unlabelled buttons are omitted, not renumbered */
+		CHECK(saw_p2);
+		CHECK(p2_lines == 1);   /* one row, not six more named ones */
+	}
+	remove(FIXTURE_DIR "/games.ini");
+
+	/* `solo` duplicates the key spelling already in `chars`, with nothing
+	 * pinning the two to agree -- an edit to one and not the other would
+	 * silently print the wrong letter on a labelled cabinet's help screen.
+	 * Label all six buttons so every arcade-table button row surfaces its
+	 * `solo` spelling, then confirm TYPING that spelling (folded) is what
+	 * actually reaches the RetroPad id the label names. */
+	{
+		static const struct {
+			int id;
+			const char *label;
+		} want[] = {
+			{ RETRO_DEVICE_ID_JOYPAD_B, "LabelB" },
+			{ RETRO_DEVICE_ID_JOYPAD_A, "LabelA" },
+			{ RETRO_DEVICE_ID_JOYPAD_Y, "LabelY" },
+			{ RETRO_DEVICE_ID_JOYPAD_X, "LabelX" },
+			{ RETRO_DEVICE_ID_JOYPAD_L, "LabelL" },
+			{ RETRO_DEVICE_ID_JOYPAD_R, "LabelR" }
+		};
+		FILE *f;
+		int   seen = 0;
+
+		mkpath(FIXTURE_DIR);
+		f = fopen(FIXTURE_DIR "/games.ini", "w");
+		fputs("[allsix]\n"
+		      "name     = All Six\n"
+		      "button.B = LabelB\n"
+		      "button.A = LabelA\n"
+		      "button.Y = LabelY\n"
+		      "button.X = LabelX\n"
+		      "button.L = LabelL\n"
+		      "button.R = LabelR\n", f);
+		fclose(f);
+		sr_games_load(FIXTURE_DIR, "allsix.zip");
+
+		for (i = 0; sr_bind_help_line(i, &key, &desc); i++) {
+			int w;
+
+			for (w = 0; w < (int)(sizeof want / sizeof want[0]); w++) {
+				int      id, port;
+				sr_act_t act;
+
+				if (strcmp(desc, want[w].label) != 0)
+					continue;
+				/* A solo name may list an alias after the separator ("Z | Space"),
+				 * so pin the FIRST spelling -- the key the row is named for. */
+				CHECK(strlen(key) == 1 || key[1] == ' ');
+				act = sr_bind_lookup(sr_bind_fold((unsigned char)key[0]), &id, &port);
+				CHECK(act == SR_ACT_PAD);
+				CHECK(id == want[w].id);
+				CHECK(port == 0);
+				seen++;
+			}
+		}
+		CHECK(seen == (int)(sizeof want / sizeof want[0]));
+		remove(FIXTURE_DIR "/games.ini");
+	}
+
+	printf("%s: %d failure(s)\n", failures ? "FAIL" : "ok", failures);
+	return failures != 0;
+}

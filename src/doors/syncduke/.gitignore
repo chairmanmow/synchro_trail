@@ -1,0 +1,14 @@
+# build output
+/build/
+/build-msvc/
+/syncduke
+/syncduke.map
+*.o
+# game data — sysop-supplied, never committed (proprietary, redistributable)
+*.grp
+*.GRP
+# editor swap
+*.swp
+*.swo
+# libADLMIDI easyloggingpp run artifact (written to CWD)
+myeasylog.log

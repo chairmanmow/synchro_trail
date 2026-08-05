@@ -20,7 +20,7 @@ extend the codebase.
 12. [RIPscrip Graphics (ripper)](#ripscrip-graphics)
 13. [Operation Overkill II (ooii)](#operation-overkill-ii)
 14. [File Transfer Protocols](#file-transfer-protocols)
-15. [UI Framework (uifc)](#ui-framework)
+15. [Wren UI and Native Picker](#ui-framework)
 16. [Cross-Platform Library (xpdev)](#cross-platform-library)
 17. [Character Set Translation](#character-set-translation)
 18. [Utility Libraries](#utility-libraries)
@@ -90,7 +90,9 @@ Both gmake and CMake support the same set of feature toggles:
 | Option | Default | Effect |
 |--------|---------|--------|
 | `WITHOUT_GDI` | OFF | Disable Win32 GDI backend (Windows only). |
+| `WITHOUT_QUARTZ` | OFF | Disable Quartz backend (macOS only). When Quartz is enabled, SDL video is automatically disabled. |
 | `WITHOUT_SDL` | OFF | Disable SDL2 video backend. |
+| `WITHOUT_WAYLAND` | OFF | Disable Wayland backend (Unix only). |
 | `WITHOUT_X11` | OFF | Disable X11/Xlib backend (Unix only). |
 | `WITHOUT_XRANDR` | OFF | Disable XRandR support (monitor resolution detection). Requires X11. |
 | `WITHOUT_XRENDER` | OFF | Disable XRender support (external scaling). Requires X11. |
@@ -104,6 +106,7 @@ application is built without `WIN32` subsystem (console mode only).
 | Option | Default | Effect |
 |--------|---------|--------|
 | `WITHOUT_SDL_AUDIO` | OFF | Disable SDL2 audio output. |
+| `WITHOUT_COREAUDIO` | OFF | Disable CoreAudio output (macOS). |
 | `WITHOUT_ALSA` | OFF | Disable ALSA audio (Linux). |
 | `WITHOUT_OSS` | OFF | Disable OSS audio (BSD/Linux). |
 | `WITHOUT_PORTAUDIO` | OFF | Disable PortAudio output. |
@@ -146,7 +149,6 @@ src/
   sbbs3/sexyz.h   — SEXYZ mode flags
   sbbs3/saucedefs.h — SAUCE record definitions
   syncterm/       — this directory (the application)
-  uifc/           — text-mode UI framework
   xpdev/          — cross-platform portability layer
 3rdp/
   dist/           — cryptlib source archive and patches
@@ -159,7 +161,8 @@ src/
 | File | Lines | Purpose |
 |------|-------|---------|
 | `syncterm.c` | ~2400 | main(), settings, URL parsing, webget, init |
-| `bbslist.c` | ~5200 | BBS directory: read/write/edit, INI persistence |
+| `bbslist.c` | ~1700 | BBS directory parsing, persistence, encryption, sorting |
+| `bbslist_model.c` | ~300 | Transactional directory model exposed to the menu VM |
 | `term.c` | ~5500 | Terminal loop (doterm), file transfers, scrollback |
 | `conn.c` | ~800 | Connection abstraction: circular buffers, socket connect |
 | `conn_telnet.c` | ~400 | Telnet: IAC expand, rx/tx parse callbacks |
@@ -176,10 +179,12 @@ src/
 | `ooii_logons.c` | ~1840 | OOII embedded ANSI art logon screens (3 modes × 10) |
 | `ooii_bmenus.c` | ~620 | OOII embedded ANSI art base menus (3 modes × 6) |
 | `ooii_cmenus.c` | ~510 | OOII embedded ANSI art complex menus (3 modes × 5) |
-| `menu.c` | ~300 | Online menu (Alt-Z), scrollback viewer |
 | `window.c` | ~200 | Terminal window sizing, background drawing |
-| `uifcinit.c` | ~200 | UIFC library init/bail with palette/font management |
-| `fonts.c` | ~300 | Custom font file management (INI persistence) |
+| `wren_menu_host.c` | ~640 | Persistent trusted menu VM and C dialog bridge |
+| `wren_picker_host.c` | ~430 | Persistent isolated picker VM, recovery, and screen ownership |
+| `wren_bind_menu.c` | ~1000 | Menu-only BBS, settings, font, and catalog bindings |
+| `wren_bind_picker.c` | ~750 | Picker-only listing, path-resolution, metadata, and completion bindings |
+| `fonts.c` | ~280 | Custom font INI persistence and runtime loading |
 | `webget.c` | ~400 | HTTP/HTTPS download for BBS lists/cache |
 | `libjxl.c` | ~200 | JPEG XL decoder (dynamic loading) |
 
@@ -191,6 +196,11 @@ src/
 | `cterm.c/h` | ~6800 | Terminal emulator core (ANSI, PETSCII, ATASCII, Prestel, etc.) |
 | `bitmap_con.c/h` | ~2850 | Text-to-pixel rendering, double-buffering, blinker thread |
 | `scale.c/h` | ~960 | Internal scaling engine (pointy, xBR, interpolation) |
+| `cg_cio.m/h` | ~330 | Quartz backend: ciolib interface, key pipe, app thread |
+| `cg_events.m` | ~1260 | Quartz backend: AppKit event loop, rendering, input, menus |
+| `wl_cio.c/h`, `wl_events.c/h` | ~2200 | Wayland backend (event thread, rendering, input) |
+| `wl_dynload.c/h` | ~200 | Wayland client library dynamic loading |
+| `wl_proto.c/h` | ~9000 | Pre-generated Wayland protocol headers and code |
 | `x_events.c/h`, `x_cio.c/h` | ~2000 | X11/Xlib backend |
 | `win32gdi.c/h` | ~1500 | Win32 GDI backend |
 | `sdl_con.c/h` | ~2000 | SDL2 backend |
@@ -213,7 +223,7 @@ src/
 | `ini_file.c/h` | ~4360 | INI file parser: sections, typed values, !include, fast-parse |
 | `xpprintf.c/h` | ~1890 | Custom printf with positional parameters, xp_asprintf |
 | `dirwrap.c/h` | ~1550 | opendir/readdir on Windows, glob, path manipulation, fexistcase |
-| `xpbeep.c/h` | ~1340 | Tone generation: ALSA, OSS, SDL, PortAudio, PulseAudio, Win32 |
+| `xpbeep.c/h` | ~1340 | Tone generation: CoreAudio, WASAPI, PortAudio, SDL, PulseAudio, ALSA, OSS |
 | `genwrap.c/h` | ~1550 | SLEEP/YIELD, xp_random, xp_timer, c_escape_str, parse_byte_count |
 | `link_list.c/h` | ~1190 | Doubly-linked list with mutex/semaphore protection, ref counting |
 | `str_list.c/h` | ~1130 | NULL-terminated `char**` dynamic arrays, stack macros |
@@ -247,16 +257,6 @@ src/
 | `xpendian.h` | ~80 | Byte-order macros (BE_INT32, BE_INT64) |
 | `petdefs.h` | ~90 | PETSCII character constant definitions |
 | `haproxy.h` | ~26 | HAProxy PROXY protocol header struct |
-
-### uifc/ — Text-Mode UI Framework
-
-| File | Lines | Purpose |
-|------|-------|---------|
-| `uifc32.c` | ~3230 | Main implementation: menus, input, popups, help viewer |
-| `filepick.c/h` | ~750 | Split-pane file/directory browser |
-| `uifc.h` | ~550 | API definition: uifcapi_t struct, mode flags, constants |
-| `uifcx.c` | ~530 | Stdio-based fallback implementation (not used by SyncTERM) |
-| `uifc_ini.c` | ~48 | INI configuration reader for UI settings |
 
 ### comio/ — Serial Port I/O Library
 
@@ -315,7 +315,7 @@ src/
 
 `main()` parses command-line arguments and URLs, loads settings from
 `syncterm.ini` via the xpdev INI library, initializes the ciolib display
-backend, and enters the BBS list UI.
+backend and persistent menu VM, and enters the Wren main menu.
 
 #### URL Parsing
 
@@ -329,7 +329,7 @@ The `syncterm_settings` struct holds global configuration: output mode,
 scaling, scrollback lines, modem config, TERM string, transfer paths,
 UI colors, audio modes, cursor type, etc. Persisted via INI file.
 
-### BBS Directory (bbslist.c)
+### BBS Directory (`bbslist.c`, `bbslist_model.c`)
 
 The BBS list is the main navigation interface. Each entry is a `struct
 bbslist` (~168 bytes) containing: name, address, port, credentials,
@@ -339,9 +339,23 @@ settings, RIP version, palette, and more.
 Two list types: `USER_BBSLIST` (personal, read-write) and
 `SYSTEM_BBSLIST` (shared, read-only). Both stored in INI format.
 
-`show_bbslist()` provides the main directory with sort, search,
-add/edit/delete. `edit_list()` is a ~1000-line property editor with
-sub-menus for all fields. Custom sort order via `sortorder[]` array.
+`bbslist.c` owns format parsing, encrypted persistence, field catalogs,
+cache cleanup, and sort-profile persistence. `bbslist_model.c` loads a
+transactional view of personal and read-only system lists for the trusted
+menu VM. The user-facing directory, editors, settings, font management,
+and sort-profile tools are Wren modules under `scripts/auto/menu/` and
+`scripts/menu_*.wren`.
+
+Named sort profiles (`named_string_t**`) control the directory sort order.
+Each profile maps a display name to a comma-separated list of signed field
+indices into the `sort_order[]` table. Profiles are stored in the
+`[SortProfiles]` INI section; the active profile name in `[SyncTERM]
+ActiveSortProfile`. Users cycle profiles with `<`/`>` keys in the
+directory listing and manage them through `menu_sort_profiles.wren`
+(Ctrl+S).
+The active profile's value is parsed into `sortorder[]` for `listcmp()`
+which is the qsort comparator. `listcmp()` unconditionally falls back to
+name comparison for stable ordering.
 
 ### Terminal Loop (term.c)
 
@@ -499,11 +513,12 @@ curr     → absterm or term depending on origin mode state
 
 ```c
 size_t cterm_write(struct cterminal *cterm, const void *buf, int buflen,
-                   char *retbuf, size_t retsize, int *speed);
+                   int *speed);
 ```
 
-Processes `buflen` bytes, generates response data in `retbuf`. The main
-byte loop has priority-ordered dispatch:
+Processes `buflen` bytes. Any terminal responses (DSR, DECRQM, STS, etc.)
+are delivered via `cterm->response_cb` if installed, otherwise discarded.
+The main byte loop has priority-ordered dispatch:
 
 1. **String capture**: Accumulating DCS/APC/OSC/PM/SOS string data
 2. **Font download**: Receiving raw font bitmap data
@@ -526,17 +541,29 @@ modes (?h/?l), SyncTERM extensions (=h/=l), device queries (c/n/t/S).
 
 #### Emulation-Specific Handling
 
-- **ATASCII**: Control codes for cursor movement (28-31), screen clear
-  (125), tabs. Screen code translation between ATASCII and display.
-  Attribute byte used as mode flag (7=normal, 1=inverse).
-- **PETSCII**: C64/C128 color codes, reverse mode, screen code
-  translation. Different palettes for C64 40-col and C128 80-col modes.
-- **Prestel/Viewdata**: Control characters with split before/after
-  semantics for attribute application. Mosaic graphics (2x3 grid per
-  cell), hold mode, double-height, conceal/reveal, programming mode.
-- **BBC Micro (BEEB)**: VDU command parsing with fixed-length
-  multi-byte sequences.
-- **Atari ST VT52**: VT52-style escape sequences.
+All non-ANSI emulation modes are documented in `conio/cterm.adoc`.
+
+- **Atari ST VT52**: Standard VT52 escape sequences plus GEMDOS/TOS
+  extensions (16-color, insert/delete line, cursor save/restore,
+  reverse video, autowrap control). Three screen modes: 40×25 (16
+  colors), 80×25 (4 colors), 80×25 mono (2 colors).
+- **ATASCII**: Atari 8-bit control codes for cursor movement (28-31
+  with wrapping), screen clear (125), destructive backspace (126),
+  tabs (127). ESC toggles inverse mode with screen code translation.
+  Two screen modes: 40×24, XEP80 80×25.
+- **PETSCII**: C64/C128 color codes, reverse mode. Different color
+  palettes for C64/C128-40 (VIC-II) and C128-80 (CGA). Some control
+  codes differ between C64 and C128 hardware (documented in cterm.adoc).
+- **Prestel/Viewdata**: Serial attributes with split before/after
+  semantics — control codes occupy character cells. Mosaic graphics
+  (2×3 grid per cell), hold mode, double-height (requires bitmap
+  rendering in bitmap_con.c), conceal/reveal, separated/contiguous
+  mosaics, remote programming protocol. Cursor wraps around screen
+  (no scrolling).
+- **BBC Micro (BEEB)**: Same serial attribute system as Prestel but
+  cursor scrolls instead of wrapping. VDU 23 for cursor control, APS
+  (byte 28) for direct addressing. Character translation (#/\_/\`).
+  Serial attributes delivered via raw C1 bytes, not ESC.
 
 #### Sixel Graphics
 
@@ -576,7 +603,7 @@ Application code (syncterm.c, term.c, etc.)
 ciolib.c  — dispatch layer
   |
   +--> Bitmap backends (via bitmap_con.c):
-  |      X11, GDI, SDL, RetroArch
+  |      Quartz, Wayland, X11, GDI, SDL, RetroArch
   |
   +--> Text-only backends (direct):
          win32cio.c  (Windows Console API)
@@ -590,20 +617,29 @@ backend fall back to generic implementations in ciolib.c.
 
 #### Initialization (AUTO mode fallback chains)
 
-- **Unix**: X11 → SDL → Curses → ANSI
+- **macOS**: Quartz → X11 → SDL → Curses → ANSI
+- **Unix**: Wayland → X11 → SDL → Curses → ANSI
 - **Windows**: GDI → SDL → ANSI → Win32 Console
 
-#### macOS Main Thread Hack
+#### macOS Main Thread Requirement
 
-macOS Cocoa requires all UI operations on the main thread. When using
-SDL on macOS, `main()` is redefined via macro: the real main spawns
-application logic in a new thread, then the main thread waits for SDL
-init and enters the SDL event loop forever.
+macOS Cocoa requires all UI operations on the main thread. Both the
+Quartz and SDL backends handle this by redefining `main()` via macro:
+the real main spawns application logic in a new thread, then the main
+thread runs the event loop (NSApplication for Quartz, SDL for SDL).
+The Quartz backend uses `cg_launched_sem` to synchronize — window
+creation waits for `applicationDidFinishLaunching:` before proceeding.
 
 #### Key Abstractions
 
 - **vmem**: Virtual memory — circular buffer of `vmem_cell` structs
-  (character, legacy attribute, 32-bit fg/bg colors, font index)
+  (character, legacy attribute, 32-bit fg/bg colors, font index,
+  hyperlink_id)
+- **Hyperlink table**: 4096-entry table in ciolib.c mapping
+  `hyperlink_id` → URI. Populated via OSC 8 sequences parsed by
+  cterm. GC scans visible screen when table is full. APIs:
+  `ciolib_add_hyperlink()`, `ciolib_get_hyperlink_url()`,
+  `ciolib_open_hyperlink()`, `ciolib_set_current_hyperlink()`
 - **text_info**: Current window state (coordinates, cursor, mode, attribute)
 - **Screen save/restore**: Captures full state including vmem, pixels,
   fonts, palette, and video flags
@@ -626,10 +662,12 @@ bitmap_con.c  (text→pixel rendering, double-buffering, blink/cursor)
   v
 Backend callbacks: drawrect() + flush()
   |
-  +--> x_events.c      (X11/Xlib)
-  +--> win32gdi.c       (Win32 GDI)
-  +--> sdl_con.c        (SDL2)
-  +--> retro.c          (RetroArch libretro)
+  +--> cg_events.m       (macOS Quartz/AppKit)
+  +--> wl_events.c       (Wayland)
+  +--> x_events.c        (X11/Xlib)
+  +--> win32gdi.c        (Win32 GDI)
+  +--> sdl_con.c         (SDL2)
+  +--> retro.c           (RetroArch libretro)
 ```
 
 #### Double-Buffered Pixel Storage
@@ -718,6 +756,33 @@ are clamped 1..14.
 
 ## Display Backends
 
+### Wayland (wl_cio.c + wl_events.c + wl_dynload.c + wl_proto.c)
+
+1. Init: dynamically load libwayland-client via dlopen (wl_dynload.c),
+   create pipes for main↔event thread communication, spawn event thread
+2. Event thread: `wl_display_connect()`, bind globals (compositor, SHM,
+   xdg-shell, seat), create xdg_surface/xdg_toplevel, enter `select()`
+   loop on Wayland fd + local_pipe fd
+3. drawrect: write to local_pipe; event thread reads it, does scaling
+   (internal via `do_scale()` or external via viewporter
+   `wp_viewport_set_destination()`), copies pixels to SHM buffer,
+   `wl_surface_commit()`
+4. Separate mouse thread polls `mouse_wait()`
+5. Keyboard: xkbcommon (dlopen'd) for layout-aware key translation;
+   fallback to evdev scancode tables (US QWERTY) if unavailable
+6. Clipboard: `wl_data_device_manager` protocol for copy/paste with
+   self-paste deadlock avoidance
+7. Window icon: xdg-toplevel-icon-v1 protocol (staging) with pixel buffer
+8. Cursor shape: libwayland-cursor (dlopen'd) for pointer theme support
+9. HiDPI: `wl_surface_set_buffer_scale(surf, 1)` prevents compositor
+   double-scaling when internal scaling is active
+10. Graceful degradation: only compositor, SHM, xdg-shell, seat, and
+    keyboard are required; optional protocols (viewporter, xdg-decoration,
+    xdg-toplevel-icon, clipboard, cursor theme) degrade gracefully
+
+Protocol code is pre-generated by wayland-scanner and combined into
+`wl_proto.h`/`wl_proto.c`. No wayland-scanner build-time dependency.
+
 ### X11 (x_cio.c + x_events.c)
 
 1. Init: dynamically load X11/XRender/Xinerama/XRandr, create pipes for
@@ -739,6 +804,31 @@ are clamped 1..14.
    HALFTONE mode (external scaling)
 5. Implicit throttling via next/last double-buffer (at most 2 rects alive)
 6. Keyboard via overlapped named pipe
+
+### Quartz (cg_cio.m + cg_events.m)
+
+1. Init: `cg_start_app_thread()` spawns app logic thread, main thread
+   enters NSApplication event loop (`cg_run_event_loop()`).
+   `applicationDidFinishLaunching:` posts `cg_launched_sem` to unblock
+   window creation
+2. Window: NSWindow + custom SyncTermView (NSView subclass). Content
+   size set in points; `vstat.winwidth/winheight` stored in backing
+   pixels for correct bitmap_snap behavior on Retina displays
+3. drawrect: appends to linked list; flush drains queue, keeps last.
+   External scaling: raw rectlist passed to drawRect, CG stretches
+   via `CGContextDrawImage`. Internal scaling: `do_scale()` at backing
+   pixel resolution, 1:1 physical pixel mapping on Retina
+4. Keyboard: macOS virtual keycodes → AT Set 1 scancodes via lookup
+   table. Option = Alt (BBS keycodes). Cmd+Q → CIO_KEY_QUIT,
+   Cmd+V → Shift-Insert (macOS conventions)
+5. Mouse: Cocoa point coordinates → screen bitmap coordinates →
+   1-based cell coordinates
+6. Menus: Native NSMenu (SyncTERM, Edit, View) with keyboard shortcuts
+7. Clipboard: NSPasteboard for copy/paste
+8. Icon: NSBitmapImageRep from ABGR pixel data → NSImage
+9. Audio: CoreAudio AudioQueue API (in xpdev/xpbeep.c), no SDL needed
+10. Quartz and SDL are mutually exclusive (both need the main thread);
+    CMake automatically disables SDL when Quartz is enabled
 
 ### SDL (sdl_con.c + sdlfuncs.c)
 
@@ -919,25 +1009,68 @@ flag).
 
 ## UI Framework
 
-### uifc (uifc/)
+### Wren Application UI
 
-Novell SYSCON-inspired text-mode UI framework. Function-pointer-based
-API dispatched through `uifcapi_t` struct.
+The application UI is implemented by the widgets in `scripts/ui_*.wren`.
+The persistent main menu is rooted at
+`scripts/auto/menu/main_menu.wren`; connected-session controls, including
+the online menu, scrollback, transfers, capture, music, and font selection,
+live under `scripts/auto/connected/`.
 
-#### Key Components
+The shipped main menu uses SyncTERM's classic composition:
+an offline title/time row, a content-sized directory window at the left, a
+permanent settings window at the right, and comment/command rows at the
+bottom. Both panes remain present while focus changes their active/inactive
+palette. The C theme loader owns the compiled defaults, the selected theme,
+and temporary menu previews. It publishes immutable style and glyph snapshots
+to all three Wren VMs, so menu, picker, and connected interfaces share one
+program-wide look. The built-in Classic Theme maps the six persisted
+`[ClassicTheme]` preferences into that same representation; file themes are
+sparse overlays on the compiled default. See `Themes.adoc` for the storage,
+parser, role, and glyph contracts.
 
-- `ulist()` (~1270 lines): Menu system with window save/restore stack,
-  dynamic updates, keyboard/mouse handling, type-ahead search,
-  clipboard, and extensive mode flags (64-bit `uifc_winmode_t`)
-- `ugetstr()`: String input with insert/overwrite, clipboard paste,
-  character filtering, password mode
-- `showbuf()`: Scrollable text viewer with markup (STX/~ toggle inverse)
-- `filepick.c`: Split-pane file/directory browser
+Context help remains ordinary Wren UI data. Each shipped menu, editor, or
+settings implementation keeps its Markdown help beside the controls it
+documents and assigns it through `helpText`; nested choices and prompts
+replace the screen overview with field-specific help. Help content is
+Markdown and is rendered by the shared Wren Help viewer.
 
-#### Static State
+The application uses three separate Wren VMs. The persistent menu VM is
+trusted and owns directory, settings, and custom-font capabilities. A fresh
+connected VM is created per session and may run scripts supplied by the
+remote system, so it cannot import `syncterm_menu` or receive menu foreign
+objects. The persistent picker VM owns `scripts/auto/picker/` and receives
+only request-scoped directory listing, path resolution, metadata, and
+completion capabilities; it cannot open files. Alt+E parks the connected VM
+and terminal byte pump while the menu VM runs. Picker calls park their caller
+while the picker owns the screen. Input-epoch barriers discard conio
+pushback and late asynchronous input at every ownership transition. See
+`Wren.adoc` for the binding and security contracts.
 
-Only one UIFC instance can exist per process — all state is file-scope
-static.
+Treat `scripts/auto/menu/` overrides as fully trusted application code. The
+menu VM owns directory/settings mutation, picker-mediated local-file
+authority, and application chrome. Remotely supplied scripts belong only in
+the fresh per-connection VM; they must never be promoted into the persistent
+menu VM to work around a missing connected capability. Picker overrides are
+also trusted local application code, but belong under
+`scripts/auto/picker/` and keep the picker VM's restricted foreign surface.
+
+### Wren File Picker
+
+`wren_picker_host.c` creates the picker VM once and parks it between calls.
+`scripts/auto/picker/file_picker.wren` implements the split-pane browser,
+including single-file, directory, save, and cross-directory multi-file
+selection. `wren_bind_picker.c` exposes no general filesystem objects:
+picker code can list a requested directory, resolve a path, inspect returned
+metadata, and complete the active request.
+
+The host saves and restores screen, mouse-event, and cursor state around each
+call and places input barriers on both transitions. Selected inputs become
+read-only Wren file capabilities. Save completion explicitly distinguishes
+create from overwrite and becomes a one-shot write-only capability without a
+second pathname check. The embedded picker bootstrap remains available when
+an override fails, providing the picker-local Ctrl+` REPL, Escape-to-cancel,
+and application-quit recovery path.
 
 ## Cross-Platform Library
 
@@ -971,8 +1104,9 @@ over Win32 API.
   fast-parse mode, encrypted file support
 
 #### Audio
-- `xpbeep.c/h` — Cross-platform tone generation: Win32 Beep, ALSA,
-  OSS, SDL, PortAudio, PulseAudio. Sine, sawtooth, square waveforms.
+- `xpbeep.c/h` — Cross-platform tone generation. Backends tried in
+  this order at open time: CoreAudio, WASAPI, PortAudio, SDL,
+  PulseAudio, ALSA, OSS. Sine, sawtooth, square waveforms.
   `xp_play_sample()` for raw PCM playback.
 
 #### Other Key Modules
@@ -1042,6 +1176,7 @@ SyncTERM uses multiple threads with carefully structured communication:
 - Only thread that calls `drawrect()`/`flush()` — serializes rendering
 
 ### Backend Event Threads
+- Wayland: Event thread runs `select()` loop on Wayland fd + pipe
 - X11: Event thread runs `select()` loop on X11 fd + pipe
 - GDI: Message pump thread runs `GetMessage` loop
 - SDL: Event thread runs `SDL_WaitEventTimeout`
@@ -1057,6 +1192,77 @@ SyncTERM uses multiple threads with carefully structured communication:
 - Read-write locks (vstatlock in bitmap_con.c)
 - Atomics (C11 `_Atomic` with fallback)
 
+## Testing
+
+Three test suites cover the terminal emulation layer:
+
+### cterm_test (conio/cterm_test.c) — Unit Tests
+
+275 tests covering all six emulation modes.  Initializes ciolib with
+SDL offscreen, creates cterm instances directly via `cterm_init()`,
+writes test data via `cterm_write()`, and verifies screen state via
+`vmem_gettext()` and rendered pixels via `getpixels()`.  No PTY or
+SyncTERM process needed.  Response capture via `response_cb` callback.
+
+- **ANSI-BBS** (84 tests): C0 controls, cursor movement + clamping,
+  erase operations (ED/EL/ICH/DCH/IL/DL/ECH + variants), SGR (reset,
+  bold, blink, negative, dim, conceal, 256-color, RGB, bright fg/bg,
+  default fg/bg), margins (DECSTBM/DECSLRM), scrolling (SU/SD/SL/SR
+  + margins), modes (autowrap, origin, bracket paste), DEC rectangular
+  ops (DECERA/DECFRA/DECCRA/DECIC/DECDC/DECCARA/DECRARA/DECSACE),
+  REP with packet-split regression, macros (DECDMAC/DECINVM),
+  save/restore cursor and mode, DECSCUSR, CT24BC, FETM/TTM, OSC 8,
+  music state, query/response (DSR/DA/DECRQSS/DECRQM/DECRQCRA)
+- **Atari ST VT52** (38 tests): C0 controls, cursor movement, ESC
+  sequences (standard VT52 + GEMDOS/TOS extensions), scrolling,
+  wrapping, colors, reverse video
+- **ATASCII** (19 tests): cursor wrapping, clear screen, backspace,
+  ESC inverse mode, insert/delete line/char, tabs, screen codes
+- **PETSCII** (28 tests): all 3 screen modes (C64, C128-40, C128-80),
+  colors per mode, reverse video, cursor movement, font switching
+- **Prestel** (26 tests): C0 controls, cursor wrapping (no scroll),
+  serial attributes (all 7 alpha + 7 mosaic colors, flash, conceal,
+  hold, double height, background, separated), raw C1 controls
+- **BEEB** (11 tests): character translation, BEL, scroll behavior,
+  DEL, APS addressing, VDU 23 cursor, C1 serial attributes
+- **Edge cases** (16 tests): ESC split across cterm_write calls (ANSI,
+  VT52, Prestel), CSI parameter split, DCS/SOS terminator split,
+  zero-length writes, very long parameters, VT52 ESC Y split, BEEB
+  VDU 23 split, doorway mode split
+- **Pixel tests** (6 tests): character rendering, color/bg/bold
+  changes, 256-color via getpixels()
+- **Regressions** (2 tests): RIS state reset, response ordering
+
+Build: `cmake --build . --target cterm_test`
+Run: `build/ciolib/cterm_test [filter]`
+
+The test binary sets `SDL_VIDEO_EGL_DRIVER=none` internally to prevent
+NVIDIA EGL crashes on FreeBSD during SDL shutdown.
+
+### termtest (syncterm/termtest.c) — Integration Tests
+
+67 tests that require the full SyncTERM process connected via PTY.
+Uses STS screen readback and response parsing to verify features that
+need the integration path: device queries (DSR, DA, DECRQSS, DECRQM,
+DECRPM), screen readback (STS via SSA/ESA), palette queries (OSC 4,
+10, 11, 104), SyncTERM extensions (CTSV, APC JXL, CTSMRR), doorway
+mode encoding, response ordering regression, and forced LCF.
+
+Run with: `bash run_termtest.sh build/syncterm build/termtest`
+
+### termtest.js (xtrn/termtest/termtest.js) — BBS Interactive Tests
+
+148 tests that run as a Synchronet BBS external program, providing
+interactive visual verification on a real terminal connection.  Two
+modes: automatic (using DECRQCRA checksums) and interactive (visual
+yes/no prompts).  Also includes keyboard input testing and an ANSI
+fuzz testing mode.
+
+Covers: C0 controls, cursor movement, editing, tabs, SGR, scrolling,
+modes, DEC rectangular ops, DECCARA/DECRARA/DECSACE, CT24BC, FETM/TTM,
+vertical tabs, origin mode, SL/SR with margins, save/restore mode,
+extended SGR, DECRQSS extensions, OSC 8 hyperlinks, and more.
+
 ## Coding Conventions
 
 - **Indentation**: Tabs
@@ -1068,6 +1274,6 @@ SyncTERM uses multiple threads with carefully structured communication:
 - **String safety**: `strlcpy`/`strlcat` preferred over `strcpy`/`strcat`;
   `snprintf` over `sprintf`
 - **Thread safety**: File-scope statics acceptable for single-instance
-  subsystems (UIFC, scaling); atomic/mutex for shared state
+  subsystems (scaling); atomic/mutex for shared state
 - **Memory**: `FREE_AND_NULL` macro for safe free+null; `SAFECOPY`/
   `SAFEPRINTF` macros for bounded string operations

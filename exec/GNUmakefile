@@ -10,13 +10,8 @@ endif
 
 all :	\
 	ftp.bin \
-	major.bin \
 	matrix.bin \
-	obv-2.bin \
-	sdos.bin \
 	simple.bin \
-	wildcat.bin \
-	wwiv.bin
 
 %.bin : %.src $(BAJAPATH)
 	@$(BAJAPATH) /q $<

@@ -1,0 +1,711 @@
+// syncretro_lobby.js -- the SyncRetro lobby, shared by every console install.
+//
+// One SyncRetro door binary hosts any libretro core, so one lobby serves any
+// console. This file is that lobby: discovery, the picker, the play-activity
+// board, and the door command line. It is the ONLY place that touches
+// console/bbs/user; the model layer it stands on (syncretro_lib.js) is UI-free
+// and tested headless under jsexec.
+//
+// A console install (xtrn/syncivision, xtrn/syncnes, ...) ships a three-line
+// lobby.js that describes ITS console and calls syncretro_lobby(spec). Nothing
+// here knows which console it is running -- that is what lets a new console be
+// an install directory rather than a fork of this code.
+//
+//   load("syncretro_lobby.js");
+//   syncretro_lobby({
+//       dir:      js.exec_dir,                      // the door dir. REQUIRED.
+//       name:     "Nintendo Entertainment System",  // what the player is shown
+//       short:    "NES",                            // where a column is tight
+//       core:     "fceumm_libretro",                // no extension: .so/.dll/.dylib
+//       profile:  "pad",                            // the C door's key bindings
+//       ext:      ["nes", "unf", "unif"],           // what a cartridge looks like
+//       min_size: 8 * 1024,
+//       max_size: 4 * 1024 * 1024,
+//       bios:     [],                               // files the console needs
+//       stdio:    false                             // true = run as a STDIO door
+//   });
+//
+// `id` is derived from `short` (lower-cased, alphanumerics only) and names the
+// per-user save directory and the ROM cache. It is NOT a separate key, because a
+// separate key is a thing to get out of step.
+//
+// The sysop's syncretro.ini is still read, for the keys that are genuinely a
+// sysop's business rather than the console's: [roms] exclude= and dir=, every
+// string this lobby displays ([text]), and the optional header/footer display
+// files ([lobby]). The console's identity is code, not configuration -- it does
+// not vary per install.
+//
+// SpiderMonkey 1.8.5: no let/const/arrows/template literals.
+//
+// Copyright(C) 2026 Rob Swindell / SyncRetro. GPL-2.0.
+
+load("sbbsdefs.js");                       /* EX_NATIVE, EX_BIN, K_*, P_* */
+load("key_defs.js");                       /* KEY_PAGEUP/PAGEDN/HOME/END */
+load("syncretro_lib.js");
+
+var syncretro_lobby_gl = load({}, "game_lobby.js");    /* rpad/clip/ago + live_nodes */
+
+/* Idle timeout used when syncretro.ini has no [idle] timeout. This lobby always
+ * passes -i, so THIS is the shipped policy on a lobby install -- and it must
+ * match SR_IDLE_DEFAULT in src/doors/syncretro/syncretro_config.c, which
+ * governs the no-lobby (DOOR32.SYS/other-BBS) path. Change both together. */
+var SYNCRETRO_IDLE_DEFAULT      = 600;                 /* 10 minutes */
+
+var SYNCRETRO_LOBBY_CELL_W      = 38;                  /* colored cell visible width (xtrn_sec look) */
+var SYNCRETRO_LOBBY_HEADER_ROWS = 3;                   /* title, top-played, blank */
+var SYNCRETRO_LOBBY_FOOTER_ROWS = 3;                   /* blank, prompt, +1 kept empty so a full
+                                            * page never trips the terminal more-prompt */
+
+/* Every string this lobby displays, with the string it has always displayed as
+ * its default. The sysop's syncretro.ini [text] section overrides any of them,
+ * so an install with no [text] section draws exactly what it drew before this
+ * existed.
+ *
+ * WRITE [text] KEYS WITH A COLON, NOT AN EQUALS SIGN:
+ *
+ *     title : \1h\1cSyncRetro \1n\1c-- %s\1n
+ *
+ * A colon makes Synchronet's ini parser treat the value as a C string literal
+ * and unescape it (xpdev/ini_file.c key_name() -> c_unescape_str()), so "\1h" is
+ * the Ctrl-A attribute code and "\xb3" the CP437 byte -- the same spelling
+ * ctrl/text.dat uses, which is the point: a sysop already knows it, and nothing
+ * here has to decode anything. A colon also preserves a TRAILING SPACE, which
+ * several of these strings need. An `=` line is taken literally, backslashes and
+ * all.
+ *
+ * A BLANK value means "draw nothing here", including any CRLF the default
+ * carries: the section is read with blanks enabled, so present-but-empty is
+ * distinguishable from absent. That is how the "Top played" row is turned off.
+ *
+ * The %-arguments each key is handed are fixed, listed beside it here and
+ * documented in syncretro.example.ini. A string that ignores its arguments is
+ * fine; one that asks for an argument never passed prints rubbish. */
+var SYNCRETRO_LOBBY_TEXT = {
+	/* header block */
+	title:          "\1h\1cSyncRetro \1n\1c-- %s\1n",       /* console name */
+	top_played:     "\1hTop played:\1n ",                   /* (no args) row label */
+	top_played_fmt: "\1c%s \1h(%d)\1n  ",                   /* cartridge title, play count */
+	/* the cartridge grid */
+	cell_fmt:       SYNCRETRO_CELL_FMT,                     /* number, title */
+	/* footer */
+	prompt:         "\1h\1c#\1n play   \1h\1cF\1nind   \1h\1cN\1next \1h\1cP\1nrev   "
+	              + "\1h\1cQ\1nuit   \1cPage \1h%d\1n\1c of \1h%d\1n: ",   /* page, page count */
+	search:         "\r\nSearch: ",
+	/* messages */
+	no_match:       "\r\n\1hNothing matches. \1n",
+	scanning:       "\r\n\1hScanning cartridges (first run, this takes a moment)...\1n",
+	scanned:        " \1h\1c%d\1n\1h found.\1n\r\n",        /* cartridges found */
+	no_roms:        "\r\n\1h\1rNo cartridges found in %s/.\1n\r\n",       /* ROM directory */
+	bios_missing:   "\r\n\1h\1rThe %s BIOS is missing from %s: %s\r\n"     /* console, dir, files */
+	              + "Without it no cartridge will run. Ask the sysop.\1n\r\n",
+	unsafe_name:    "\r\n\1h\1rThat cartridge's filename contains a quote, backslash, "
+	              + "backtick or dollar sign, which the door's command line cannot "
+	              + "carry. Ask the sysop to rename it.\1n\r\n",
+	rom_gone:       "\r\n\1h\1rThat cartridge is gone. Rescanning.\1n\r\n"
+};
+
+/* Set once, by syncretro_lobby(). */
+var syncretro_lobby_dir, syncretro_lobby_con, syncretro_lobby_rules, syncretro_lobby_bios, syncretro_lobby_binary, syncretro_lobby_core, syncretro_lobby_stdio, syncretro_lobby_cfg;
+var syncretro_lobby_cellw;                             /* [lobby] cell_width, or the default above */
+var syncretro_lobby_header, syncretro_lobby_footer;    /* optional display files ("" = none) */
+var syncretro_lobby_hrows, syncretro_lobby_frows;      /* rows those blocks occupy; see the draw */
+
+/* One display string: the sysop's when the key appears in [text], else the
+ * shipped default. Present-but-blank is a legitimate override meaning "draw
+ * nothing", so absence is tested rather than truthiness. */
+function syncretro_lobby_text(key)
+{
+	var t = syncretro_lobby_cfg.text;
+
+	if (t && t[key] !== undefined)
+		return String(t[key]);
+	return SYNCRETRO_LOBBY_TEXT[key];
+}
+
+/* Print one of those strings, formatted with `args`. A blank string prints
+ * nothing at all -- not even the CRLFs its default carries. */
+function syncretro_lobby_print(key, args)
+{
+	var s = syncretro_lobby_text(key);
+
+	if (s === "")
+		return;
+	console.putmsg(args && args.length ? format.apply(null, [s].concat(args)) : s);
+}
+
+function syncretro_lobby_init(spec)
+{
+	var f, ini;
+	var target, sep, sub, exe, cname, bpfx, cpfx;
+
+	syncretro_lobby_dir   = backslash(spec.dir);
+	syncretro_lobby_con   = syncretro_console(spec);
+	syncretro_lobby_rules = syncretro_rules(spec);
+	syncretro_lobby_bios  = spec.bios || [];
+	/* How the door gets the player's connection. Default: a SOCKET (Synchronet
+	 * hands the door one end of a loopback socketpair and pumps it). `stdio: true`
+	 * instead has Synchronet fork the door on a raw pty (EX_STDIO|EX_BIN) and
+	 * relay it -- the same shape Mystic uses on *nix, and so the way to exercise
+	 * the door's -stdio path against a real session. */
+	syncretro_lobby_stdio = spec.stdio ? true : false;
+
+	/* The sysop's half of syncretro.ini. The console's half is the spec above:
+	 * a sysop hides a ROM or moves the roms dir; a sysop does not redefine what
+	 * an NES cartridge is. */
+	syncretro_lobby_cfg = { lobby: {}, text: {} };   /* game_lobby.js's shape; never null */
+	f = new File(syncretro_lobby_dir + "syncretro.ini");
+	if (f.open("r")) {
+		ini = f.iniGetObject("roms");
+		/* blanks: true -- a key present but EMPTY is a real override in these two
+		 * sections ("draw nothing", "no display file"), and iniGetObject drops
+		 * blank values otherwise, making it indistinguishable from an absent key.
+		 * [roms] and [idle] keep the plain read: neither has that convention, and
+		 * both already treat a blank value as unset. */
+		syncretro_lobby_cfg.lobby = f.iniGetObject("lobby", false, true) || {};
+		syncretro_lobby_cfg.text = f.iniGetObject("text", false, true) || {};
+		syncretro_lobby_cfg.idle = f.iniGetObject("idle") || {};
+		f.close();
+		if (ini) {
+			if (ini.dir)
+				syncretro_lobby_rules.dir = String(ini.dir);
+			if (ini.exclude != null)
+				syncretro_lobby_rules.exclude = syncretro_list(ini.exclude);
+		}
+	}
+
+	/* A cell_fmt that lost its %s would draw a grid of numbers with no cartridge
+	 * titles -- which reads as a broken door rather than as a bad setting. Say so
+	 * and fall back, rather than obey it. */
+	if (syncretro_lobby_cfg.text.cell_fmt !== undefined
+	    && String(syncretro_lobby_cfg.text.cell_fmt).indexOf("%s") < 0) {
+		log(LOG_WARNING, "syncretro: [text] cell_fmt has no %s (the cartridge title) "
+		    + "-- using the built-in format");
+		delete syncretro_lobby_cfg.text.cell_fmt;
+	}
+
+	syncretro_lobby_cellw = parseInt(syncretro_lobby_cfg.lobby.cell_width, 10);
+	if (!(syncretro_lobby_cellw > 0))
+		syncretro_lobby_cellw = SYNCRETRO_LOBBY_CELL_W;
+
+	/* The optional display files: art the sysop drops in the door's own directory
+	 * to head or foot the picker, the way xtrn_sec.js takes an xtrn_head/xtrn_tail
+	 * menu file. An absent [lobby] header/footer key auto-detects lobby_header.*
+	 * and lobby_footer.* here; a key names some other file (relative to this dir,
+	 * or absolute); a key present but BLANK turns the file off.
+	 *
+	 * A header REPLACES the built-in title line, which is what xtrn_sec.js does
+	 * when an xtrn_head file exists. The live "Top played" row is independent of
+	 * it -- that row is data, not decoration -- and is turned off on its own by
+	 * blanking [text] top_played.
+	 *
+	 * The row counts are only the FIRST guess at the page geometry; the draw
+	 * measures what it actually printed and corrects them. See syncretro_lobby_draw(). */
+	syncretro_lobby_header = syncretro_lobby_display_file("header", "lobby_header");
+	syncretro_lobby_footer = syncretro_lobby_display_file("footer", "lobby_footer");
+	syncretro_lobby_hrows = SYNCRETRO_LOBBY_HEADER_ROWS;
+	syncretro_lobby_frows = SYNCRETRO_LOBBY_FOOTER_ROWS;
+	if (syncretro_lobby_header)   /* replaces the title's one row with its own */
+		syncretro_lobby_hrows += syncretro_lobby_gl.display_file_rows(syncretro_lobby_header) - 1;
+	else if (syncretro_lobby_text("title") === "")
+		syncretro_lobby_hrows--;
+	if (syncretro_lobby_text("top_played") === "")
+		syncretro_lobby_hrows--;
+	if (syncretro_lobby_footer)
+		syncretro_lobby_frows += syncretro_lobby_gl.display_file_rows(syncretro_lobby_footer);
+
+	/* games.ini -- per-cabinet facts for a console whose ROM filenames are
+	 * identifiers the emulator matches on and so cannot be renamed (arcade).
+	 * The lobby reads the display TITLE and nothing else; the door reads the
+	 * same file for the control labels its help screen needs (GAMES_INI.md).
+	 *
+	 * Optional and per-install: absent for every cartridge console. An ini
+	 * degrades per line rather than all-or-nothing, so unlike the JSON it
+	 * replaced there is no parse failure that can cost the whole file.
+	 *
+	 * iniGetAllObjects("romset"), NOT iniGetAllObjects(): the default name
+	 * property is "name", which a section's own `name = ` key overwrites --
+	 * the section name would be silently lost. */
+	syncretro_names_set(null);
+	if (file_exists(syncretro_lobby_dir + "names.json"))
+		log(LOG_WARNING, "syncretro: names.json is no longer read -- "
+			+ "re-enter any custom titles as games.local.ini sections");
+
+	/* games.local.ini is read SECOND and wins, romset by romset: it is the
+	 * sysop's file, where a retitled cabinet survives the pull that overwrites
+	 * the shipped games.ini. Holding only the differences is the point -- the
+	 * titles upstream adds keep arriving underneath. */
+	var files = ["games.ini", "games.local.ini"];
+	var map   = {};
+	var found = false;
+	var n, rows, i;
+
+	for (n = 0; n < files.length; n++) {
+		f = new File(syncretro_lobby_dir + files[n]);
+		if (!f.open("r"))
+			continue;
+		found = true;
+		rows  = f.iniGetAllObjects("romset");
+		f.close();
+		for (i = 0; i < rows.length; i++) {
+			if (rows[i].romset && rows[i].name)
+				map[rows[i].romset] = rows[i].name;
+		}
+	}
+	if (found)
+		syncretro_names_set(map);
+
+	/* The native artifacts -- the door binary and the libretro core -- live in a
+	 * per-target sub-directory (syncretro_target(): win32, linux-x64, linux-arm64,
+	 * darwin-arm64, freebsd-x64, ...) so one shared install can serve several
+	 * hosts -- different OSes AND different architectures -- without their
+	 * same-named binaries colliding. deploy.js and getcore.js put them there; the
+	 * BIOS and cartridges are platform-independent and stay at the door root.
+	 *
+	 * Windows is FLAT (syncretro_target() -> ""): a .exe/.dll never collides with a *nix
+	 * "syncretro"/".so" in a shared dir. A *nix host uses an "<os>-<arch>" sub-dir
+	 * -- and the lobby PREFERS it but FALLS BACK to the flat door dir when it
+	 * isn't populated (a single-host install, or the legacy symlink-deploy layout
+	 * where `syncretro` symlinks straight to the build output). Binary and core
+	 * are probed INDEPENDENTLY, since deploy.js and getcore.js install them
+	 * separately.
+	 *
+	 * The command must start with the drive letter (Windows) or "/" (*nix) so
+	 * external() recognizes it as ABSOLUTE and does not prepend the startup dir. A
+	 * leading quote defeats that check (cmdline[1] != ':'), so syncretro_lobby_binary is used
+	 * UNQUOTED below, exactly like the sibling doors' SD_BINARY. */
+	target = syncretro_target(system.platform, system.architecture);
+	sep    = syncretro_lobby_dir.charAt(syncretro_lobby_dir.length - 1);
+	sub    = target ? target + sep : "";
+	exe    = "syncretro" + (/^win/i.test(system.platform) ? ".exe" : "");
+	cname  = syncretro_lobby_con.core + "." + syncretro_core_ext(syncretro_platform(system.platform));
+	bpfx   = file_exists(syncretro_lobby_dir + sub + exe)   ? sub : "";
+	cpfx   = file_exists(syncretro_lobby_dir + sub + cname) ? sub : "";
+
+	syncretro_lobby_binary = syncretro_lobby_dir + bpfx + "syncretro%.";   /* "%." -> .exe on Windows */
+	syncretro_lobby_core   = cpfx + cname;                     /* relative to the door's cwd */
+}
+
+/* Resolve one [lobby] display-file key. Absent -> the auto-detected default name;
+ * blank -> off; otherwise the sysop's own path. game_lobby.js picks the extension
+ * from what the terminal can render (.ans / .asc / .msg) and returns "" when
+ * nothing is installed, so the ordinary install configures nothing and gets
+ * nothing extra drawn. */
+function syncretro_lobby_display_file(key, dflt)
+{
+	var name = syncretro_lobby_cfg.lobby[key];
+
+	if (name === undefined)
+		name = dflt;
+	return syncretro_lobby_gl.display_file(syncretro_lobby_dir, name);
+}
+
+/* The BIOS is what a player actually trips over: without it FreeIntv paints its
+ * own LOAD EXEC FAIL screen and the door looks broken. Say so here instead. A
+ * console with no BIOS (the NES) lists none, and this never fires. */
+function syncretro_lobby_bios_missing()
+{
+	var missing = [];
+
+	syncretro_lobby_bios.forEach(function (name) {
+		if (!file_exists(syncretro_lobby_dir + name))
+			missing.push(name);
+	});
+	return missing;
+}
+
+/* The "Top played" row: the live board, built to a fixed VISIBLE width -- the
+ * formatted entry is measured with its \1x codes stripped, since those take no
+ * column -- so the row is always exactly ONE line however the sysop colors it.
+ * That keeps the header height constant; a line that wrapped past the screen
+ * width would grow the header, push the page over an 80x24 screen, and trip the
+ * terminal's pause. Nothing played yet -> an empty row, as before. */
+function syncretro_lobby_top_played(board)
+{
+	var fmt = syncretro_lobby_text("top_played_fmt");
+	var row = syncretro_lobby_text("top_played");
+	var vis = syncretro_lobby_gl.plain(row).length;
+	var i, t, entry, w;
+
+	if (!board.length)
+		return "";
+	for (i = 0; i < board.length && i < 5 && fmt !== ""; i++) {
+		t     = syncretro_lobby_gl.clip(board[i].label || board[i].title, 14);
+		entry = format(fmt, t, board[i].count);   /* no rank -- order shows it */
+		w     = syncretro_lobby_gl.plain(entry).length;
+		if (vis + w > console.screen_columns - 1)
+			break;
+		row += entry;
+		vis += w;
+	}
+	return row;
+}
+
+/* Draw one page. Returns the rows the header and footer blocks actually took, so
+ * the caller can correct a page geometry computed from the wrong guess: a sysop's
+ * header/footer display file is of unknown height until it has been printed (a
+ * line longer than the screen wraps to two rows, art may position the cursor
+ * itself), and the file's own line count is only an estimate.
+ *
+ * Measured with console.row, the cursor row the terminal layer tracks, which
+ * console.clear() homes to 0. NOT with console.line_counter: that one exists to
+ * drive the pause prompt and deliberately does not count a blank line printed at
+ * column 0 while it is still zero, so a header that opens with a blank line
+ * would measure short -- and a geometry corrected to a short measurement is
+ * worse than no correction at all. */
+function syncretro_lobby_draw(page, pages, board, cols, per_col)
+{
+	var i, j, line, idx, rom, hrows, frows;
+
+	console.clear();
+	console.line_counter = 0;   /* we page ourselves (N/P); don't let the terminal
+	                             * insert a more-prompt in the middle of a page */
+
+	/* Header: the sysop's display file if there is one, else the title line.
+	 * P_NOCRLF because printfile() otherwise prepends a line break whenever the
+	 * cursor is not already at the top of the screen -- which would put a blank
+	 * row above the footer file on top of the separator drawn here. */
+	if (syncretro_lobby_header)
+		console.printfile(syncretro_lobby_header, P_NOPAUSE | P_NOCRLF);
+	else if (syncretro_lobby_text("title") !== "") {
+		syncretro_lobby_print("title", [syncretro_lobby_con.name]);
+		console.crlf();
+	}
+	if (syncretro_lobby_text("top_played") !== "") {
+		console.putmsg(syncretro_lobby_top_played(board));
+		console.crlf();
+	}
+	console.crlf();
+	hrows = console.row;
+
+	for (i = 0; i < per_col; i++) {
+		line = "";
+		for (j = 0; j < cols; j++) {
+			idx = i + j * per_col;
+			if (idx >= pages[page].length)
+				break;
+			rom   = pages[page][idx];
+			line += syncretro_cell(rom.num, rom, syncretro_lobby_cellw,
+			                       syncretro_lobby_text("cell_fmt")) + " ";   /* fixed-width; no rpad */
+		}
+		if (line !== "")
+			console.putmsg(line + "\r\n");
+	}
+
+	frows = console.row;
+	console.crlf();
+	if (syncretro_lobby_footer)
+		console.printfile(syncretro_lobby_footer, P_NOPAUSE | P_NOCRLF);
+	/* Condensed prompt, hotkeys in bright cyan: any number plays that cartridge,
+	 * F searches, N/P page, Q quits. The unprompted aliases ('/' for F, '+'/'-'
+	 * and Enter/PgUp/PgDn/Home/End for paging) are left off -- the row has to stay
+	 * inside 80 columns, and every key it does name spells out its own word. No
+	 * trailing CRLF -- the cursor rests on the bottom row, which is never scrolled,
+	 * so the terminal never pauses. */
+	syncretro_lobby_print("prompt", [page + 1, pages.length]);
+
+	/* +1 for the prompt's own row (ending without a line break, it never advances
+	 * the cursor off that row) and +1 kept empty so a full page never trips the
+	 * terminal's more-prompt. */
+	return { hrows: hrows, frows: console.row - frows + 2 };
+}
+
+/* Returns true when the caller needs to rescan (the picked cartridge is no
+ * longer on disk), false otherwise. */
+function syncretro_lobby_play(rom)
+{
+	/* The door's -home: its cwd sandbox, and the save directory the core is
+	 * handed. Per-user for a cartridge console; ONE directory for every player
+	 * on an arcade console, so the high-score table is the machine's and not
+	 * each player's own private copy of it.
+	 *
+	 * Both live under data_dir, not in the door's own xtrn dir: these are
+	 * generated run-time state, and the shared one is no less generated for
+	 * being shared (CLAUDE.md, "Directory hierarchy"). */
+	var home = syncretro_lobby_con.shared_saves
+	    ? system.data_dir + "syncretro/" + syncretro_lobby_con.id + "/shared"
+	    : system.data_dir + "user/" + format("%04d", user.number) + "/" + syncretro_lobby_con.id;
+	var cmd, started, secs, label;
+
+	if (!syncretro_quote_safe(rom.name)) {
+		syncretro_lobby_print("unsafe_name");
+		console.pause();
+		return false;
+	}
+	if (!file_exists(rom.path)) {
+		syncretro_lobby_print("rom_gone");
+		console.pause();
+		return true;
+	}
+	mkpath(home);
+
+	/* Quoting is load-bearing on the ARGUMENTS: xtrn.cpp splits the command line
+	 * on bare spaces, and every real cartridge name (and a user's -home path) has
+	 * them, so those are quoted -- which also routes external() through the shell
+	 * on *nix, reassembling the argument. But syncretro_lobby_binary (the leading program
+	 * token) is deliberately NOT quoted; see syncretro_lobby_init(). -name %a is NOT quoted
+	 * either: cmdstr() already quotes the alias, and doubling it would hand the
+	 * door literal quote characters.
+	 *
+	 * -profile tells the door which console's key bindings to use (pad, intv).
+	 * The door can infer it from the core's library_name when run bare from a
+	 * command line, but the lobby KNOWS, so it says so. */
+	/* -title / -console are the who's-online line: the door publishes
+	 * "playing Astrosmash (Intellivision)" as this node's status, the way SyncDOOM
+	 * names its WAD and map. We pass the PARSED title (syncretro_parse_title already
+	 * stripped "(1981) (Mattel)" and any dump marker off the filename), because
+	 * the door would otherwise have to re-implement that parsing in C.
+	 *
+	 * The console label is the long name when it fits a status line, else the
+	 * short one: "Intellivision" reads better than "Intv", but "Nintendo
+	 * Entertainment System" is too long to sit in a who's-online column. */
+	label = syncretro_lobby_con.name.length <= 20 ? syncretro_lobby_con.name : syncretro_lobby_con.short;
+
+	/* A SOCKET door is handed the connection (-s%H). A STDIO door is handed
+	 * nothing: Synchronet forks it on a pty and relays fd 0/1 itself, so the
+	 * socket argument must be ABSENT, not empty. EX_BIN is what makes that pty
+	 * raw (cfmakeraw) and stops the LF->CRLF and CP437->UTF8 translation that
+	 * would otherwise mangle a sixel frame. */
+	/* NO -option HERE, and it is a hard constraint rather than a preference: the
+	 * BBS assembles this command line into xtrn.cpp's `fullcmdline[MAX_PATH + 1]`
+	 * and truncates it there SILENTLY at 260 characters. The line below already
+	 * runs to ~240 for one arcade game, so a couple of pinned core options pushed
+	 * it to 334 and the ROM argument -- the last thing on the line -- was simply
+	 * cut off, giving a door that reported "(no ROM)" for a file the BBS had just
+	 * logged the full path of. Core options are pinned in the console's
+	 * syncretro.ini [options] section instead; see retro_options.h.
+	 *
+	 * That 240 is not comfortable either. A longer game title or a longer user
+	 * alias eats the remaining ~20 characters, so anything added to this line
+	 * from here on has to buy its space from something else on it.
+	 *
+	 * Which is why the ROM is passed RELATIVE to the door's directory rather than
+	 * as the absolute path discovery found it at: "roms\pacman.zip" instead of
+	 * "s:\sbbs\xtrn\syncarcade\roms\pacman.zip" is 24 characters back, and the
+	 * ROM argument is the one that gets cut when the line does overflow.
+	 *
+	 * Safe because the BBS starts the door IN this directory -- Synchronet hands
+	 * startup_dir to CreateProcess as the working directory on Windows
+	 * (xtrn.cpp) and chdir()s to it before exec on *nix -- and the door resolves
+	 * a relative ROM against its cwd before it chdir()s into the per-user
+	 * sandbox (syncretro_config.c). It is no new dependency either: the door
+	 * already finds syncretro.ini, its core and its BIOS relative to that same
+	 * cwd, so a door started anywhere else could not run at all.
+	 *
+	 * Built from rules.dir, not a hardcoded "roms", so a sysop who moves the ROM
+	 * directory keeps working -- the lobby names whatever directory it actually
+	 * scanned. (The DOOR's own bare-name fallback is hardcoded to roms/, so
+	 * naming the directory here is what keeps the two in agreement.) */
+	/* Idle timeout: seconds, or 0 when disabled or the user is exempt. The ARS
+	 * is evaluated HERE because the door has no scfg_t and no user record --
+	 * and -i0 is passed explicitly rather than omitting the flag, so "exempt"
+	 * positively overrides any [idle] timeout in the door's own ini. "s" is the
+	 * default unit so this agrees with xpdev's parse_duration() reading the
+	 * same key on the door side. */
+	var idle_cfg = syncretro_lobby_cfg.idle || {};
+	var idle_ars = idle_cfg.exempt_ars || "EXEMPT H";
+	var idle_secs;
+	if (bbs.compare_ars(idle_ars))
+		idle_secs = 0;                  /* exempt: positively excused */
+	else if (idle_cfg.timeout === undefined || String(idle_cfg.timeout) === "")
+		idle_secs = SYNCRETRO_IDLE_DEFAULT;   /* unconfigured: the shipped policy */
+	else
+		idle_secs = syncretro_lobby_gl.parse_duration(idle_cfg.timeout, "s");
+
+	cmd = syncretro_lobby_binary + (syncretro_lobby_stdio ? " -stdio" : " -s%H")
+	    + " -t%T -i" + idle_secs + " -name %a -core " + syncretro_lobby_core
+	    + " -profile " + syncretro_lobby_con.profile
+	    + ' -title "' + (rom.label || rom.title) + '" -console "' + label + '"'
+	    + ' -home "' + home + '" "'
+	    + backslash(syncretro_lobby_rules.dir) + rom.name + '"';
+
+	/* The Terminal Server logs "Executing external program: <console>" when it
+	 * spawns the lobby; the cartridge is picked in here, so the node log would
+	 * otherwise never say what was played. Same "X-" code as the server's own
+	 * line (one grep finds both), and the same wording as the who's-online status
+	 * the door publishes from -title/-console above. */
+	bbs.logline("X-", "Playing " + (rom.label || rom.title) + " (" + label + ")");
+
+	started = time();
+	/* EX_NODISPLAY: on Windows, spawn the native door with CREATE_NO_WINDOW so
+	 * no per-session console window pops up on the BBS machine (xtrn.cpp) -- the
+	 * door draws to the CLIENT's terminal, and its own diagnostics are captured
+	 * to data/syncretro/syncretro_n<node>.log. No-op on *nix (no console window).
+	 * This is the lobby-launched equivalent of a registered xtrn's XTRN_NODISPLAY
+	 * setting; EX_NODISPLAY is the proper EX_* spelling of that bit for bbs.exec. */
+	bbs.exec(bbs.cmdstr(cmd),
+	         EX_NATIVE | EX_BIN | EX_NODISPLAY | (syncretro_lobby_stdio ? EX_STDIO : 0),
+	         syncretro_lobby_dir);
+	secs = time() - started;
+
+	/* Logged whatever the door's exit status: a crash is still a play. The console
+	 * rides along, so one append-only log serves every console and the board can
+	 * still show only this one's. */
+	syncretro_log_play(syncretro_plays_path(system.data_dir), {
+		t:       time(),
+		user:    user.number,
+		alias:   user.alias,
+		rom:     rom.name,
+		console: syncretro_lobby_con.id,
+		secs:    secs
+	});
+	return false;
+}
+
+/* Discovery, through the on-disk hash cache (syncretro_lib.js).
+ *
+ * Without it, drawing this menu opened, read and hashed every cartridge -- and
+ * the install is typically an SMB mount, so a remote node paid that as one round
+ * trip per ROM, every single time. With it, a warm run opens exactly one file. A
+ * cold run still pays the full scan, so it says so rather than appearing to
+ * hang -- on a big ROM set that first scan is genuinely slow. */
+function syncretro_lobby_discover()
+{
+	var cache = syncretro_cache_open(syncretro_cache_path(system.data_dir, syncretro_lobby_con.id));
+	var cold  = !Object.keys(cache.entries).length;
+	var roms;
+
+	if (cold)
+		syncretro_lobby_print("scanning");
+	roms = syncretro_discover(syncretro_lobby_dir + backslash(syncretro_lobby_rules.dir), syncretro_lobby_rules, cache);
+	syncretro_cache_flush(cache);
+	if (cold)
+		syncretro_lobby_print("scanned", [roms.length]);
+	return roms;
+}
+
+function syncretro_lobby_number(roms)
+{
+	var i;
+
+	for (i = 0; i < roms.length; i++)
+		roms[i].num = i + 1;               /* alphabetical, and it never moves */
+	return roms;
+}
+
+function syncretro_lobby(spec)
+{
+	var roms, plays, board, cols, per_col, per_page, pages, page, key, i, filter;
+	var missing, drawn, regeom;
+
+	syncretro_lobby_init(spec);
+
+	missing = syncretro_lobby_bios_missing();
+	if (missing.length) {
+		syncretro_lobby_print("bios_missing",
+		    [syncretro_lobby_con.name, syncretro_lobby_dir, missing.join(" and ")]);
+		console.pause();
+		return;
+	}
+
+	roms = syncretro_lobby_discover();
+	if (!roms.length) {
+		syncretro_lobby_print("no_roms", [syncretro_lobby_rules.dir]);
+		console.pause();
+		return;
+	}
+	syncretro_lobby_number(roms);
+
+	/* One-shot entry sound, if the sysop configured one -- the same helper and the
+	 * same [lobby] enter_sound key SyncDuke and SyncDOOM use. Silent unless the
+	 * terminal can decode audio files. After the guards above, so it never plays
+	 * into an error message. */
+	syncretro_lobby_gl.enter_sound(syncretro_lobby_dir, syncretro_lobby_cfg);
+
+	filter = roms;
+	page   = 0;
+	regeom = 0;
+	while (!js.terminated && bbs.online) {
+		plays    = syncretro_read_plays(syncretro_plays_path(system.data_dir), syncretro_lobby_con.id);
+		board    = syncretro_top_played(plays, 5);
+		cols     = syncretro_columns(console.screen_columns, syncretro_lobby_cellw);
+		per_col  = syncretro_page_rows(console.screen_rows, syncretro_lobby_hrows, syncretro_lobby_frows);
+		per_page = cols * per_col;
+		pages    = syncretro_paginate(filter, per_page);
+		if (page >= pages.length)
+			page = pages.length ? pages.length - 1 : 0;
+		if (!pages.length) {
+			syncretro_lobby_print("no_match");
+			console.pause();
+			filter = roms;
+			continue;
+		}
+
+		drawn = syncretro_lobby_draw(page, pages, board, cols, per_col);
+
+		/* A display file turned out to be a different height than the page geometry
+		 * above assumed, so that geometry was wrong: adopt what was measured and
+		 * draw the page again before anyone is asked for a key. It happens once,
+		 * on the first page of a session (the measurement then sticks), and is
+		 * bounded rather than trusted to converge -- a redraw loop would be worse
+		 * than a page one row short.
+		 *
+		 * ONLY when a display file is installed. Without one the block heights are
+		 * the constants this lobby has always drawn to, arrived at by counting the
+		 * lines it prints; there is nothing for a measurement to discover, and
+		 * letting one overrule them would put every stock install at the mercy of
+		 * this arithmetic for no gain. */
+		if ((syncretro_lobby_header || syncretro_lobby_footer)
+		    && (drawn.hrows != syncretro_lobby_hrows || drawn.frows != syncretro_lobby_frows)
+		    && regeom < 2) {
+			syncretro_lobby_hrows = drawn.hrows;
+			syncretro_lobby_frows = drawn.frows;
+			regeom++;
+			continue;
+		}
+		regeom = 0;
+
+		key = console.getkey(K_UPPER);
+		if (key === "Q")
+			return;
+
+		/* Paging. The nav keys do what their labels say -- Enter and PgDn advance
+		 * like N, PgUp goes back like P, Home and End jump to the ends -- because a
+		 * player's fingers reach for them before they read the prompt. '+'/'-' page
+		 * the same way: they sit next to each other on the keyboard (and on the
+		 * numeric keypad, under the hand that just typed a cartridge number), so
+		 * they read as forward/back without being told. Both are below '0' in ASCII,
+		 * so neither can be mistaken for the start of a cartridge number below.
+		 *
+		 * PgUp is safe to bind even though the terminal layer translates it to
+		 * CTRL_P, which is ALSO the BBS's node-message hotkey: parse_input_sequence()
+		 * turns the escape sequence (ESC[V, ESC[5~) into the key code and returns
+		 * before inkey() gets to its Ctrl-P case, so only a literally typed Ctrl-P
+		 * pages a node. Same for PgDn/CTRL_N, Home/CTRL_B, End/CTRL_E. */
+		if (key === "N" || key === "+" || key === "\r" || key === "\n" || key === KEY_PAGEDN) {
+			if (page + 1 < pages.length) page++;
+			continue;
+		}
+		if (key === "P" || key === "-" || key === KEY_PAGEUP) { if (page > 0) page--; continue; }
+		if (key === KEY_HOME) { page = 0; continue; }
+		if (key === KEY_END) { page = pages.length - 1; continue; }
+		/* 'F'ind is the prompted key -- it names itself the way Next/Prev/Quit do.
+		 * '/' stays bound as the unprompted alias for the fingers that expect it. */
+		if (key === "F" || key === "/") {
+			syncretro_lobby_print("search");
+			var term = console.getstr(30, K_LINE).toLowerCase();
+			filter = term === "" ? roms : roms.filter(function (r) {
+				return r.title.toLowerCase().indexOf(term) >= 0;
+			});
+			page = 0;
+			continue;
+		}
+		if (key >= "0" && key <= "9") {
+			console.ungetstr(key);
+			var n = console.getnum(roms.length);
+			if (n >= 1 && n <= roms.length) {
+				if (syncretro_lobby_play(roms[n - 1])) {    /* numbers index the FULL list */
+					roms = syncretro_lobby_discover();
+					if (!roms.length) {
+						syncretro_lobby_print("no_roms", [syncretro_lobby_rules.dir]);
+						console.pause();
+						return;
+					}
+					syncretro_lobby_number(roms);
+					filter = roms;
+					page = 0;
+				}
+			}
+			continue;
+		}
+	}
+}

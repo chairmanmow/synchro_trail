@@ -1,21 +1,18 @@
-// E-mail Section
-
-// Note: this module replaces the old ### E-mail section ### Baja code in exec/*.src
-// replace "call E-mail" with "exec_bin email_sec"
+// E-mail Section - Loadable Module
 
 require("sbbsdefs.js", "WM_NONE");
 require("userdefs.js", "USER_EXPERT");
 var shell = load({}, "shell_lib.js");
-var userprops = bbs.mods.userprops;
-if(!userprops)
-	userprops = load(bbs.mods.userprops = {}, "userprops.js");
-const ini_section = "netmail sent";
+var userprops = bbs.mods.userprops || load(bbs.mods.userprops = {}, "userprops.js");
+var options = load("modopts.js", "email_sec", {});
+var ini_section = "netmail sent";
 
 while(bbs.online) {
 	if(!(user.settings & USER_EXPERT))
 		bbs.menu("e-mail");
 	bbs.nodesync();
-	console.print("\r\n\x01_\x01y\x01hE-mail: \x01n");
+	console.newline();
+	console.print(options.prompt || "\x01_\x01y\x01hE-mail: \x01n");
 	var wm_mode = WM_NONE;
 	var cmdkeys = "LSARUFNKQ?\r";
 	var key = console.getkeys(cmdkeys, 0, K_UPPER);
@@ -44,10 +41,10 @@ while(bbs.online) {
 		case 'A':	// Send file attachment
 			wm_mode = WM_FILE;
 		case 'S':	// Send Mail
-			shell.send_email();
+			shell.send_email(null, wm_mode);
 			break;
 		case 'N':	// Send NetMail
-			shell.send_netmail();
+			shell.send_netmail(null, wm_mode);
 			break;
 		default:
 			exit(0);

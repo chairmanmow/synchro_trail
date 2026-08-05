@@ -972,7 +972,9 @@ void sbbs_t::trashcan_msg(const char* name)
 	}
 	if (fexistcase(str)) {
 		printfile(str, 0);
-		flush_output(500); // give time for tx buffer to clear before disconnect
+		// Wait for the message to actually be transmitted (not just moved out of
+		// the ring buffer) before the caller disconnects the client (#1157)
+		WaitForOutbufDrained(500);
 	}
 }
 
@@ -1248,7 +1250,7 @@ bool sbbs_t::spy(uint i /* node_num */)
 			gettimeleft();
 			continue;
 		}
-		ch = in;
+		ch = (char)in;
 		if (ch == ESC) {
 			if (ansi_len)
 				ansi_len = 0;

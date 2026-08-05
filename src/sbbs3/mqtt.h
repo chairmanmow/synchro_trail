@@ -28,6 +28,7 @@
 #include "link_list.h"
 #include "dllexport.h"
 #include "startup.h"
+#include "userdat.h"   /* login_attempt_t */
 
 #include <stdarg.h>
 
@@ -41,6 +42,7 @@ typedef void* mqtt_handle_t;
 
 struct mqtt {
 	mqtt_handle_t handle;
+	void* local;  /* internal broker local_client (opaque, managed by mqtt_broker.cpp) */
 	scfg_t* cfg;
 	char* host;
 	bool connected;
@@ -54,6 +56,12 @@ struct mqtt {
 	struct startup* startup;
 	enum server_state server_state;
 	const char* server_version;
+	/* IP address (numeric, NUL-terminated) the next clear_attempts_now should target. */
+	/* Empty string = clear all (legacy). Set by the clear-topic handler, consumed and */
+	/* reset to empty by the server's accept loop. */
+	char clear_attempts_ip[INET6_ADDRSTRLEN];
+	bool pump_running;
+	int (*lputs)(int level, const char* str);
 };
 
 enum topic_depth {
@@ -94,6 +102,18 @@ DLLEXPORT int mqtt_pub_strval(struct mqtt*, enum topic_depth, const char* key, c
 DLLEXPORT int mqtt_pub_uintval(struct mqtt*, enum topic_depth, const char* key, ulong value);
 DLLEXPORT int mqtt_pub_message(struct mqtt*, enum topic_depth, const char* key, const void* buf, size_t len, bool retain);
 DLLEXPORT int mqtt_pub_timestamped_msg(struct mqtt*, enum topic_depth, const char* key, time_t, const char* msg);
+/* Publish per-IP retained snapshots of the failed-login-attempt list (host-shared list). */
+/* Payload format: <iso_first>\t<iso_last>\t<count>\t<dupes>\t<prot>\t<user>             */
+DLLEXPORT int mqtt_pub_login_attempt(struct mqtt*, const login_attempt_t*);
+DLLEXPORT int mqtt_pub_login_attempt_clear(struct mqtt*, const char* ip);
+/* Walk the list, publish empty retained payloads to delete the per-IP login_attempts/<ip> */
+/* topics, then free all nodes. Equivalent to loginAttemptListClear() with MQTT clean-up.  */
+/* Returns entry count cleared, or -1 on lock failure.                                     */
+DLLEXPORT long mqtt_clear_login_attempt_list(struct mqtt*, link_list_t*);
+/* Publish per-IP retained snapshots of the max-concurrent-connection strike list (server-scoped). */
+/* Payload is the bare strike count (uint).                                                      */
+DLLEXPORT int mqtt_pub_max_concurrent(struct mqtt*, const char* ip, ulong strikes);
+DLLEXPORT int mqtt_pub_max_concurrent_clear(struct mqtt*, const char* ip);
 DLLEXPORT int mqtt_open(struct mqtt*);
 DLLEXPORT void mqtt_close(struct mqtt*);
 DLLEXPORT int mqtt_connect(struct mqtt*, const char* bind_address);
@@ -109,6 +129,9 @@ DLLEXPORT int mqtt_user_logout(struct mqtt*, client_t*, time_t);
 DLLEXPORT int mqtt_file_upload(struct mqtt*, user_t*, int dirnum, const char* fname, off_t size, client_t*);
 DLLEXPORT int mqtt_file_download(struct mqtt*, user_t*, int dirnum, const char* fname, off_t size, client_t*);
 DLLEXPORT int mqtt_putnodedat(struct mqtt*, int number, node_t*);
+
+/* Message dispatch — shared between mosquitto callback and internal broker */
+DLLEXPORT void mqtt_dispatch_message(struct mqtt*, const char* topic, const void* payload, size_t payloadlen);
 
 #ifdef __cplusplus
 }

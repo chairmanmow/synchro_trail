@@ -1,0 +1,122 @@
+#!/bin/bash
+#
+# Linux system service run script (init file) for Synchronet MQTT Broker
+#
+# This file normally goes in your /etc/init.d directory
+#
+# If you also run sbbs via init.d, ensure the broker starts first by
+# setting the start priority lower than sbbs (e.g. 85 vs 89).
+
+# Replace the path in the following line with path to your sbbs directory
+SBBSDIR=/sbbs
+export SBBSCTRL=$SBBSDIR/ctrl
+
+#####################################
+# RedHat Linux "chkconfig" info block
+#
+# chkconfig: 2345 85 15
+# description: Synchronet MQTT Broker (broker.js)
+#
+# processname: jsexec
+# pidfile: /var/run/broker.pid
+#####################################
+
+#####################################
+# SUSE Linux "insserv" info block
+#
+### BEGIN INIT INFO
+# Provides:            broker
+# Required-Start:      $network $syslog
+# Required-Stop:
+# Should-Start:
+# Should-Stop:
+# Default-Start:       2 3 5
+# Default-Stop:        0 1 6
+# Description:         Synchronet MQTT Broker (broker.js)
+### END INIT INFO
+#####################################
+
+# RedHat/SysVinit commands
+start_daemon="daemon"
+daemon_status="status"
+rc_status="save_status"
+rc_exit="exit"
+
+# load the function library (to define the daemon and killproc functions)
+if [ -f /etc/init.d/functions ] ; then
+	# RedHat
+	. /etc/init.d/functions
+elif [ -f /etc/rc.d/init.d/functions ] ; then
+	# RedHat
+	. /etc/rc.d/init.d/functions
+elif [ -f /etc/rc.status ] ; then
+	# SUSE/LSB rc commands
+	. /etc/rc.status
+	rc_reset
+	start_daemon="startproc"
+	daemon_status="checkproc"
+	rc_status="rc_status -v"
+	rc_exit="rc_exit"
+else
+	echo $"Unsupported init type"
+	exit 1
+fi
+
+retval=0
+prog="broker"
+proc="$SBBSDIR/exec/jsexec"
+pidfile="/var/run/broker.pid"
+lockfile="/var/lock/subsys/broker"
+
+save_status() {
+	retval=$?
+}
+
+start() {
+	echo -n $"Starting $prog: "
+	shift
+	export SHELL=/bin/sh
+	$start_daemon $proc broker.js $@
+	$rc_status
+	echo
+	[ $retval = 0 ] && touch $lockfile
+	return $retval
+}
+
+stop() {
+	echo -n $"Stopping $prog: "
+	killproc $proc
+	$rc_status
+	echo
+	[ $retval = 0 ] && rm -f $lockfile $pidfile
+	return $retval
+}
+
+case "$1" in
+	start)
+		start $@
+		;;
+	stop)
+		stop
+		;;
+	status)
+		$daemon_status $proc
+		$rc_status
+		;;
+	restart)
+		stop
+		start $@
+		;;
+	condrestart)
+		if [ -f $pidfile ] ; then
+			stop
+			start $@
+		fi
+		;;
+	*)
+		echo $"Bad argument: '$1'"
+		echo $"Usage: $0 {start|stop|restart|condrestart|status}"
+		retval=1
+esac
+
+$rc_exit $retval

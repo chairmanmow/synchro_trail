@@ -5,7 +5,7 @@
 
 require('sockdefs.js', 'SOCK_STREAM');
 
-function SPAMC_Message(messagefile, addr, port, user)
+function SPAMC_Message(messagefile, addr, port, user, timeout)
 {
 	if(!file_exists(messagefile))
 		this.error="Message file '"+messagefile+"' does not exist";
@@ -16,6 +16,16 @@ function SPAMC_Message(messagefile, addr, port, user)
 	if(this.port==undefined)
 		this.port='783';
 	this.user=user;
+	/* Seconds to wait for spamd's response.  spamd doesn't answer until it has
+	   finished scanning, which (with network tests/DNSBLs, under load) commonly
+	   exceeds Socket.recvline()'s 30-second default.  recvline()'s timeout is an
+	   absolute deadline from the moment it's called, so expiring mid-response
+	   yields a *truncated* line rather than an error - which parsed as garbage
+	   ("Unable to parse line 'S") or, if no byte had arrived yet, as "No lines
+	   read from spamd".  600 is spamc(1)'s own default (-t). */
+	this.timeout=timeout;
+	if(this.timeout==undefined)
+		this.timeout=600;
 	this.messagefile=messagefile;
 	this.DoCommand=Message_DoCommand;
 	this.check =function() { return(this.DoCommand('CHECK')); };
@@ -23,6 +33,8 @@ function SPAMC_Message(messagefile, addr, port, user)
 	this.report =function() { return(this.DoCommand('REPORT')); };
 	this.report_ifspam =function() { return(this.DoCommand('REPORT_IFSPAM')); };
 	this.process =function() { return(this.DoCommand('PROCESS')); };
+	this.DoLearn =Message_DoLearn;
+	this.learn =function(msgclass) { return(this.DoLearn(msgclass)); };
 }
 
 function Message_DoCommand(command)
@@ -39,12 +51,11 @@ function Message_DoCommand(command)
 		return(ret);
 	}
 
-	var content_length = file_size(this.messagefile);
-
+	var inserted_received = "";
 	if(this.reverse_path)
 		inserted_header_fields += "Return-Path: " + this.reverse_path + "\r\n";
 	if(this.hello_name) {
-		inserted_header_fields += format(
+		inserted_received = format(
 						"Received: from %s (%s [%s])\r\n" +
 						"          by %s [%s] (%s)\r\n" +
 						"          for %s; %s %s\r\n"
@@ -54,9 +65,26 @@ function Message_DoCommand(command)
 						,"unknown"
 						,strftime("%a, %d %b %Y %H:%M:%S"),system.zonestr()
 						);
+		inserted_header_fields += inserted_received;
 	}
 	log(LOG_DEBUG, "inserted headers = " + inserted_header_fields);
-	content_length += inserted_header_fields.length;
+
+	/* Read the message file once (rather than file_size() + sendfile() as two
+	   separate operations) so the announced Content-length always matches the
+	   bytes actually sent.  The temp message file can live on a soft network
+	   mount where a stat and a later send disagree, which spamd rejects as a
+	   Content-Length mismatch (protocol error 76). */
+	var msg_file = new File(this.messagefile);
+	if(!msg_file.open("rb")) {
+		sock.close();
+		ret.error="Failed to open message file: " + this.messagefile;
+		return(ret);
+	}
+	var msg_bytes = msg_file.read(500000);	/* cap read at 500 KB (spamc.js also limits message size) */
+	msg_file.close();
+	if(typeof msg_bytes != "string")
+		msg_bytes = "";
+	var content_length = inserted_header_fields.length + msg_bytes.length;
 
 	sock.write(command.toUpperCase()+" SPAMC/1.2\r\n");
 	sock.write("Content-length: "+content_length+"\r\n");
@@ -64,11 +92,11 @@ function Message_DoCommand(command)
 		sock.write("User: " + this.user + "\r\n");
 	sock.write("\r\n");
 	sock.write(inserted_header_fields);
-	sock.sendfile(this.messagefile);
+	sock.write(msg_bytes);
 	sock.is_writeable=false;
 
 	while(1) {
-		tmp=sock.recvline();
+		tmp=sock.recvline(512, this.timeout);
 		if(tmp==undefined || tmp=='')
 			break;
 		if(this.debug)
@@ -169,7 +197,97 @@ function Message_DoCommand(command)
 				}
 			}
 		}
+		/* Strip the synthetic Received header we inserted so the re-written
+		   message doesn't duplicate the Received the mail server adds itself
+		   upon delivery (SA only needed it to identify the originating relay).
+		   It's stripped on its own, as SA may relocate/consume the Return-Path
+		   we also inserted, breaking any combined match. */
+		if(inserted_received.length)
+			ret.message = ret.message.replace(inserted_received, "");
 	}
 
+	return(ret);
+}
+
+/* Train spamd's Bayes classifier with this message via the TELL command.
+   msgclass is "spam" or "ham" (defaults to "spam").  Requires spamd to have
+   been started with --allow-tell.  Unlike DoCommand(), no synthetic Received
+   or Return-Path is injected: the message is learned exactly as stored, so the
+   originating sender's own headers train Bayes.  No User header is sent, so the
+   message trains spamd's own (run-as) Bayes database - the same one used to
+   score inbound mail. */
+function Message_DoLearn(msgclass)
+{
+	var tmp;
+	var sock=new Socket(SOCK_STREAM, "spamc");
+	var ret={ learned:false };
+
+	if(msgclass==undefined)
+		msgclass="spam";
+	msgclass=msgclass.toLowerCase();
+	if(msgclass!="spam" && msgclass!="ham") {
+		ret.error="invalid message class: " + msgclass;
+		return(ret);
+	}
+
+	if(!sock.connect(this.addr, this.port)) {
+		sock.close();
+		ret.error='Failed to connect to spamd';
+		return(ret);
+	}
+
+	var msg_file=new File(this.messagefile);
+	if(!msg_file.open("rb")) {
+		sock.close();
+		ret.error="Failed to open message file: " + this.messagefile;
+		return(ret);
+	}
+	var msg_bytes=msg_file.read(500000);	/* cap read at 500 KB (mailproc also limits message size) */
+	msg_file.close();
+	if(typeof msg_bytes != "string")
+		msg_bytes="";
+
+	sock.write("TELL SPAMC/1.2\r\n");
+	sock.write("Content-length: "+msg_bytes.length+"\r\n");
+	sock.write("Message-class: "+msgclass+"\r\n");
+	sock.write("Set: local\r\n");
+	if(this.user)	// Optional
+		sock.write("User: " + this.user + "\r\n");
+	sock.write("\r\n");
+	sock.write(msg_bytes);
+	sock.is_writeable=false;
+
+	var rcvd=new Array();
+	while(1) {
+		tmp=sock.recvline(512, this.timeout);
+		if(tmp==undefined || tmp=='')
+			break;
+		if(this.debug)
+			log(LOG_DEBUG,"RX SPAMD header: " + tmp);
+		rcvd.push(tmp);
+	}
+	sock.close();
+
+	if(rcvd.length < 1) {
+		ret.error='No response from spamd (is spamd started with --allow-tell?)';
+		return(ret);
+	}
+	tmp=rcvd[0].split(/\s+/);
+	if(tmp.length < 3) {
+		ret.error="Unable to parse response line '"+rcvd[0]+"'";
+		return(ret);
+	}
+	if(tmp[1] != '0') {
+		tmp.shift();
+		ret.error="spamd returned error: " + tmp.join(" ");
+		return(ret);
+	}
+	/* A "DidSet:" response header means spamd actually learned the message;
+	   its absence means the message was already known to the database. */
+	for(var line=1; line<rcvd.length; line++) {
+		var nv=rcvd[line].split(/:\s*/);
+		if(nv[0].toUpperCase()=="DIDSET")
+			ret.learned=true;
+	}
 	return(ret);
 }

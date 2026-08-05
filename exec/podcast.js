@@ -1,7 +1,7 @@
 if (js.podcast_load_headers == undefined)
 	js.global.load("podcast_routines.js");
 
-var opts = load({}, "modopts.js", "Podcast");
+var opts = load("modopts.js", "Podcast");
 var base;
 var i;
 var out;
@@ -135,7 +135,7 @@ if (!base.open()) {
 
 out = new File(opts.Filename+'.new');
 if (!out.open("wxb")) {
-	log("Unable to open temorary file "+out.name+".");
+	log(LOG_ERR, "ERROR " + out.error + " opening temporary file: "+out.name);
 	exit(1);
 }
 

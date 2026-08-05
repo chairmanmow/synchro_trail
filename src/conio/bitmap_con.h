@@ -47,6 +47,7 @@ int bitmap_setfont(int font, int force, int font_no);
 int bitmap_getfont(int fnum);
 int bitmap_loadfont(const char *filename);
 int bitmap_movetext(int x, int y, int ex, int ey, int tox, int toy);
+int bitmap_movetext_clear(int x, int y, int ex, int ey, int tox, int toy, struct vmem_cell *fill);
 void bitmap_clreol(void);
 void bitmap_clrscr(void);
 void bitmap_getcustomcursor(int *s, int *e, int *r, int *b, int *v);
@@ -56,12 +57,14 @@ void bitmap_setvideoflags(int flags);
 int bitmap_attr2palette(uint8_t attr, uint32_t *fgp, uint32_t *bgp);
 int bitmap_setpixel(uint32_t x, uint32_t y, uint32_t colour);
 int bitmap_setpixels(uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey, uint32_t x_off, uint32_t y_off, uint32_t mx_off, uint32_t my_off, struct ciolib_pixels *, struct ciolib_mask *mask);
+int bitmap_blitpixels(struct ciolib_pixels *pixels, struct ciolib_mask *mask, const struct ciolib_blit *blit);
 struct ciolib_pixels *bitmap_getpixels(uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey, int force);
 int bitmap_get_modepalette(uint32_t p[16]);
 int bitmap_set_modepalette(uint32_t p[16]);
 uint32_t bitmap_map_rgb(uint16_t r, uint16_t g, uint16_t b);
 void bitmap_replace_font(uint8_t id, char *name, void *data, size_t size);
 int bitmap_setpalette(uint32_t index, uint16_t r, uint16_t g, uint16_t b);
+int bitmap_getpalette(uint32_t index, uint8_t *r, uint8_t *g, uint8_t *b);
 #endif
 
 #endif

@@ -68,6 +68,10 @@ enum {
 	,CIOLIB_MODE_GDI
 	,CIOLIB_MODE_GDI_FULLSCREEN
 	,CIOLIB_MODE_RETRO
+	,CIOLIB_MODE_WAYLAND
+	,CIOLIB_MODE_WAYLAND_FULLSCREEN
+	,CIOLIB_MODE_QUARTZ
+	,CIOLIB_MODE_QUARTZ_FULLSCREEN
 };
 
 enum ciolib_mouse_ptr {
@@ -243,10 +247,16 @@ struct text_info {
 	unsigned char cury;           /* y-coordinate in current window */
 };
 
+#define CIOLIB_KMOD_SHIFT  0x01
+#define CIOLIB_KMOD_CTRL   0x02
+#define CIOLIB_KMOD_ALT    0x04
+
 struct mouse_event {
 	int event;
 	int bstate;
 	int kbsm;
+	int kbmodifiers;
+	uint16_t hyperlink_id;
 	int startx;
 	int starty;
 	int endx;
@@ -255,6 +265,11 @@ struct mouse_event {
 	int starty_res;
 	int endx_res;
 	int endy_res;
+};
+
+struct ciolib_key_event {
+	uint16_t evdev;
+	bool pressed;
 };
 
 struct conio_font_data_struct {
@@ -278,6 +293,23 @@ struct ciolib_mask {
 	uint8_t	*bits;
 	uint32_t width;
 	uint32_t height;
+};
+
+#define CIOLIB_BLIT_FLIP_X 0x00000001
+#define CIOLIB_BLIT_FLIP_Y 0x00000002
+
+struct ciolib_blit {
+	uint32_t sx;
+	uint32_t sy;
+	uint32_t sw;
+	uint32_t sh;
+	int32_t dx;
+	int32_t dy;
+	uint32_t scale_x;
+	uint32_t scale_y;
+	uint32_t mx;
+	uint32_t my;
+	uint32_t flags;
 };
 
 struct vmem_cell {
@@ -312,6 +344,7 @@ struct vmem_cell {
 #define CIOLIB_BG_DIRTY 0x10000000
 #define CIOLIB_BG_SEPARATED 0x20000000
 #define CIOLIB_BG_PRESTEL_TERMINAL 0x40000000
+	uint16_t hyperlink_id;	/* 0 = no hyperlink, >0 = index into hyperlink table */
 };
 
 struct ciolib_screen {
@@ -325,7 +358,7 @@ struct ciolib_screen {
 	uint32_t		palette[16];
 };
 
-#define CONIO_FIRST_FREE_FONT	45
+#define CONIO_FIRST_FREE_FONT	46
 
 typedef struct {
 	int		mode;
@@ -347,6 +380,7 @@ typedef struct {
 #define CONIO_OPT_EXTERNAL_SCALING  (1 << 14)
 #define CONIO_OPT_DISABLE_CLOSE     (1 << 15) // Disable OS/WM app close control/menu-option
 #define CONIO_OPT_PRESTEL_REVEAL    (1 << 16)
+#define CONIO_OPT_KEY_EVENTS        (1 << 17)
 	void	(*clreol)		(void);
 	int		(*puttext)		(int,int,int,int,void *);
 	int		(*vmem_puttext)		(int,int,int,int,struct vmem_cell *);
@@ -372,6 +406,7 @@ typedef struct {
 	void	(*textmode)		(int);
 	int		(*ungetch)		(int);
 	int		(*movetext)		(int,int,int,int,int,int);
+	int		(*movetext_clear)(int,int,int,int,int,int,struct vmem_cell *);
 	char	*(*cgets)		(char *);
 	int		(*cscanf)		(char *,...);
 	char	*(*getpass)		(const char *);
@@ -407,11 +442,13 @@ typedef struct {
 	double		(*getscaling)	(void);
 	int		*escdelay;
 	int		(*setpalette)	(uint32_t entry, uint16_t r, uint16_t g, uint16_t b);
+	int		(*getpalette)	(uint32_t entry, uint8_t *r, uint8_t *g, uint8_t *b);
 	int		(*attr2palette)	(uint8_t attr, uint32_t *fg, uint32_t *bg);
 	int		(*setpixel)	(uint32_t x, uint32_t y, uint32_t colour);
 	struct ciolib_pixels *(*getpixels)(uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey, int force);
 	struct ciolib_pixels *(*duppixels)(struct ciolib_pixels pix);
 	int		(*setpixels)(uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey, uint32_t x_off, uint32_t y_off, uint32_t mx_off, uint32_t my_off, struct ciolib_pixels *pixels, struct ciolib_mask *mask);
+	int		(*blitpixels)(struct ciolib_pixels *pixels, struct ciolib_mask *mask, const struct ciolib_blit *blit);
 	int 	(*get_modepalette)(uint32_t[16]);
 	int	(*set_modepalette)(uint32_t[16]);
 	uint32_t	(*map_rgb)(uint16_t r, uint16_t g, uint16_t b);
@@ -422,6 +459,7 @@ typedef struct {
 	void	(*setscaling_type)	(enum ciolib_scaling);
 	uint8_t (*rgb_to_legacyattr)	(uint32_t fg, uint32_t bg);
 	enum ciolib_scaling (*getscaling_type)	(void);
+	bool	(*openurl)		(const char *url);
 } cioapi_t;
 
 #define _conio_kbhit()		kbhit()
@@ -453,6 +491,7 @@ CIOLIBEXPORT int initciolib(int mode);
 CIOLIBEXPORT void suspendciolib(void);
 
 CIOLIBEXPORT int ciolib_movetext(int sx, int sy, int ex, int ey, int dx, int dy);
+CIOLIBEXPORT int ciolib_movetext_clear(int sx, int sy, int ex, int ey, int dx, int dy, struct vmem_cell *fill);
 CIOLIBEXPORT char * ciolib_cgets(char *str);
 CIOLIBEXPORT int ciolib_cscanf (char *format , ...);
 CIOLIBEXPORT int ciolib_kbhit(void);
@@ -508,11 +547,13 @@ CIOLIBEXPORT int ciolib_getvideoflags(void);
 CIOLIBEXPORT void ciolib_setscaling(double flags);
 CIOLIBEXPORT double ciolib_getscaling(void);
 CIOLIBEXPORT int ciolib_setpalette(uint32_t entry, uint16_t r, uint16_t g, uint16_t b);
+CIOLIBEXPORT int ciolib_getpalette(uint32_t entry, uint8_t *r, uint8_t *g, uint8_t *b);
 CIOLIBEXPORT int ciolib_attr2palette(uint8_t attr, uint32_t *fg, uint32_t *bg);
 CIOLIBEXPORT int ciolib_setpixel(uint32_t x, uint32_t y, uint32_t colour);
 CIOLIBEXPORT struct ciolib_pixels * ciolib_getpixels(uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey, int force);
 CIOLIBEXPORT struct ciolib_pixels * ciolib_duppixels(struct ciolib_pixels *pix);
 CIOLIBEXPORT int ciolib_setpixels(uint32_t sx, uint32_t sy, uint32_t ex, uint32_t ey, uint32_t x_off, uint32_t y_off, uint32_t mx_off, uint32_t my_off, struct ciolib_pixels *pixels, struct ciolib_mask *mask);
+CIOLIBEXPORT int ciolib_blitpixels(struct ciolib_pixels *pixels, struct ciolib_mask *mask, const struct ciolib_blit *blit);
 CIOLIBEXPORT void ciolib_freepixels(struct ciolib_pixels *pixels);
 CIOLIBEXPORT void ciolib_freemask(struct ciolib_mask *mask);
 CIOLIBEXPORT struct ciolib_screen * ciolib_savescreen(void);
@@ -533,6 +574,15 @@ CIOLIBEXPORT enum ciolib_codepage ciolib_getcodepage(void);
 CIOLIBEXPORT void ciolib_setscaling_type(enum ciolib_scaling);
 CIOLIBEXPORT enum ciolib_scaling ciolib_getscaling_type(void);
 CIOLIBEXPORT uint8_t ciolib_rgb_to_legacyattr(uint32_t fg, uint32_t bg);
+CIOLIBEXPORT uint16_t ciolib_add_hyperlink(const char *uri, const char *id_param);
+CIOLIBEXPORT char *ciolib_get_hyperlink_url(uint16_t id);
+CIOLIBEXPORT char *ciolib_get_hyperlink_params(uint16_t id);
+CIOLIBEXPORT bool ciolib_open_hyperlink(uint16_t hyperlink_id);
+CIOLIBEXPORT void ciolib_set_current_hyperlink(uint16_t id);
+CIOLIBEXPORT uint16_t ciolib_get_current_hyperlink(void);
+typedef bool (*ciolib_hyperlink_mark_fn)(uint16_t id);
+typedef void (*ciolib_hyperlink_gc_cb)(ciolib_hyperlink_mark_fn mark_live, int max_live, void *cbdata);
+CIOLIBEXPORT void ciolib_set_hyperlink_gc_callback(ciolib_hyperlink_gc_cb cb, void *cbdata);
 
 /* DoorWay specific stuff that's only applicable to ANSI mode. */
 CIOLIBEXPORT void ansi_ciolib_setdoorway(int enable);
@@ -545,6 +595,7 @@ CIOLIBEXPORT void ansi_ciolib_setdoorway(int enable);
 	#define cprintf					ciolib_cprintf
 
 	#define movetext(a,b,c,d,e,f)	ciolib_movetext(a,b,c,d,e,f)
+	#define movetext_clear(a,b,c,d,e,f,g)	ciolib_movetext_clear(a,b,c,d,e,f,g)
 	#define cgets(a)				ciolib_cgets(a)
 	#define kbhit()					ciolib_kbhit()
 	#define kbwait(a)				ciolib_kbwait(a)
@@ -599,11 +650,13 @@ CIOLIBEXPORT void ansi_ciolib_setdoorway(int enable);
 	#define setscaling(a)			ciolib_setscaling(a)
 	#define getscaling()			ciolib_getscaling()
 	#define setpalette(e,r,g,b)		ciolib_setpalette(e,r,g,b)
+	#define getpalette(e,r,g,b)		ciolib_getpalette(e,r,g,b)
 	#define attr2palette(a,b,c)		ciolib_attr2palette(a,b,c)
 	#define setpixel(a,b,c)			ciolib_setpixel(a,b,c)
 	#define getpixels(a,b,c,d, e)		ciolib_getpixels(a,b,c,d, e)
 	#define duppixels(a)			ciolib_duppixels(a)
 	#define setpixels(a,b,c,d,e,f,g,h,i,j)	ciolib_setpixels(a,b,c,d,e,f,g,h,i,j)
+	#define blitpixels(a,b,c)		ciolib_blitpixels(a,b,c)
 	#define freepixels(a)			ciolib_freepixels(a)
 	#define freemask(a)			ciolib_freemask(a)
 	#define savescreen()			ciolib_savescreen()
@@ -646,6 +699,15 @@ CIOLIBEXPORT void ansi_ciolib_setdoorway(int enable);
 
 #ifdef WITH_GDI
 #if defined(_WIN32) || defined(__DARWIN__)
+	#ifdef main
+		#undef main
+	#endif
+	#define main	CIOLIB_main
+#endif
+#endif
+
+#ifdef WITH_QUARTZ
+#if defined(__DARWIN__)
 	#ifdef main
 		#undef main
 	#endif
@@ -730,14 +792,18 @@ extern pthread_once_t ciolib_mouse_initialized;
 #ifdef __cplusplus
 extern "C" {
 #endif
-CIOLIBEXPORT void ciomouse_gotevent(int event, int x, int y, int x_res, int y_res);
+CIOLIBEXPORT void ciomouse_gotevent(int event, int x, int y, int x_res, int y_res, int kbmodifiers);
+CIOLIBEXPORT void ciomouse_reset_input(void);
 CIOLIBEXPORT int mouse_trywait(void);
 CIOLIBEXPORT int mouse_wait(void);
 CIOLIBEXPORT int mouse_pending(void);
 CIOLIBEXPORT void init_mouse(void);
 CIOLIBEXPORT int ciolib_getmouse(struct mouse_event *mevent);
 CIOLIBEXPORT int ciolib_ungetmouse(struct mouse_event *mevent);
+/* Clears input ownership state while preserving CIO_KEY_QUIT. */
+CIOLIBEXPORT void ciolib_clear_input(void);
 CIOLIBEXPORT void ciolib_mouse_thread(void *data);
+CIOLIBEXPORT uint64_t ciomouse_getevents(void);
 CIOLIBEXPORT uint64_t ciomouse_setevents(uint64_t events);
 CIOLIBEXPORT uint64_t ciomouse_addevents(uint64_t events);
 CIOLIBEXPORT uint64_t ciomouse_delevents(uint64_t events);
@@ -746,6 +812,18 @@ CIOLIBEXPORT uint64_t ciomouse_delevent(uint64_t event);
 CIOLIBEXPORT uint32_t ciolib_mousepointer(enum ciolib_mouse_ptr type);
 CIOLIBEXPORT void mousestate(int *x, int *y, uint8_t *buttons);
 CIOLIBEXPORT void mousestate_res(int *x_res, int *y_res, uint8_t *buttons);
+CIOLIBEXPORT void ciokey_gotevent(uint16_t evdev, bool pressed);
+CIOLIBEXPORT void ciokey_synthesize(uint16_t evdev, bool pressed);
+CIOLIBEXPORT bool ciokey_getevent(struct ciolib_key_event *event);
+CIOLIBEXPORT bool ciokey_pending(void);
+CIOLIBEXPORT size_t ciokey_pressed(uint16_t *keys, size_t max);
+CIOLIBEXPORT void ciokey_clear_events(void);
+CIOLIBEXPORT void ciokey_reset(void);
+CIOLIBEXPORT void ciokey_focus_lost(void);
+CIOLIBEXPORT bool ciokey_setenabled(bool enabled);
+CIOLIBEXPORT bool ciokey_enabled(void);
+CIOLIBEXPORT int ciokey_trywait(void);
+CIOLIBEXPORT int ciokey_wait(void);
 #ifdef __cplusplus
 }
 #endif
@@ -771,20 +849,28 @@ CIOLIBEXPORT void mousestate_res(int *x_res, int *y_res, uint8_t *buttons);
 #define CIO_KEY_CTRL_F(x)   ((x<11)?((0x5d + x) << 8):((0x7e + x) << 8))
 #define CIO_KEY_ALT_F(x)    ((x<11)?((0x67 + x) << 8):((0x80 + x) << 8))
 #define CIO_KEY_BACKTAB     (0x0f << 8)
-#define CIO_KEY_SHIFT_UP    (0x38 << 8)
+/*
+ * Shifted navigation keys are CIO-private E0-prefixed tokens.  They are
+ * not BIOS key codes; the high byte follows keypad/navigation order with
+ * gaps left for Home/PgUp/PgDn if those are ever needed:
+ *   0x91 Up, 0x93 Left, 0x94 Right, 0x95 End, 0x96 Down.
+ */
+#define CIO_KEY_SHIFT_UP    0x91E0
 #define CIO_KEY_CTRL_UP     (0x8d << 8)
-#define CIO_KEY_SHIFT_LEFT  (0x34 << 8)
+#define CIO_KEY_SHIFT_LEFT  0x93E0
 #define CIO_KEY_CTRL_LEFT   (0x73 << 8)
-#define CIO_KEY_SHIFT_RIGHT (0x36 << 8)
+#define CIO_KEY_SHIFT_RIGHT 0x94E0
 #define CIO_KEY_CTRL_RIGHT  (0x74 << 8)
-#define CIO_KEY_SHIFT_DOWN  (0x32 << 8)
+#define CIO_KEY_SHIFT_DOWN  0x96E0
 #define CIO_KEY_CTRL_DOWN   (0x91 << 8)
-#define CIO_KEY_SHIFT_END   (0x31 << 8)
+#define CIO_KEY_SHIFT_END   0x95E0
 #define CIO_KEY_CTRL_END    (0x75 << 8)
 
 #define CIO_KEY_MOUSE     0x7dE0	// This is the right mouse on Schneider/Amstrad PC1512 PC keyboards "F-14"
+#define CIO_KEY_KEY_EVENT 0x7cE0	// Physical key event notification token
 #define CIO_KEY_QUIT	  0x7eE0	// "F-15"
 #define CIO_KEY_ABORTED   0x01E0	// ESC key by scancode
 #define CIO_KEY_LITERAL_E0	0xE0E0 // Literal 0xe0 character
+#define CIO_KEY_WREN_CONSOLE 0x29E0	// Ctrl-` opens the Wren scripting console (high byte = `'s scancode 0x29)
 
 #endif	/* Do not add anything after this line */

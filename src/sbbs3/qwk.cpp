@@ -611,7 +611,7 @@ void sbbs_t::qwk_sec()
 				i = (uint)(l / (uint)cur_cps);
 			else
 				i = 0;
-			bprintf(text[FiTransferTime], sectostr(i, tmp));
+			bprintf(text[FiTransferTime], sectostr(i, tmp), cur_cps);
 			term->newline();
 			if (!(useron.exempt & FLAG('T')) && (uint)i > timeleft) {
 				bputs(text[NotEnoughTimeToDl]);
@@ -1044,7 +1044,7 @@ bool sbbs_t::qwk_vote(str_list_t ini, const char* section, smb_net_type_t net_ty
 		char         zone[32];
 		xpDateTime_t dt = isoDateTimeStr_parse(p);
 		msg.hdr.when_written = smb_when(xpDateTime_to_localtime(dt), dt.zone);
-		if (sscanf(p, "%*s %s", zone) == 1 && zone[0])
+		if (sscanf(p, "%*s %4s", zone) == 1 && zone[0])
 			msg.hdr.when_written.zone = (ushort)strtoul(zone, NULL, 16);
 	}
 
@@ -1142,7 +1142,15 @@ bool sbbs_t::qwk_vote(str_list_t ini, const char* section, smb_net_type_t net_ty
 			msg.hdr.votes = iniGetShortInt(ini, section, "votes", 0);
 			notice = text[PollVoteNotice];
 		}
-		result = votemsg(&cfg, &smb, &msg, notice, text[VoteNoticeFmt]);
+		if (msg.from == NULL) {
+			// A ballot with no voter identity can't be attributed or vote-deduplicated
+			// (and would pass NULL to smb_msg_is_from); skip it rather than import an
+			// unattributable vote from a malformed packet.
+			lprintf(LOG_NOTICE, "Ignoring senderless QWK vote-msg (%s) from %s", section + 5, qnet_id);
+			result = SMB_SUCCESS;
+		}
+		else
+			result = votemsg(&cfg, &smb, &msg, notice, text[VoteNoticeFmt]);
 		if (result == SMB_DUPE_MSG) {
 			lprintf(LOG_INFO, "Duplicate vote-msg (%s) from %s", msg.id, qnet_id);
 		}
@@ -1191,8 +1199,8 @@ bool sbbs_t::qwk_msg_filtered(smbmsg_t* msg, msg_filters filters)
 		        , msg->from_ip);
 		return true;
 	}
-
-	const char* hostname = getHostNameByAddr(msg->from_host);
+	char tmp[256];
+	const char* hostname = getHostNameByAddr(msg->from_host, tmp, sizeof tmp);
 	if (findstr_in_list(hostname, filters.host_can, NULL)) {
 		lprintf(LOG_NOTICE, "!Filtering QWK message from %s due to blocked hostname: %s"
 		        , msg->from

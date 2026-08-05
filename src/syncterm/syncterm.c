@@ -55,9 +55,12 @@ static const KNOWNFOLDERID FOLDERID_ProgramData = {
 #include <filewrap.h> // STDOUT_FILENO
 #include <gen_defs.h>
 #include <ini_file.h>
+#include <signal.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <vidmodes.h>
+
+#include "ini_crypt.h"
 #ifdef HAS_VSTAT
  #include "bitmap_con.h"
 #endif
@@ -78,15 +81,22 @@ enum {
 
 #include "bbslist.h"
 #include "conn.h"
-#ifndef WITHOUT_CRYPTLIB
-#include "cryptlib.h"
+#ifndef WITHOUT_DEUCESSH
 #include "ssh.h"
 #endif
+#ifndef WITHOUT_CRYPTO
+#include "legacy_ciphers/legacy_ciphers.h"
+#endif
 #include "fonts.h"
+#include "host_ui.h"
 #include "syncterm.h"
 #include "term.h"
-#include "uifcinit.h"
+#include "theme.h"
+#include "theme_cloud.h"
 #include "window.h"
+#include "wren_menu_host.h"
+#include "wren_picker_host.h"
+#include "wren_host.h"
 #include "xpbeep.h"
 
 #if defined(__unix__) && defined(SOUNDCARD_H_IN) && (SOUNDCARD_H_IN > 0) && !defined(_WIN32)
@@ -103,7 +113,7 @@ enum {
 	#endif
 #endif
 
-const char *syncterm_version = "SyncTERM 1.8b"
+const char *syncterm_version = "SyncTERM 1.10a"
 
 #define ALPHA
 #ifdef _DEBUG
@@ -118,7 +128,6 @@ char *usage =
     "-6  =  Only resolve IPv6 addresses\n"
     "-b/path/to/list = specify user BBS list path\n"
     "-c  =  Hide the status line\n"
-    "-e# =  set escape delay to #msec\n"
     "-h  =  use SSH mode if URL does not include the scheme\n"
     "-iX =  set interface mode to X (default=auto) where X is one of:\n"
     "       A = ANSI mode\n"
@@ -141,15 +150,21 @@ char *usage =
     "-T  =  when the ONLY argument, dumps the terminfo entry to stdout and exits\n"
     "-t  =  use telnet mode if URL does not include the scheme\n"
     "-v  =  when the ONLY argument, dumps the version info to stdout and exits\n"
+    "-w/path/to/script.wren = additionally load the named Wren script after the\n"
+    "       built-in and user auto-load scripts on every connect; load errors\n"
+    "       are reported on standard error\n"
     "\n"
-    "URL format is: [(rlogin|telnet|ssh|raw)://][user[:password]@]domainname[:port]\n"
+    "URL format is: [(rlogin|telnet|ssh|raw|mqtts)://][user[:password]@]domainname[:port]\n"
     "raw:// URLs MUST include a port.\n"
     "shell:command URLs are supported on *nix.\n"
+    "mqtts:// connects to a Synchronet internal MQTT broker for sysop spy\n"
+    "(node selection prompts are shown after authentication).\n"
     "examples: rlogin://deuce:password@nix.synchro.net:5885\n"
     "          telnet://deuce@nix.synchro.net\n"
     "          nix.synchro.net\n"
     "          telnet://nix.synchro.net\n"
     "          raw://nix.synchro.net:23\n"
+    "          mqtts://deuce:password@sbbs.example.org\n"
     "          shell:/usr/bin/sh\n"
 ;
 
@@ -168,6 +183,70 @@ bool                     quitting = false;
 int                      fake_mode = -1;
 char                    *config_override;
 char                    *list_override;
+
+/* ---------------------------------------------------------- popup queue */
+
+struct popup_entry {
+	char               *title;
+	char               *body;
+	struct popup_entry *next;
+};
+
+static pthread_mutex_t     popup_q_mutex;
+static struct popup_entry *popup_q_head;
+static struct popup_entry *popup_q_tail;
+
+void
+popup_queue_post(const char *title, const char *body)
+{
+	if (title == NULL || body == NULL)
+		return;
+	struct popup_entry *e = malloc(sizeof(*e));
+	if (e == NULL)
+		return;
+	e->title = strdup(title);
+	e->body  = strdup(body);
+	e->next  = NULL;
+	if (e->title == NULL || e->body == NULL) {
+		free(e->title);
+		free(e->body);
+		free(e);
+		return;
+	}
+	assert_pthread_mutex_lock(&popup_q_mutex);
+	if (popup_q_tail != NULL)
+		popup_q_tail->next = e;
+	else
+		popup_q_head = e;
+	popup_q_tail = e;
+	assert_pthread_mutex_unlock(&popup_q_mutex);
+}
+
+bool
+popup_queue_drain(void)
+{
+	bool any = false;
+
+	for (;;) {
+		struct popup_entry *e;
+		assert_pthread_mutex_lock(&popup_q_mutex);
+		e = popup_q_head;
+		if (e != NULL) {
+			popup_q_head = e->next;
+			if (popup_q_head == NULL)
+				popup_q_tail = NULL;
+		}
+		assert_pthread_mutex_unlock(&popup_q_mutex);
+		if (e == NULL)
+			break;
+		host_ui_alert(e->title, e->body);
+		free(e->title);
+		free(e->body);
+		free(e);
+		any = true;
+	}
+	return any;
+}
 
 #ifdef _WINSOCKAPI_
 
@@ -796,7 +875,7 @@ char *output_types[] = {
 	/* coverity[missing_comma:SUPPRESS] */
 	"Autodetect"
 #ifdef __unix__
-	" (X11, SDL, Curses, ANSI)"
+	" (Quartz, Wayland, X11, SDL, Curses, ANSI)"
 #elif defined(_WIN32)
 	" (GDI, SDL, Console, ANSI)"
 #endif
@@ -821,6 +900,14 @@ char *output_types[] = {
 #if defined(WITH_GDI)
 	, "GDI"
 	, "GDI Fullscreen"
+#endif
+#if defined(WITH_WAYLAND)
+	, "Wayland"
+	, "Wayland Fullscreen"
+#endif
+#if defined(WITH_QUARTZ)
+	, "Quartz"
+	, "Quartz Fullscreen"
 #endif
 	, NULL
 };
@@ -848,6 +935,14 @@ int   output_map[] = {
 	, CIOLIB_MODE_GDI
 	, CIOLIB_MODE_GDI_FULLSCREEN
 #endif
+#ifdef WITH_WAYLAND
+	, CIOLIB_MODE_WAYLAND
+	, CIOLIB_MODE_WAYLAND_FULLSCREEN
+#endif
+#ifdef WITH_QUARTZ
+	, CIOLIB_MODE_QUARTZ
+	, CIOLIB_MODE_QUARTZ_FULLSCREEN
+#endif
 	, 0
 };
 char *output_descrs[] = {
@@ -864,6 +959,11 @@ char *output_descrs[] = {
 	"SDL Fullscreen",
 	"GDI",
 	"GDI Fullscreen",
+	"Retro",
+	"Wayland",
+	"Wayland Fullscreen",
+	"Quartz",
+	"Quartz Fullscreen",
 	NULL
 };
 
@@ -881,6 +981,11 @@ char *output_enum[] = {
 	"SDLFullscreen",
 	"GDI",
 	"GDIFullscreen",
+	"Retro",
+	"Wayland",
+	"WaylandFullscreen",
+	"Quartz",
+	"QuartzFullscreen",
 	NULL
 };
 
@@ -900,22 +1005,41 @@ char *cursor_enum[] = {
 	"SolidBlock",
 };
 
+/* Order matches xpbeep.c's xptone_open_locked() try sequence so the
+ * Audio Output Mode UI list reflects which backend the engine will
+ * actually pick when multiple are enabled. */
 ini_bitdesc_t audio_output_bits[] = {
 	{
-		.name = "PulseAudio",
-		.bit = XPBEEP_DEVICE_PULSEAUDIO
+		.name = "CoreAudio",
+		.bit = XPBEEP_DEVICE_COREAUDIO
+	},
+	/* The Win32 backend switched from waveOut to WASAPI in the 1.8-post
+	 * audio overhaul. Newly-written configs emit "WASAPI" (first match
+	 * wins in iniSetBitField); "WaveOut" is kept as a read-side alias so
+	 * existing user configs continue to select the Win32 backend. */
+	{
+		.name = "WASAPI",
+		.bit = XPBEEP_DEVICE_WIN32
+	},
+	{
+		.name = "WaveOut",
+		.bit = XPBEEP_DEVICE_WIN32
 	},
 	{
 		.name = "PortAudio",
 		.bit = XPBEEP_DEVICE_PORTAUDIO
 	},
 	{
+		.name = "PipeWire",
+		.bit = XPBEEP_DEVICE_PIPEWIRE
+	},
+	{
 		.name = "SDL",
 		.bit = XPBEEP_DEVICE_SDL
 	},
 	{
-		.name = "WaveOut",
-		.bit = XPBEEP_DEVICE_WIN32
+		.name = "PulseAudio",
+		.bit = XPBEEP_DEVICE_PULSEAUDIO
 	},
 	{
 		.name = "ALSA",
@@ -932,10 +1056,16 @@ ini_bitdesc_t audio_output_bits[] = {
 };
 
 ini_bitdesc_t audio_output_types[] = {
-#ifdef WITH_PULSEAUDIO
+#ifdef WITH_COREAUDIO
 	{
-		.name = "PulseAudio",
-		.bit = XPBEEP_DEVICE_PULSEAUDIO
+		.name = "CoreAudio",
+		.bit = XPBEEP_DEVICE_COREAUDIO
+	},
+#endif
+#ifdef _WIN32
+	{
+		.name = "WASAPI",
+		.bit = XPBEEP_DEVICE_WIN32
 	},
 #endif
 #ifdef WITH_PORTAUDIO
@@ -944,16 +1074,22 @@ ini_bitdesc_t audio_output_types[] = {
 		.bit = XPBEEP_DEVICE_PORTAUDIO
 	},
 #endif
+#ifdef WITH_PIPEWIRE
+	{
+		.name = "PipeWire",
+		.bit = XPBEEP_DEVICE_PIPEWIRE
+	},
+#endif
 #ifdef WITH_SDL_AUDIO
 	{
 		.name = "SDL",
 		.bit = XPBEEP_DEVICE_SDL
 	},
 #endif
-#ifdef _WIN32
+#ifdef WITH_PULSEAUDIO
 	{
-		.name = "WaveOut",
-		.bit = XPBEEP_DEVICE_WIN32
+		.name = "PulseAudio",
+		.bit = XPBEEP_DEVICE_PULSEAUDIO
 	},
 #endif
 #ifdef USE_ALSA_SOUND
@@ -1023,18 +1159,34 @@ set_default_cursor(void)
 #endif
 }
 
+/* Set the process quit latch after a trusted menu or connected script has
+ * already obtained any required confirmation. */
 bool
 check_exit(bool force)
 {
-	if (force || (uifc.exit_flags & UIFC_XF_QUIT)) {
-		if (!(uifc.exit_flags & UIFC_XF_QUIT) && settings.confirm_close) {
-			if (!confirm("Are you sure you want to exit?", NULL))
-				return false;
-		}
+	if (quitting)
+		return true;
+	if (force) {
 		quitting = true;
 		return true;
 	}
 	return false;
+}
+
+/* Read one complete ciolib key and latch process-close requests. */
+int
+syncterm_getkey(void)
+{
+	int key = getch();
+
+	if (key == 0 || key == 0xe0) {
+		key |= getch() << 8;
+		if (key == CIO_KEY_LITERAL_E0)
+			key = 0xe0;
+	}
+	if (key == CIO_KEY_QUIT)
+		quitting = true;
+	return key;
 }
 
 void
@@ -1042,7 +1194,6 @@ parse_url(char *url, struct bbslist *bbs, int dflt_conn_type, int force_defaults
 {
 	char             *p1, *p2, *p3;
 
-#define BBSLIST_SIZE ((MAX_OPTS + 1) * sizeof(struct bbslist *))
 	struct  bbslist **list;
 	int               listcount = 0, i;
 
@@ -1092,6 +1243,14 @@ parse_url(char *url, struct bbslist *bbs, int dflt_conn_type, int force_defaults
 		bbs->port = conn_ports[bbs->conn_type];
 		p1 = url + 8;
 	}
+	else if (!strnicmp("mqtts://", url, 8)) {
+		/* MQTT-over-TLS-PSK only — Synchronet's internal broker
+		 * doesn't accept plaintext.  No plain "mqtt://" alias on
+		 * purpose; accepting it would imply plaintext works. */
+		bbs->conn_type = CONN_TYPE_MQTT;
+		bbs->port = conn_ports[bbs->conn_type];
+		p1 = url + 8;
+	}
 
         /* ToDo: RFC2806 */
 	p3 = strchr(p1, '@');
@@ -1135,7 +1294,7 @@ parse_url(char *url, struct bbslist *bbs, int dflt_conn_type, int force_defaults
 	SAFECOPY(bbs->addr, p1);
 
         /* Find BBS listing in users phone book */
-	list = calloc(1, BBSLIST_SIZE);
+	list = calloc(BBSLIST_MAX_ENTRIES + 1, sizeof(*list));
 	read_list(settings.list_path, &list[0], NULL, &listcount, USER_BBSLIST);
 	for (i = 0; i < listcount; i++) {
 		if ((stricmp(bbs->addr, list[i]->addr) == 0)
@@ -1197,6 +1356,8 @@ get_win_filename(char *fn, int fnlen, int type, int shared)
 				case SYNCTERM_PATH_INI:
 				case SYNCTERM_PATH_LIST:
 				case SYNCTERM_PATH_KEYS:
+				case SYNCTERM_PATH_SCRIPTS:
+				case SYNCTERM_PATH_THEMES:
 					if (shared) {
 						if (GKFP(&FOLDERID_ProgramData, KF_FLAG_CREATE, NULL, &path) == S_OK)
 							we_got_this = true;
@@ -1226,6 +1387,10 @@ get_win_filename(char *fn, int fnlen, int type, int shared)
                                 // Convert unicode to string using snprintf()
 				if ((type == SYNCTERM_DEFAULT_TRANSFER_PATH) || (type == SYNCTERM_PATH_CACHE)) {
 					if (snprintf(fn, fnlen, "%S", path) >= fnlen)
+						we_got_this = false;
+				}
+				else if (type == SYNCTERM_PATH_SCRIPTS) {
+					if (snprintf(fn, fnlen, "%S\\SyncTERM\\scripts", path) >= fnlen)
 						we_got_this = false;
 				}
 				else {
@@ -1302,6 +1467,28 @@ get_win_filename(char *fn, int fnlen, int type, int shared)
 			backslash(fn);
 			strncat(fn, "syncterm.ssh", fnlen - strlen(fn) - 1);
 			break;
+		case SYNCTERM_PATH_SCRIPTS:
+			backslash(fn);
+			strncat(fn, "scripts", fnlen - strlen(fn) - 1);
+			backslash(fn);
+			if (!isdir(fn)) {
+				if (MKDIR(fn)) {
+					fn[0] = 0;
+					break;
+				}
+			}
+			break;
+		case SYNCTERM_PATH_THEMES:
+			backslash(fn);
+			strncat(fn, "themes", fnlen - strlen(fn) - 1);
+			backslash(fn);
+			if (!isdir(fn)) {
+				if (MKDIR(fn)) {
+					fn[0] = 0;
+					break;
+				}
+			}
+			break;
 	}
 
 	return fn;
@@ -1320,6 +1507,8 @@ get_haiku_filename(char *fn, int fnlen, int type, int shared)
 		case SYNCTERM_PATH_INI:
 		case SYNCTERM_PATH_LIST:
 		case SYNCTERM_PATH_KEYS:
+		case SYNCTERM_PATH_SCRIPTS:
+		case SYNCTERM_PATH_THEMES:
 			if (shared)
 				s = find_directory(B_SYSTEM_SETTINGS_DIRECTORY, v, true, fn, fnlen);
 			else
@@ -1366,6 +1555,26 @@ get_haiku_filename(char *fn, int fnlen, int type, int shared)
 		case SYNCTERM_PATH_KEYS:
 			sz = strlcat(fn, "/SyncTERM.ssh", fnlen);
 			break;
+		case SYNCTERM_PATH_SCRIPTS:
+			sz = strlcat(fn, "/scripts", fnlen);
+			if (sz >= fnlen)
+				return NULL;
+			if (!isdir(fn) && !shared) {
+				if (mkpath(fn))
+					return NULL;
+			}
+			sz = strlcat(fn, "/", fnlen);
+			break;
+		case SYNCTERM_PATH_THEMES:
+			sz = strlcat(fn, "/themes", fnlen);
+			if (sz >= fnlen)
+				return NULL;
+			if (!isdir(fn) && !shared) {
+				if (mkpath(fn))
+					return NULL;
+			}
+			sz = strlcat(fn, "/", fnlen);
+			break;
 	}
 	if (sz >= fnlen)
 		return NULL;
@@ -1377,7 +1586,8 @@ enum xdg_paths {
 	XDG_DATA_HOME,
 	XDG_CONFIG_HOME,
 	XDG_CACHE_HOME,
-	XDG_NONE, // Download dir
+	XDG_DOWNLOAD_DIR,
+	XDG_NONE, // Bare home directory DO NOT USE
 };
 static char *
 get_xdg_path(enum xdg_paths type, char *buf, size_t bufsz)
@@ -1394,6 +1604,9 @@ get_xdg_path(enum xdg_paths type, char *buf, size_t bufsz)
 			break;
 		case XDG_CACHE_HOME:
 			env = getenv("XDG_CACHE_HOME");
+			break;
+		case XDG_DOWNLOAD_DIR:
+			env = getenv("XDG_DOWNLOAD_DIR");
 			break;
 		case XDG_NONE:
 			// Always use HOME...
@@ -1420,6 +1633,9 @@ get_xdg_path(enum xdg_paths type, char *buf, size_t bufsz)
 			case XDG_CACHE_HOME:
 				snprintf(buf, bufsz, "%s/.cache", home);
 				break;
+			case XDG_DOWNLOAD_DIR:
+				snprintf(buf, bufsz, "%s/Downloads", home);
+				break;
 			case XDG_NONE:
 				snprintf(buf, bufsz, "%s", home);
 				break;
@@ -1430,7 +1646,7 @@ get_xdg_path(enum xdg_paths type, char *buf, size_t bufsz)
 	}
 
 	// Add "syncterm" to the end
-	if (type != XDG_NONE) {
+	if (type != XDG_NONE && type != XDG_DOWNLOAD_DIR) {
 		backslash(buf);
 		if (strlen(buf) + strlen("syncterm") >= bufsz)
 			return NULL;
@@ -1454,7 +1670,7 @@ get_unix_filename(char *fn, int fnlen, int type, int shared)
 					return NULL;
 				break;
 			case SYNCTERM_DEFAULT_TRANSFER_PATH:
-				if (get_xdg_path(XDG_NONE, fn, fnlen) == NULL)
+				if (get_xdg_path(XDG_DOWNLOAD_DIR, fn, fnlen) == NULL)
 					return NULL;
 				break;
 			case SYNCTERM_PATH_CACHE:
@@ -1462,6 +1678,11 @@ get_unix_filename(char *fn, int fnlen, int type, int shared)
 					return NULL;
 				break;
 			case SYNCTERM_PATH_KEYS:
+				if (get_xdg_path(XDG_DATA_HOME, fn, fnlen) == NULL)
+					return NULL;
+				break;
+			case SYNCTERM_PATH_SCRIPTS:
+			case SYNCTERM_PATH_THEMES:
 				if (get_xdg_path(XDG_DATA_HOME, fn, fnlen) == NULL)
 					return NULL;
 				break;
@@ -1494,6 +1715,22 @@ get_unix_filename(char *fn, int fnlen, int type, int shared)
 			break;
 		case SYNCTERM_PATH_KEYS:
 			strncat(fn, "syncterm.ssh", fnlen - strlen(fn) - 1);
+			break;
+		case SYNCTERM_PATH_SCRIPTS:
+			strncat(fn, "scripts", fnlen - strlen(fn) - 1);
+			backslash(fn);
+			if (!isdir(fn) && !shared) {
+				if (mkpath(fn))
+					return NULL;
+			}
+			break;
+		case SYNCTERM_PATH_THEMES:
+			strncat(fn, "themes", fnlen - strlen(fn) - 1);
+			backslash(fn);
+			if (!isdir(fn) && !shared) {
+				if (mkpath(fn))
+					return NULL;
+			}
 			break;
 	}
 
@@ -1561,23 +1798,60 @@ check_upgrade(void)
 				char oldpath[MAX_PATH+1];
 				snprintf(oldpath, sizeof(oldpath), "%s/.syncterm", home);
 				if (isdir(oldpath)) {
-					init_uifc(true, true);
-					uifc.showbuf(WIN_SAV | WIN_MID | WIN_HLP, 0, 0, 76, uifc.scrn_len - 2, "Upgrade Detected",
-					    "It looks like you've just upgraded SyncTERM.  Previously on POSIX\n"
-					    "systems, all files were usually stored in $HOME/.syncterm.  However,\n"
-					    "with SyncTERM 1.2, files are now stored in the locations defined in the\n"
-					    "XDG Base Directory Specification.\n"
-					    "\n"
-					    "You may want to note the new locations in the File Locations menu\n"
-					    "option in SyncTERM Settings menu, exit SyncTERM (this is important) and\n"
-					    "manually move the files to the new locations, overwriting the newly\n"
-					    "created ini file.\n", NULL, NULL);
-					uifcbail();
+					host_ui_alert("Upgrade Detected",
+					    "It looks like you've just upgraded SyncTERM. Previously on POSIX\n"
+					    "systems, files were usually stored in $HOME/.syncterm. SyncTERM now\n"
+					    "uses locations defined by the XDG Base Directory Specification.\n\n"
+					    "Review the new paths in Settings > File Locations, exit SyncTERM,\n"
+					    "then move the old files to those locations if needed.");
 				}
 			}
 		}
 #endif
 	}
+}
+
+void
+resolve_list_path(struct syncterm_settings *set)
+{
+	set->webgetUserList = false;
+	if (list_override != NULL) {
+		SAFECOPY(set->list_path, list_override);
+		return;
+	}
+	if (strnicmp(set->stored_list_path, "http://", 7) == 0 ||
+	    strnicmp(set->stored_list_path, "https://", 8) == 0)
+		set->webgetUserList = true;
+	if (!set->webgetUserList) {
+		SAFECOPY(set->list_path, set->stored_list_path);
+		return;
+	}
+	if (!get_syncterm_filename(set->list_path, sizeof(set->list_path),
+	    SYNCTERM_PATH_CACHE, false)) {
+		SAFECOPY(set->list_path, set->stored_list_path);
+		return;
+	}
+	backslash(set->list_path);
+	strlcat(set->list_path, "syncterm-system-cache",
+	    sizeof(set->list_path));
+	if (mkpath(set->list_path) != 0) {
+		SAFECOPY(set->list_path, set->stored_list_path);
+		return;
+	}
+	backslash(set->list_path);
+	strlcat(set->list_path, "System List.lst", sizeof(set->list_path));
+}
+
+static unsigned
+read_classic_theme_color(FILE *fp, const char *key, str_list_t names,
+    unsigned default_value)
+{
+	char value[INI_MAX_VALUE_LEN];
+	const char *section = "UIFC";
+
+	if (iniReadExistingString(fp, "ClassicTheme", key, "", value) != NULL)
+		section = "ClassicTheme";
+	return iniReadEnum(fp, section, key, names, default_value);
 }
 
 void
@@ -1608,39 +1882,14 @@ load_settings(struct syncterm_settings *set)
 	        "TransferFailureKeypressTimeout",
 
                 /* seconds: */ 60);
-	set->custom_cols = iniReadInteger(inifile, "SyncTERM", "CustomCols", 80);
+	set->custom_cols = iniReadInteger(inifile, "SyncTERM", "CustomColumns", 80);
 	set->custom_rows = iniReadInteger(inifile, "SyncTERM", "CustomRows", 25);
 	set->custom_fontheight = iniReadInteger(inifile, "SyncTERM", "CustomFontHeight", 16);
 	set->custom_aw = iniReadInteger(inifile, "SyncTERM", "CustomAspectWidth", 4);
 	set->custom_ah = iniReadInteger(inifile, "SyncTERM", "CustomAspectHeight", 3);
 	get_syncterm_filename(set->stored_list_path, sizeof(set->stored_list_path), SYNCTERM_PATH_LIST, false);
 	iniReadSString(inifile, "SyncTERM", "ListPath", set->stored_list_path, set->stored_list_path, sizeof(set->stored_list_path));
-	if (list_override != NULL) {
-		SAFECOPY(set->list_path, list_override);
-	}
-	else {
-		if (strnicmp(set->stored_list_path, "http://", 7) == 0)
-			set->webgetUserList = true;
-		else if (strnicmp(set->stored_list_path, "https://", 8) == 0)
-			set->webgetUserList = true;
-		if (set->webgetUserList) {
-			if (!get_syncterm_filename(settings.list_path, sizeof(settings.list_path), SYNCTERM_PATH_CACHE, false))
-				SAFECOPY(set->list_path, set->stored_list_path);
-			else {
-				backslash(set->list_path);
-				strlcat(set->list_path, "syncterm-system-cache", sizeof(set->list_path));
-				if (mkpath(set->list_path) != 0)
-					SAFECOPY(set->list_path, set->stored_list_path);
-				else {
-					backslash(set->list_path);
-					strlcat(set->list_path, "System List.lst", sizeof(set->list_path));
-				}
-			}
-		}
-		else {
-			SAFECOPY(set->list_path, set->stored_list_path);
-		}
-	}
+	resolve_list_path(set);
 	set->scaling_factor = iniReadFloat(inifile, "SyncTERM", "ScalingFactor", 0);
 	set->blocky = iniReadBool(inifile, "SyncTERM", "BlockyScaling", true);
 	set->extern_scale = iniReadBool(inifile, "SyncTERM", "ExternalScaling", false);
@@ -1664,6 +1913,9 @@ load_settings(struct syncterm_settings *set)
 	}
 	strListFree(&sortby);
 
+	/* Sort profiles */
+	init_sort_profiles(inifile);
+
         /* Shell TERM settings */
 	iniReadSString(inifile, "SyncTERM", "TERM", "syncterm", set->TERM, sizeof(set->TERM));
 
@@ -1673,16 +1925,42 @@ load_settings(struct syncterm_settings *set)
 		set->webgets = iniReadNamedStringList(inifile, "WebLists");
 	}
 
-	/* KDF Parameters */
-	set->keyDerivationIterations = iniReadInteger(inifile, "SyncTERM", "KeyDerivationIterations", 50000);
+	/* KDF spec.
+	 *
+	 * A string so the on-disk value is self-describing: future KDF
+	 * changes (argon2id, …) can be tagged distinctly on disk without
+	 * another migration pass.  Currently either
+	 *   "scrypt-N<cost_log2>"  — new writes (v2 bbslist files), or
+	 *   "<digits>"             — legacy Cryptlib-era PBKDF2 iteration
+	 *                            count, still honoured by the reader
+	 *                            for v1 files.
+	 * The default for new installs matches INI_SCRYPT_COST_LOG2 in
+	 * ini_crypt.c.  Legacy digits-only values are left untouched on
+	 * load; the UI offers to re-key to scrypt form when the user
+	 * writes a new encrypted file. */
+	iniReadSString(inifile, "SyncTERM", "KeyDerivationIterations",
+	    "scrypt-N15", set->keyDerivationIterations,
+	    sizeof(set->keyDerivationIterations));
 
-	/* UIFC Colours */
-	set->uifc_bclr = iniReadEnum(inifile, "UIFC", "BackgroundColour", (char **)bg_colour_enum, 8);
-	set->uifc_cclr = iniReadEnum(inifile, "UIFC", "InverseColour", (char **)bg_colour_enum, 8);
-	set->uifc_hclr = iniReadEnum(inifile, "UIFC", "FrameColour", (char **)colour_enum, 16);
-	set->uifc_lbclr = iniReadEnum(inifile, "UIFC", "LightbarColour", (char **)colour_enum, 16);
-	set->uifc_lbbclr = iniReadEnum(inifile, "UIFC", "LightbarBackgroundColour", (char **)bg_colour_enum, 8);
-	set->uifc_lclr = iniReadEnum(inifile, "UIFC", "TextColour", (char **)colour_enum, 16);
+	/* Classic Wren UI colours, with per-key fallback for old INI files. */
+	set->theme_background_color = read_classic_theme_color(inifile,
+	    "BackgroundColour", (char **)bg_colour_enum, 8);
+	set->theme_inverse_color = read_classic_theme_color(inifile,
+	    "InverseColour", (char **)bg_colour_enum, 8);
+	set->theme_frame_color = read_classic_theme_color(inifile,
+	    "FrameColour", (char **)colour_enum, 16);
+	set->theme_lightbar_color = read_classic_theme_color(inifile,
+	    "LightbarColour", (char **)colour_enum, 16);
+	set->theme_lightbar_background_color = read_classic_theme_color(inifile,
+	    "LightbarBackgroundColour", (char **)bg_colour_enum, 8);
+	set->theme_text_color = read_classic_theme_color(inifile,
+	    "TextColour", (char **)colour_enum, 16);
+	iniReadSString(inifile, "SyncTERM", "ThemeFile", "", set->theme_file,
+	    sizeof(set->theme_file));
+	iniReadSString(inifile, "SyncTERM", "ThemePackage", "",
+	    set->theme_package, sizeof(set->theme_package));
+	if (set->theme_package[0] != '\0')
+		set->theme_file[0] = '\0';
 
 	if (inifile)
 		fclose(inifile);
@@ -1701,81 +1979,71 @@ download_thread(void *args)
 void
 update_webget_progress(struct webget_request *reqs, size_t items, bool leaveup)
 {
-	size_t sz = items * 120;
-	char *helpbuf = malloc(sz);
-	if (helpbuf == NULL)
+	(void)leaveup;
+	if (items == 0)
 		return;
-	size_t pos = 0;
-	static int cur = 0;
-	static int bar = 0;
-	bool errors = false;
+	char (*text)[160] = calloc(items, sizeof(*text));
+	const char **lines = calloc(items, sizeof(*lines));
+	if (text == NULL || lines == NULL) {
+		free(text);
+		free(lines);
+		return;
+	}
 
 	for (size_t i = 0; i < items; i++) {
-		if (sz <= pos)
-			break;
+		lines[i] = text[i];
+		if (!reqs[i].initialized) {
+			snprintf(text[i], sizeof(text[i]),
+			    "Web request: unable to initialize");
+			continue;
+		}
 		assert_pthread_mutex_lock(&reqs[i].mtx);
-		if (reqs[i].msg) {
-			helpbuf[pos++] = '`';
-			helpbuf[pos] = 0;
-			errors = true;
-		}
-		else if (reqs[i].cb_data & UINT64_C(0x8000000000000000)) {
-			helpbuf[pos++] = '`';
-			helpbuf[pos] = 0;
-			errors = true;
-		}
-		int added = snprintf(&helpbuf[pos], sz - pos, "%-20s: %-20s ",
-		    reqs[i].name, reqs[i].state ? reqs[i].state : "");
-		pos += added;
-		if (sz > pos) {
-			if (reqs[i].msg) {
-				int added = snprintf(&helpbuf[pos], sz - pos, "%s`\r\n", reqs[i].msg);
-				pos += added;
+		const char *name = reqs[i].name == NULL ? "" : reqs[i].name;
+		const char *state = reqs[i].state == NULL ? "" : reqs[i].state;
+		if (reqs[i].msg != NULL)
+			snprintf(text[i], sizeof(text[i]), "%-20s: %s", name,
+			    reqs[i].msg);
+		else if (reqs[i].cb_data & UINT64_C(0x8000000000000000))
+			snprintf(text[i], sizeof(text[i]),
+			    "%-20s: Thread failed to start", name);
+		else if (reqs[i].received_size > 0 || reqs[i].remote_size > 0) {
+			char received[10];
+			char total[10];
+			byte_estimate_to_str(reqs[i].received_size, received,
+			    sizeof(received), 0, 3);
+			byte_estimate_to_str(reqs[i].remote_size, total,
+			    sizeof(total), 0, 3);
+			if (reqs[i].remote_size > 0) {
+				uint64_t percent = reqs[i].received_size >
+				    reqs[i].remote_size ? 100 : (uint64_t)(
+				    (long double)reqs[i].received_size * 100 /
+				    reqs[i].remote_size);
+				snprintf(text[i], sizeof(text[i]),
+				    "%-20s: %-20s %7s/%-7s %3llu%%", name, state,
+				    received, total, (unsigned long long)percent);
 			}
-			else if (reqs[i].cb_data & UINT64_C(0x8000000000000000)) {
-				int added = snprintf(&helpbuf[pos], sz - pos, "Thread Failed to Start`\r\n");
-				pos += added;
-			}
-			else {
-				if (reqs[i].received_size > 0 || reqs[i].remote_size > 0) {
-					char received[10];
-					char total[10];
-					byte_estimate_to_str(reqs[i].received_size, received, sizeof(received), 0, 3);
-					byte_estimate_to_str(reqs[i].remote_size, total, sizeof(total), 0, 3);
-					if (reqs[i].remote_size) {
-						int added = snprintf(&helpbuf[pos], sz - pos, "%7s/%-7s ", received, total);
-						pos += added;
-						if (sz > pos) {
-							int pct = reqs[i].received_size * 10 / reqs[i].remote_size;
-							int added = snprintf(&helpbuf[pos], sz - pos, "~%*s~%*s\r\n", pct, "", 10 - pct, "");
-							pos += added;
-						}
-					}
-					else {
-						int added = snprintf(&helpbuf[pos], sz - pos, "%7s\r\n", received);
-						pos += added;
-					}
-				}
-				else {
-					int added = snprintf(&helpbuf[pos], sz - pos, "\r\n");
-					pos += added;
-				}
-			}
+			else
+				snprintf(text[i], sizeof(text[i]), "%-20s: %-20s %7s",
+				    name, state, received);
 		}
+		else
+			snprintf(text[i], sizeof(text[i]), "%-20s: %s", name, state);
 		assert_pthread_mutex_unlock(&reqs[i].mtx);
 	}
-	uifc.showbuf(((leaveup && errors) ? 0 : WIN_DYN | WIN_ACT) | WIN_HLP | WIN_SAV | WIN_MID | WIN_IMM,
-	    0, 0, 74, items + 4, "Web Cache Update", helpbuf, &cur, &bar);
-	if (leaveup) {
-		cur = 0;
-		bar = 0;
-	}
-	free(helpbuf);
+	host_ui_status_lines("Web Cache Update", lines, items);
+	free(lines);
+	free(text);
 }
 
 int
 main(int argc, char **argv)
 {
+#ifdef SIGPIPE
+	/* A peer hanging up mid-write would otherwise terminate the
+	   process; ignoring lets the offending write() return EPIPE so the
+	   connection layer can clean up like any other I/O error. */
+	signal(SIGPIPE, SIG_IGN);
+#endif
 	struct bbslist   *bbs = NULL;
 	bool              bbs_alloc = false;
 	struct  text_info txtinfo;
@@ -1820,22 +2088,25 @@ main(int argc, char **argv)
             // Strings:
 	    "\tacsc=}\\234|\\330{\\322+\\020\\,\\021l\\332m\\300k\\277j\\331u\\264t\\303v\\301w\\302q\\304x\\263n\\305`^Da\\260f\\370g\\361~\\371.^Y-^Xh\\261i^U0\\333y\\363z\\362,\n"
 	    "\tcbt=\\E[Z,bel=^G,cr=^M,csr=\\E[%i%p1%d;%p2%dr,tbc=\\E[3g,\n"
-	    "\tmgc=\\E[69h\\E[s\\e[69l,clear=\\E[2J,csr=\\E[%i%p1%d;%p2%dr,el1=\\E[1K,\n"
-	    "\tel=\\E[K,ed=\\E[J,hpa=\\E[%i%p1%dG,cup=\\E[%i%p1%d;%p2%dH,cud1=^J,home=\\E[H,\n"
+	    "\tmgc=\\E[?69h\\E[s\\E[?69l,clear=\\E[2J,el1=\\E[1K,\n"
+	    "\tel=\\E[K,ed=\\E[J,hpa=\\E[%i%p1%dG,vpa=\\E[%i%p1%dd,\n"
+	    "\tcup=\\E[%i%p1%d;%p2%dH,cud1=^J,home=\\E[H,\n"
 	    "\tcivis=\\E[?25l,cub1=\\E[D,cnorm=\\E[?25h,cuf1=\\E[C,ll=\\E[255H,cuu1=\\E[A,\n"
 	    "\tcvvis=\\E[?25h,dch1=\\E[P,dl1=\\E[M,smam=\\E[?7h,blink=\\E[5m,bold=\\E[1m,\n"
-	    "\tech=\\E[%p1%dX,rmam=\\E[7l,sgr0=\\E[m,is1=\\Ec,ich1=\\E[@,il1=\\E[L,kbs=^H,\n"
-	    "\tkcbt=\\E[Z,kdch1=\\177,kcud1=\\E[B,kend=\\E[K,kf1=\\E[11~,kf2=\\E[12~,\n"
+	    "\tech=\\E[%p1%dX,rmam=\\E[?7l,sgr0=\\E[m,is1=\\Ec,ich1=\\E[@,il1=\\E[L,kbs=^H,\n"
+	    "\tkcbt=\\E[Z,kdch1=\\177,kcud1=\\E[B,kend=\\E[K,khome=\\E[H,kich1=\\E[@,\n"
+	    "\tkf1=\\E[11~,kf2=\\E[12~,\n"
 	    "\tkf3=\\E[13~,kf4=\\E[14~,kf5=\\E[15~,kf6=\\E[17~,kf7=\\E[18~,kf8=\\E[19~,\n"
 	    "\tkf9=\\E[20~,kf10=\\E[21~,kf11=\\E[23~,kf12=\\E[24~,kcub1=\\E[D,knp=\\E[U,\n"
 	    "\tkpp=\\E[V,kcuf1=\\E[C,kcuu1=\\E[A,nel=^M^J,dch=\\E[%p1%dP,dl=\\E[%p1%dM,\n"
 	    "\tcud=\\E[%p1%dB,ich=\\E[%p1%d@,indn=\\E[%p1%dS,il=\\E[%p1%dL,cub=\\E[%p1%dD,\n"
 	    "\tcuf=\\E[%p1%dC,rin=\\E[%p1%dT,cuu=\\E[%p1%dA,rep=%p1%c\\E[%p2%{1}%-%db,\n"
-	    "\trs1=\\E[c,rc=\\E[u,sc=\\E[s,ind=\\E[S,ri=\\E[T,\n"
+	    "\trs1=\\Ec,rc=\\E[u,sc=\\E[s,ind=\\n,ri=\\EM,\n"
 	    "\tsgr=\\E[0%?%p1%p6%|%t;1%;%?%p4%|%t;5%;%?%p1%p3%|%t;7%;%?%p7%|%t;8%;m,\n"
-	    "\tsmglp=\\E[69h\\E[%{1}%p1%+%d;0s\\E[69l,smgrp=\\E[69h\\E[0;%{1}%p1%+%ds\\E[69l,\n"
-	    "\thts=\\E[H,ht=\t,setab=\\E[4%p1%dm,setaf=\\E[3%p1%dm,\n"
-	    "\tsmglr=\\E[?69h\\E[%i%p1%d;%p2%ds\\E?69l,smso=\\E[0;1;7m,rmso=\\E[m,\n"
+	    "\tsmglp=\\E[?69h\\E[%{1}%p1%+%d;0s\\E[?69l,smgrp=\\E[?69h\\E[0;%{1}%p1%+%ds\\E[?69l,\n"
+	    "\thts=\\EH,ht=\t,setab=\\E[4%p1%dm,setaf=\\E[3%p1%dm,\n"
+	    "\tsmglr=\\E[?69h\\E[%i%p1%d;%p2%ds\\E[?69l,smso=\\E[0;1;7m,rmso=\\E[m,\n"
+	    "\top=\\E[39;49m,u6=\\E[%i%d;%dR,u7=\\E[6n,\n"
 	    // XTerm bracketed pasted: https://invisible-island.net/xterm/xterm-paste64.html
 	    /* NOTE: From terminfo source: https://invisible-island.net/ncurses/terminfo.ti.html
 	     * Bracketed paste was introduced by xterm patch #203 in May 2005, as part of a
@@ -1844,6 +2115,8 @@ main(int argc, char **argv)
 	     * detail.  The names for the extended capabilities here were introduced by vim
 	     * in January 2017, but used internally.  In 2023, vim patch 9.0.1117 is needed
 	     * to work with this change. */
+	    "\tsmgtb=\\E[%i%p1%d;%p2%dr,\n"
+	    "\tSe=\\E[ q,Ss=\\E[%p1%d q,\n"
 	    "\tBD=\\E[?2004l,BE=\\E[?2004h,PE=\\E[201~,PS=\\E[200~,\n"
 	    "syncterm-bitmap|SyncTERM in Bitmap Mode,\n"
 	    "\tccc,\n"
@@ -1957,18 +2230,20 @@ main(int argc, char **argv)
 		return 0;
 	}
 
-#if !defined(WITHOUT_CRYPTLIB)
-        /* Cryptlib initialization MUST be done before ciolib init */
+	pthread_mutex_init(&popup_q_mutex, NULL);
+
+#ifndef WITHOUT_DEUCESSH
+        /* DeuceSSH algorithm registration + RNG seed; must run before
+           anything that calls into it (i.e. any SSH connection). */
         init_crypt();
 #endif
+#ifndef WITHOUT_CRYPTO
+        /* Register decrypt-only reference impls for ciphers the active
+           crypto backend doesn't carry (IDEA, RC2). Needed before
+           iniReadEncryptedFile can be called. */
+        legacy_ciphers_init();
+#endif
 
-        /* UIFC initialization */
-	memset(&uifc, 0, sizeof(uifc));
-	uifc.mode = UIFC_NOCTRL | UIFC_NHM;
-	uifc.size = sizeof(uifc);
-	uifc.esc_delay = 25;
-	uifc.insert_mode = TRUE;
-	uifc.reverse_cursor = TRUE;
 	url[0] = 0;
 
 	/*
@@ -2007,6 +2282,12 @@ main(int argc, char **argv)
 	}
 
 	load_settings(&settings);
+	if (!syncterm_theme_init(&settings)) {
+		fputs("Unable to initialize the UI theme\n", stderr);
+		return 1;
+	}
+	atexit(syncterm_theme_shutdown);
+	atexit(syncterm_cloud_themes_shutdown);
 	ciolib_swap_mouse_butt45 = settings.invert_wheel;
 	cvmode = find_vmode(CIOLIB_MODE_CUSTOM);
 	vparams[cvmode].cols = settings.custom_cols;
@@ -2071,9 +2352,6 @@ main(int argc, char **argv)
 				case 'C':
 					default_nostatus = 1;
 					break;
-				case 'E':
-					uifc.esc_delay = atoi(argv[i] + 2);
-					break;
 				case 'I':
 					switch (toupper(argv[i][2])) {
 						case 'A':
@@ -2121,6 +2399,28 @@ main(int argc, char **argv)
 									break;
 								case 'F':
 									ciolib_mode = CIOLIB_MODE_SDL_FULLSCREEN;
+									break;
+							}
+							break;
+						case 'Y':
+							switch (toupper(argv[i][3])) {
+								case 0:
+								case 'W':
+									ciolib_mode = CIOLIB_MODE_WAYLAND;
+									break;
+								case 'F':
+									ciolib_mode = CIOLIB_MODE_WAYLAND_FULLSCREEN;
+									break;
+							}
+							break;
+						case 'Q':
+							switch (toupper(argv[i][3])) {
+								case 0:
+								case 'W':
+									ciolib_mode = CIOLIB_MODE_QUARTZ;
+									break;
+								case 'F':
+									ciolib_mode = CIOLIB_MODE_QUARTZ_FULLSCREEN;
 									break;
 							}
 							break;
@@ -2183,6 +2483,17 @@ main(int argc, char **argv)
 				case 'Q':
 					default_hidepopups = 1;
 					break;
+				case 'W':
+					if (argv[i][2] == 0) {
+						if ((i + 1) < argc)
+							wren_host_set_launch_script(argv[++i]);
+						else
+							goto USAGE;
+					}
+					else {
+						wren_host_set_launch_script(&argv[i][2]);
+					}
+					break;
 				default:
 					goto USAGE;
 			}
@@ -2224,44 +2535,43 @@ main(int argc, char **argv)
 	else {
 		FULLPATH(path, inpath, sizeof(path));
 	}
-	atexit(uifcbail);
+	load_font_files();
+	if (!wren_menu_host_init()) {
+		fputs("Unable to initialize the Wren main menu\n", stderr);
+		return 1;
+	}
+	atexit(wren_menu_host_shutdown);
+	if (!wren_picker_host_init())
+		fputs("Unable to initialize the Wren file picker\n", stderr);
+	else
+		atexit(wren_picker_host_shutdown);
 
 #ifdef __unix__
 	umask(077);
 #endif
 
 	check_upgrade();
-#if 0
- #ifdef ALPHA
-	init_uifc(true, true);
-	uifc.showbuf(WIN_SAV | WIN_MID | WIN_HLP, 0, 0, 76, uifc.scrn_len - 2, "WARNING: ALPHA VERSION",
-	    "This is an ~`ALPHA`~ version\n"
-	    "\n"
-	    "It has both known and unknown issues and is not believed to be suitable\n"
-	    "for use. By using it, you are agreeing to be free QA to find and report bugs.\n"
-	    "\n"
-	    "There are expected to be many bugs.\n"
-	    "\n"
-	    "Bugs should be reported at `http://sf.net/p/syncterm/tickets/`\n"
-	    "when reporting bugs, please register with a valid email so I can follow\n"
-	    "up with additional questions.\n"
-	    "\n"
-	    "This message will appear every time you start this program.  Please\n"
-	    "consider running the latest release from:\n"
-	    "`https://sourceforge.net/projects/syncterm/files/latest/download`\n"
-	    "if you want a terminal that works.",
-	    NULL, NULL);
-	uifcbail();
- #endif /* ifdef ALPHA */
-#endif /* if 0 */
 
 	if (!winsock_startup())
 		return 1;
 
+	if (!quitting && (settings.theme_package[0] != '\0' ||
+	    syncterm_cloud_themes_available())) {
+		char error[256];
+		host_ui_status("Updating themes");
+		if (syncterm_cloud_themes_refresh(true, settings.theme_package,
+		    error, sizeof(error)) && settings.theme_package[0] != '\0') {
+			struct syncterm_theme *theme = NULL;
+			if (syncterm_theme_prepare(&settings, true, &theme, error,
+			    sizeof(error)) && theme != NULL)
+				syncterm_theme_install(theme);
+		}
+		host_ui_status_clear();
+	}
+
 	if ((settings.webgetUserList || settings.webgets) && !quitting) {
 		// Update the web list caches...
 
-		init_uifc(true, true);
 		char cache_path[MAX_PATH + 1];
 		if (get_syncterm_filename(cache_path, sizeof(cache_path), SYNCTERM_PATH_SYSTEM_CACHE, false)) {
 			size_t items;
@@ -2271,7 +2581,9 @@ main(int argc, char **argv)
 			}
 			else
 				items = 0;
-			struct webget_request *reqs = calloc(items + settings.webgetUserList, sizeof(struct webget_request));
+			size_t request_count = items + settings.webgetUserList;
+			struct webget_request *reqs = calloc(request_count,
+			    sizeof(struct webget_request));
 			if (reqs != NULL) {
 				sem_init(&download_complete_sem, 0, 0);
 				if (settings.webgetUserList) {
@@ -2298,19 +2610,23 @@ main(int argc, char **argv)
 					if (sem_trywait_block(&download_complete_sem, 200) == 0) {
 						started--;
 					}
-					update_webget_progress(reqs, items, false);
+					update_webget_progress(reqs, request_count, false);
 				}
 				sem_destroy(&download_complete_sem);
-				update_webget_progress(reqs, items, true);
+				update_webget_progress(reqs, request_count, true);
+				for (size_t i = 0; i < request_count; i++)
+					destroy_webget_req(&reqs[i]);
+				free(reqs);
 			}
 		}
-		uifcbail();
+		host_ui_status_clear();
 	}
 
         /* Auto-connect URL */
 	if (url[0]) {
 		if ((bbs = (struct bbslist *)malloc(sizeof(struct bbslist))) == NULL) {
-			uifcmsg("Unable to allocate memory", "The system was unable to allocate memory.");
+			host_ui_alert("Unable to Allocate Memory",
+			    "The system was unable to allocate a directory entry.");
 			return 1;
 		}
 		bbs_alloc = true;
@@ -2336,50 +2652,44 @@ main(int argc, char **argv)
 		}
 		if (addr_family != ADDRESS_FAMILY_UNSPEC)
 			bbs->address_family = addr_family;
-		if (bbs->port == 0)
+		if (bbs->port == 0 && IS_NETWORK_CONN(bbs->conn_type))
 			goto USAGE;
 	}
 
-	load_font_files();
-	while ((!quitting) && (bbs != NULL || (bbs = show_bbslist(last_bbs, false)) != NULL)) {
+	while ((!quitting) && (bbs != NULL ||
+	    (bbs = wren_menu_host_run(last_bbs, false)) != NULL)) {
 		if (default_hidepopups >= 0)
 			bbs->hidepopups = default_hidepopups;
 		if (default_nostatus >= 0)
 			bbs->nostatus = default_nostatus;
-		gettextinfo(&txtinfo); /* Current mode may have changed while in show_bbslist() */
+		gettextinfo(&txtinfo); /* The menu may have changed the current mode. */
 		FREE_AND_NULL(last_bbs);
-		uifcbail();
 		if (bbs->screen_mode != SCREEN_MODE_CURRENT)
 			fake_mode = screen_to_ciolib(bbs->screen_mode);
 		textmode(screen_to_ciolib(bbs->screen_mode));
 		set_default_cursor();
-		if (!bbs->hidepopups)
-			init_uifc(true, true);
 		load_font_files();
 		setfont(find_font_id(bbs->font), true, 1);
 		if (conn_connect(bbs)) {
 			load_font_files();
-			uifcbail();
 			textmode(txtinfo.currmode);
 			set_default_cursor();
 			fake_mode = -1;
-			init_uifc(true, true);
 			settitle("SyncTERM");
 		}
 		else {
                         /*
                          * ToDo: Update the entry with new lastconnected
-                         * ToDo: Disallow duplicate entries
-                         */
+			 * ToDo: Disallow duplicate entries
+			 */
 			bbs->connected = time(NULL);
-			bbs->fast_connected = xp_fast_timer64();
 			bbs->calls++;
 			if (bbs->id != -1) {
 				if (bbs->type == SYSTEM_BBSLIST) {
 					bbs->type = USER_BBSLIST;
 					add_bbs(settings.list_path, bbs, false);
 				}
-				if ((listfile = fopen(settings.list_path, "r+b")) != NULL) {
+				if (!safe_mode && (listfile = fopen(settings.list_path, "r+b")) != NULL) {
 					inifile = iniReadBBSList(listfile, true);
 					iniSetDateTime(&inifile,
 					    bbs->name,
@@ -2388,18 +2698,17 @@ main(int argc, char **argv)
 					    bbs->connected,
 					    &ini_style);
 					iniSetInteger(&inifile, bbs->name, "TotalCalls", bbs->calls, &ini_style);
-					iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password, NULL);
+					iniWriteEncryptedFile(listfile, inifile, list_algo, list_keysize, settings.keyDerivationIterations, list_password);
 					fclose(listfile);
 					strListFree(&inifile);
 				}
 			}
-			uifcbail();
 			sprintf(str, "SyncTERM - %s", bbs->name);
 			settitle(str);
 			term.nostatus = bbs->nostatus;
 			if (drawwin())
 				return 1;
-			if ((log_fp == NULL) && bbs->logfile[0])
+			if (!safe_mode && (log_fp == NULL) && bbs->logfile[0])
 				log_fp = fopen(bbs->logfile, bbs->append_logfile ? "a" : "w");
 			if (log_fp != NULL) {
 				time_t now = time(NULL);
@@ -2441,27 +2750,10 @@ main(int argc, char **argv)
 		}
 		if (quitting || url[0]) {
 			if ((bbs != NULL) && (bbs->id == -1)) {
-				if (!safe_mode) {
-					if (settings.prompt_save) {
-						char *YesNo[3] = {"Yes", "No", ""};
-
-                                                /* Started from the command-line with a URL */
-						init_uifc(true, true);
-						i = 1;
-						if (!bbs->hidepopups) {
-							switch (uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, NULL,
-							    "Save this directory entry?", YesNo)) {
-								case 0: /* Yes */
-									edit_list(NULL, bbs, settings.list_path, false);
-									add_bbs(settings.list_path, bbs, false);
-									last_bbs = strdup(bbs->name);
-									break;
-								default: /* ESC/No */
-									break;
-							}
-						}
-					}
-				}
+				/* Started from the command line with a URL. */
+				if (!safe_mode && settings.prompt_save &&
+				    !bbs->hidepopups)
+					(void)wren_menu_host_offer_save_bbs(bbs);
 			}
 			if (bbs_alloc) {
 				bbs_alloc = false;
@@ -2495,8 +2787,9 @@ main(int argc, char **argv)
 	gettextinfo(&txtinfo);
 
         // Only save window info if we're in the startup mode...
-	if ((txtinfo.currmode == screen_to_ciolib(settings.startup_mode))
-	    || ((settings.startup_mode == SCREEN_MODE_CURRENT) && (txtinfo.currmode == C80))) {
+	if (!safe_mode
+	    && ((txtinfo.currmode == screen_to_ciolib(settings.startup_mode))
+	    || ((settings.startup_mode == SCREEN_MODE_CURRENT) && (txtinfo.currmode == C80)))) {
 		sf = getscaling();
 		if (((sf > 0.0) && (sf != settings.scaling_factor))) {
 			char       inipath[MAX_PATH + 1];
@@ -2521,7 +2814,6 @@ main(int argc, char **argv)
 		}
 	}
 
-	uifcbail();
 #ifdef _WINSOCKAPI_
 	if (WSAInitialized && (WSACleanup() != 0))
 		fprintf(stderr, "!WSACleanup ERROR %d", ERROR_VALUE);
@@ -2533,7 +2825,6 @@ USAGE:
 		free(bbs);
 	if (cio_api.mode == CIOLIB_MODE_AUTO && isatty(STDOUT_FILENO))
 		initciolib(CIOLIB_MODE_ANSI);
-	uifcbail();
 	clrscr();
 	gettextinfo(&txtinfo);
 	p = lp = usage;
@@ -2549,11 +2840,8 @@ USAGE:
 		if (i >= txtinfo.screenheight - 1) {
 			textattr(WHITE);
 			cputs("<Press A Key>");
-			switch (getch()) {
-				case 0:
-				case 0xe0:
-					getch();
-			}
+			if (syncterm_getkey() == CIO_KEY_QUIT)
+				return 0;
 			textattr(LIGHTGRAY);
 			gotoxy(1, txtinfo.screenheight);
 			delline();
@@ -2566,11 +2854,7 @@ USAGE:
 	}
 	else {
 		cputs("<Press A Key to Exit>");
-		switch (getch()) {
-			case 0:
-			case 0xe0:
-				getch();
-		}
+		(void)syncterm_getkey();
 	}
 	textattr(LIGHTGRAY);
 	return 0;

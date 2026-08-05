@@ -500,11 +500,11 @@ static void add_suffix(char* str, size_t size, const char* suffix)
 	if (strcmp(str, "1") == 0)
 		plural = "";
 	if (is_word) {
-		strlcat(str, " ", size);
-		strlcat(str, suffix, size);
-		strlcat(str, plural, size);
+		(void)strlcat(str, " ", size);
+		(void)strlcat(str, suffix, size);
+		(void)strlcat(str, plural, size);
 	} else
-		strlcat(str, suffix, size);
+		(void)strlcat(str, suffix, size);
 }
 
 /* Convert a duration estimate (in seconds) to a string
@@ -1033,6 +1033,57 @@ int64_t xp_fast_timer64(void)
 		ret = -1;
 #elif defined(_WIN32)
 	ret = GetTickCount() / 1000;
+#else
+#error no high-resolution time for this platform
+#endif
+	return ret;
+}
+
+/****************************************************************************/
+/* Returns the current value of the system's worst timer (in MILLISECONDS)	*/
+/* A value of -1 may indicate an error										*/
+/****************************************************************************/
+int64_t xp_fast_timer64_ms(void)
+{
+	int64_t          ret;
+#if defined(__unix__)
+	struct timespec  ts;
+	static clockid_t cid = CLOCK_REALTIME;
+
+#ifdef CLOCK_MONOTONIC_COARSE
+	if (cid == CLOCK_REALTIME) {
+		if (clock_getres(CLOCK_MONOTONIC_COARSE, &ts) == 0)
+			cid = CLOCK_MONOTONIC_COARSE;
+	}
+#endif
+#ifdef CLOCK_MONOTONIC_FAST
+	if (cid == CLOCK_REALTIME) {
+		if (clock_getres(CLOCK_MONOTONIC_FAST, &ts) == 0)
+			cid = CLOCK_MONOTONIC_FAST;
+	}
+#endif
+#ifdef CLOCK_MONOTONIC_RAW
+	if (cid == CLOCK_REALTIME) {
+		if (clock_getres(CLOCK_MONOTONIC_RAW, &ts) == 0)
+			cid = CLOCK_MONOTONIC_RAW;
+	}
+#endif
+#ifdef CLOCK_MONOTONIC
+	if (cid == CLOCK_REALTIME) {
+		cid = CLOCK_MONOTONIC;
+		if (clock_getres(CLOCK_MONOTONIC, &ts) == 0)
+			cid = CLOCK_MONOTONIC;
+	}
+#endif
+
+	if (clock_gettime(cid, &ts) == 0) {
+		ret = ts.tv_sec * 1000;
+		ret += ts.tv_nsec / 1000000;
+	}
+	else
+		ret = -1;
+#elif defined(_WIN32)
+	ret = GetTickCount();
 #else
 #error no high-resolution time for this platform
 #endif

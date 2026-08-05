@@ -8,6 +8,7 @@ OBJS	=		$(LOAD_CFG_OBJS) \
 			$(MTOBJODIR)/answer$(OFILE)\
 			$(MTOBJODIR)/atcodes$(OFILE)\
 			$(MTOBJODIR)/bat_xfer$(OFILE)\
+			$(MTOBJODIR)/boolsrch$(OFILE)\
 			$(MTOBJODIR)/bulkmail$(OFILE)\
 			$(MTOBJODIR)/chat$(OFILE)\
 			$(MTOBJODIR)/chk_ar$(OFILE)\
@@ -60,6 +61,7 @@ OBJS	=		$(LOAD_CFG_OBJS) \
 			$(MTOBJODIR)/js_server$(OFILE)\
 			$(MTOBJODIR)/js_socket$(OFILE)\
 			$(MTOBJODIR)/js_sprintf$(OFILE)\
+			$(MTOBJODIR)/js_sqlite$(OFILE)\
 			$(MTOBJODIR)/js_system$(OFILE)\
 			$(MTOBJODIR)/js_user$(OFILE)\
 			$(MTOBJODIR)/js_xtrn_area$(OFILE)\
@@ -74,6 +76,10 @@ OBJS	=		$(LOAD_CFG_OBJS) \
 			$(MTOBJODIR)/msgdate$(OFILE)\
 			$(MTOBJODIR)/msgtoqwk$(OFILE)\
 			$(MTOBJODIR)/mqtt$(OFILE)\
+			$(MTOBJODIR)/mqtt_protocol$(OFILE)\
+			$(MTOBJODIR)/mqtt_topic$(OFILE)\
+			$(MTOBJODIR)/mqtt_broker$(OFILE)\
+			$(MTOBJODIR)/mqtt_client$(OFILE)\
 			$(MTOBJODIR)/netmail$(OFILE)\
 			$(MTOBJODIR)/newuser$(OFILE)\
 			$(MTOBJODIR)/pack_qwk$(OFILE)\
@@ -123,6 +129,7 @@ FTP_OBJS	= $(MTOBJODIR)/ftpsrvr$(OFILE) \
 MAIL_OBJS	= $(MTOBJODIR)/mailsrvr$(OFILE) \
 			$(MTOBJODIR)/mxlookup$(OFILE) \
  		  	$(MTOBJODIR)/mime$(OFILE) \
+ 		  	$(MTOBJODIR)/mail_dkim$(OFILE) \
  		  	$(MTOBJODIR)/nopen$(OFILE) \
  		  	$(MTOBJODIR)/ars$(OFILE)
 
@@ -184,6 +191,7 @@ MAKEUSER_OBJS = 	$(LOAD_CFG_OBJS) \
 			$(OBJODIR)/date_str$(OFILE) \
 			$(OBJODIR)/dat_rec$(OFILE) \
 			$(OBJODIR)/userdat$(OFILE) \
+			$(OBJODIR)/getmail$(OFILE) \
 			$(OBJODIR)/trash$(OFILE) \
 			$(OBJODIR)/getstats$(OFILE) \
 			$(OBJODIR)/msgdate$(OFILE)
@@ -203,6 +211,7 @@ JSDOOR_OBJS = 		$(LOAD_CFG_OBJS) \
 			$(MTOBJODIR)/js_conio$(OFILE) \
 			$(MTOBJODIR)/js_request$(OFILE) \
 			$(MTOBJODIR)/js_socket$(OFILE) \
+			$(MTOBJODIR)/js_sqlite$(OFILE) \
 			$(MTOBJODIR)/comio$(OFILE)\
 			$(MTOBJODIR)/js_client$(OFILE) \
 			$(MTOBJODIR)/js_com$(OFILE) \
@@ -221,6 +230,7 @@ JSDOOR_OBJS = 		$(LOAD_CFG_OBJS) \
 			$(MTOBJODIR)/scfgsave$(OFILE)\
 			$(MTOBJODIR)/wordwrap$(OFILE)\
 			$(MTOBJODIR)/userdat$(OFILE)\
+			$(MTOBJODIR)/getmail$(OFILE)\
 			$(MTOBJODIR)/trash$(OFILE)\
 			$(MTOBJODIR)/msgdate$(OFILE)\
 			$(MTOBJODIR)/filedat$(OFILE)\
@@ -258,6 +268,7 @@ UPGRADE_TO_V319_OBJS  =	$(LOAD_CFG_OBJS) \
                         $(OBJODIR)/filedat$(OFILE) \
                         $(OBJODIR)/sauce$(OFILE) \
                         $(OBJODIR)/userdat$(OFILE) \
+                        $(OBJODIR)/getmail$(OFILE) \
                         $(OBJODIR)/trash$(OFILE) \
                         $(OBJODIR)/dat_rec$(OFILE) \
 			$(OBJODIR)/getstats$(OFILE) \
@@ -265,6 +276,7 @@ UPGRADE_TO_V319_OBJS  =	$(LOAD_CFG_OBJS) \
 
 UPGRADE_TO_V320_OBJS  = $(LOAD_CFG_OBJS) \
 			$(OBJODIR)/userdat$(OFILE) \
+			$(OBJODIR)/getmail$(OFILE) \
 			$(OBJODIR)/trash$(OFILE) \
 			$(OBJODIR)/dat_rec$(OFILE) \
 			$(OBJODIR)/getstats$(OFILE) \

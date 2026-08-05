@@ -49,6 +49,7 @@
 #include "ssl.h"
 #include "filterfile.hpp"
 #include "ratelimit.hpp"
+#include "ratelimit_filter.hpp"
 #include "git_branch.h"
 #include "git_hash.h"
 
@@ -62,12 +63,13 @@ static services_startup_t* startup = NULL;
 static scfg_t              scfg;
 static char*               text[TOTAL_TEXT];
 static bool                terminated = false;
-static int64_t             uptime = 0;
+static time_t              uptime = 0;
 static ulong               served = 0;
 static volatile uint32_t   client_highwater = 0;
 static str_list_t          pause_semfiles;
 static str_list_t          recycle_semfiles;
 static str_list_t          shutdown_semfiles;
+static str_list_t          clear_attempts_semfiles;
 static protected_uint32_t  threads_pending_start;
 static struct mqtt         mqtt;
 
@@ -280,7 +282,7 @@ static void thread_down(void)
 
 void open_socket_cb(SOCKET sock, void *serv_ptr)
 {
-	char       error[256];
+	char       error[SOCKET_STRERROR_BUFLEN];
 	char       section[128];
 	service_t *serv = (service_t *)serv_ptr;
 
@@ -309,7 +311,7 @@ static SOCKET open_socket(int family, int type, service_t* serv)
 
 static int close_socket(SOCKET sock)
 {
-	char err[128];
+	char err[SOCKET_STRERROR_BUFLEN];
 	int  result;
 
 	if (sock == INVALID_SOCKET)
@@ -387,6 +389,7 @@ static void badlogin(SOCKET sock, char* user, char* passwd, client_t* client, un
 
 	SAFEPRINTF(reason, "%s LOGIN", client->protocol);
 	count = loginFailure(startup->login_attempt_list, addr, client->protocol, user, passwd, &attempt);
+	mqtt_pub_login_attempt(&mqtt, &attempt);
 	if (count > 1)
 		lprintf(LOG_NOTICE, "%04d %s [%s] !%lu " STR_FAILED_LOGIN_ATTEMPTS " in %s"
 		        , sock, client->protocol, client->addr, count, duration_estimate_to_vstr(attempt.time - attempt.first, tmp, sizeof tmp, 1, 1));
@@ -401,7 +404,9 @@ static void badlogin(SOCKET sock, char* user, char* passwd, client_t* client, un
 	if (startup->login_attempt.filter_threshold && count >= startup->login_attempt.filter_threshold) {
 		snprintf(reason, sizeof reason, "%lu " STR_FAILED_LOGIN_ATTEMPTS " in %s"
 		         , count, duration_estimate_to_str(attempt.time - attempt.first, tmp, sizeof tmp, 1, 1));
-		filter_ip(&scfg, client->protocol, reason, client->host, client->addr, user, /* fname: */ NULL, startup->login_attempt.filter_duration);
+		if (filter_ip(&scfg, client->protocol, reason, client->host, client->addr, user, /* fname: */ NULL, startup->login_attempt.filter_duration))
+			lprintf(LOG_NOTICE, "%04d %s !BLOCKING IP ADDRESS: %s in %s"
+			        , sock, client->protocol, client->addr, ip_can.fname);
 	}
 
 	mswait(startup->login_attempt.delay);
@@ -537,8 +542,11 @@ js_login(JSContext *cx, uintN argc, jsval *arglist)
 		errprintf(LOG_ERR, WHERE, "%04d %s Error setting logged_in property for %s"
 		          , client->socket, client->service->protocol, client->user.alias);
 
-	if (client->user.pass[0])
+	if (client->user.pass[0]) {
 		loginSuccess(startup->login_attempt_list, &client->addr);
+		if (client->client != NULL)
+			mqtt_pub_login_attempt_clear(&mqtt, client->client->addr);
+	}
 
 	JS_SET_RVAL(cx, arglist, BOOLEAN_TO_JSVAL(JS_TRUE));
 
@@ -920,6 +928,12 @@ js_initcx(JSRuntime* js_runtime, SOCKET sock, service_client_t* service_client, 
 		if (js_CreateFileClass(js_cx, *glob) == NULL)
 			break;
 
+#ifdef USE_SQLITE
+		/* SQLite Class */
+		if (js_CreateSQLiteClass(js_cx, *glob) == NULL)
+			break;
+#endif
+
 		/* Queue Class */
 		if (js_CreateQueueClass(js_cx, *glob) == NULL)
 			break;
@@ -1005,6 +1019,24 @@ js_OperationCallback(JSContext *cx)
 	/* Terminated? */
 	if (client->callback.auto_terminate && terminated) {
 		JS_ReportWarning(cx, "Terminated");
+		client->callback.counter = 0;
+		JS_SetOperationCallback(cx, js_OperationCallback);
+		return JS_FALSE;
+	}
+
+	/* Disconnection check (added in ead5ccf16): abort the script after its client socket has been
+	   gone for JS_DISCONNECT_TERMINATE_COUNT operation-callbacks.  Enabled by default for
+	   per-connection services via the js.terminate_on_disconnect property; a script that
+	   intentionally keeps working after its peer disconnects (e.g. binkit, which finishes the batch,
+	   updates binkstats.ini and touches the FTN event semaphores) opts out by setting
+	   js.terminate_on_disconnect=false.  This is a peer of, but distinct from, auto_terminate (server
+	   shutdown/recycle), so it can be toggled without affecting terminate-on-server-shutdown.  Static
+	   services have no per-client connection (client->socket is unset/0), so the check never applies
+	   to them anyway - it would false-positive and abort long-lived static services (IRC, MRC). */
+	if (client->callback.terminate_on_disconnect && !(client->service->options & SERVICE_OPT_STATIC)
+	    && !socket_check(client->socket, nullptr, nullptr, 0)
+	    && ++client->callback.offline_counter >= JS_DISCONNECT_TERMINATE_COUNT) {
+		JS_ReportWarning(cx, "Disconnected");
 		client->callback.counter = 0;
 		JS_SetOperationCallback(cx, js_OperationCallback);
 		return JS_FALSE;
@@ -1179,7 +1211,7 @@ static void js_service_thread(void* arg)
 		} else {
 			HANDLE_CRYPT_CALL(add_private_key(&scfg, lprintf, service_client.tls_sess), &service_client, "setting private key");
 		}
-		bool nodelay = true;
+		int nodelay = true;
 		setsockopt(socket, IPPROTO_TCP, TCP_NODELAY, (char*)&nodelay, sizeof(nodelay));
 
 		HANDLE_CRYPT_CALL(cryptSetAttribute(service_client.tls_sess, CRYPT_SESSINFO_NETWORKSOCKET, socket), &service_client, "setting network socket");
@@ -1359,6 +1391,7 @@ static void js_static_service_thread(void* arg)
 	protected_uint32_adjust(&threads_pending_start, -1);
 
 	memset(&service_client, 0, sizeof(service_client));
+	service_client.socket = INVALID_SOCKET; /* static service: no per-client connection */
 	service_client.set = service->set;
 	service_client.service = service;
 	service_client.callback.limit = service->js.time_limit;
@@ -1366,6 +1399,7 @@ static void js_static_service_thread(void* arg)
 	service_client.callback.yield_interval = service->js.yield_interval;
 	service_client.callback.terminated = &service->terminated;
 	service_client.callback.auto_terminate = true;
+	service_client.callback.terminate_on_disconnect = true;  // static services are exempt via the guard in js_OperationCallback
 
 	if ((js_runtime = jsrt_GetNew(service->js.max_bytes, 5000, __FILE__, __LINE__)) == NULL) {
 		if (service->log_level >= LOG_ERR)
@@ -1626,6 +1660,10 @@ static void native_service_thread(void* arg)
 	client_on(socket, &client, false /* update */);
 
 	if (startup->login_attempt.throttle
+	    /* loginAttempts acquires and releases list->mutex internally — the mutex
+	     * is NOT held across the mswait below or at thread exit. */
+	    // coverity[LOCK:SUPPRESS]
+	    // coverity[SLEEP:SUPPRESS]
 	    && (login_attempts = loginAttempts(startup->login_attempt_list, &service_client.addr)) > 1) {
 		lprintf(LOG_DEBUG, "%04d %s Throttling suspicious connection from: %s (%lu login attempts)"
 		        , socket, service->protocol, client.addr, login_attempts);
@@ -1817,12 +1855,13 @@ static void cleanup(int code)
 	semfile_list_free(&pause_semfiles);
 	semfile_list_free(&recycle_semfiles);
 	semfile_list_free(&shutdown_semfiles);
+	semfile_list_free(&clear_attempts_semfiles);
 
 	update_clients();
 
 #ifdef _WINSOCKAPI_
 	if (WSAInitialized) {
-		char err[128];
+		char err[SOCKET_STRERROR_BUFLEN];
 		if (WSACleanup() != 0)
 			lprintf(LOG_ERR, "0000 !WSACleanup ERROR %d: %s", SOCKET_ERRNO, SOCKET_STRERROR(err, sizeof(err)));
 		WSAInitialized = false;
@@ -1874,7 +1913,7 @@ void service_udp_sock_cb(SOCKET sock, void *cbdata)
 {
 	service_t *serv = (service_t *)cbdata;
 	int        optval;
-	char       err[128];
+	char       err[SOCKET_STRERROR_BUFLEN];
 
 	open_socket_cb(sock, cbdata);
 
@@ -1937,7 +1976,7 @@ void services_thread(void* arg)
 {
 	char*             p;
 	char              path[MAX_PATH + 1];
-	char              error[256];
+	char              error[SOCKET_STRERROR_BUFLEN];
 	char              host_ip[64];
 	char              compiler[32];
 	char              str[128];
@@ -2070,7 +2109,7 @@ void services_thread(void* arg)
 		}
 
 		if (uptime == 0)
-			uptime = xp_fast_timer64();
+			uptime = time(NULL);
 
 		iniFileName(services_ini, sizeof(services_ini), scfg.ctrl_dir, startup->services_ini);
 
@@ -2159,6 +2198,7 @@ void services_thread(void* arg)
 		shutdown_semfiles = semfile_list_init(scfg.ctrl_dir, "shutdown", "services");
 		pause_semfiles = semfile_list_init(scfg.ctrl_dir, "pause", "services");
 		recycle_semfiles = semfile_list_init(scfg.ctrl_dir, "recycle", "services");
+		clear_attempts_semfiles = semfile_list_init(scfg.ctrl_dir, "clear", "services");
 		semfile_list_add(&recycle_semfiles, startup->ini_fname);
 		SAFEPRINTF(path, "%sservices.rec", scfg.ctrl_dir);    /* legacy */
 		semfile_list_add(&recycle_semfiles, path);
@@ -2166,6 +2206,7 @@ void services_thread(void* arg)
 		if (!initialized) {
 			semfile_list_check(&initialized, recycle_semfiles);
 			semfile_list_check(&initialized, shutdown_semfiles);
+			semfile_list_check(&initialized, clear_attempts_semfiles);
 		}
 
 		lprintf(LOG_INFO, "0000 Services thread started (%lu service sockets bound)", total_sockets);
@@ -2212,6 +2253,37 @@ void services_thread(void* arg)
 				set_state(SERVER_PAUSED);
 				SLEEP(startup->sem_chk_freq * 1000);
 				continue;
+			}
+			{
+				char clear_ip[INET6_ADDRSTRLEN] = {0};
+				bool do_clear = false;
+				if ((p = semfile_list_check(&initialized, clear_attempts_semfiles)) != NULL) {
+					semfile_first_line(p, clear_ip, sizeof(clear_ip));
+					lprintf(LOG_INFO, "0000 Clear Failed Login Attempts semaphore file (%s) detected%s%s"
+					        , p, clear_ip[0] ? " for IP " : "", clear_ip);
+					do_clear = true;
+				}
+				if (startup->clear_attempts_now) {
+					if (clear_ip[0] == '\0' && mqtt.clear_attempts_ip[0] != '\0')
+						SAFECOPY(clear_ip, mqtt.clear_attempts_ip);
+					lprintf(LOG_INFO, "0000 Clear Failed Login Attempts signaled%s%s"
+					        , clear_ip[0] ? " for IP " : "", clear_ip);
+					startup->clear_attempts_now = false;
+					mqtt.clear_attempts_ip[0] = '\0';
+					do_clear = true;
+				}
+				if (do_clear) {
+					if (clear_ip[0] != '\0') {
+						long removed = loginAttemptListClearAddr(startup->login_attempt_list, clear_ip);
+						if (removed < 0)
+							lprintf(LOG_WARNING, "0000 Failed to clear login attempts for IP %s (invalid address?)", clear_ip);
+						else
+							lprintf(removed == 0 ? LOG_DEBUG : LOG_INFO
+							        , "0000 Cleared %ld login attempt(s) for IP %s", removed, clear_ip);
+						mqtt_pub_login_attempt_clear(&mqtt, clear_ip);
+					} else
+						mqtt_clear_login_attempt_list(&mqtt, startup->login_attempt_list);
+				}
 			}
 
 			if (startup->max_connects_per_period > 0 && startup->connect_rate_limit_period > 0
@@ -2432,7 +2504,21 @@ void services_thread(void* arg)
 					}
 
 					if (!host_exempt.listed(host_ip, nullptr)) {
-						if (ip_silent_can.listed(host_ip) || !connect_rate_limiter->allowRequest(host_ip)) {
+						if (ip_silent_can.listed(host_ip)) {
+							FREE_AND_NULL(udp_buf);
+							close_socket(client_socket);
+							continue;
+						}
+						std::string rl_key = rate_limit_key(host_ip, &startup->rate_limit);
+						unsigned    denials = 0;
+						if (!connect_rate_limiter->allowRequest(rl_key, &denials
+						        , rl_key == host_ip ? std::string() : std::string(host_ip))) {
+							lprintf(LOG_NOTICE, "%04d %s [%s] !Connection rate limit exceeded (%u over %us) for %s"
+							    , client_socket, service[i].protocol, host_ip
+							    , connect_rate_limiter->maxRequests, connect_rate_limiter->timeWindowSeconds, rl_key.c_str());
+							rate_limit_filter(client_socket, &scfg, service[i].protocol, host_ip, /* host_name: */ NULL
+							    , rl_key, denials, connect_rate_limiter
+							    , &startup->rate_limit, lprintf);
 							FREE_AND_NULL(udp_buf);
 							close_socket(client_socket);
 							continue;
@@ -2471,6 +2557,8 @@ void services_thread(void* arg)
 
 					if (!host_exempt.listed(host_ip, nullptr)) {
 						login_attempt_t attempted;
+						/* loginBanned acquires and releases list->mutex internally — no caller-held lock. */
+						// coverity[LOCK:SUPPRESS]
 						ulong           banned = loginBanned(&scfg, startup->login_attempt_list, client_socket, /* host_name: */ NULL, startup->login_attempt, &attempted);
 						if (banned) {
 							char ban_duration[128];
@@ -2520,6 +2608,7 @@ void services_thread(void* arg)
 					client->callback.yield_interval = service[i].js.yield_interval;
 					client->callback.terminated     = &client->service->terminated;
 					client->callback.auto_terminate = true;
+					client->callback.terminate_on_disconnect = true;  // ead5ccf16: abort on client disconnect; scripts opt out via js.terminate_on_disconnect=false (e.g. binkit)
 
 					udp_buf = NULL;
 

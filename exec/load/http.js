@@ -19,6 +19,8 @@ function HTTPRequest(username,password,extra_headers,recv_timeout)
 	this.base = undefined;
 	this.url = undefined;
 	this.body = undefined;
+	this.output_file = undefined;	/* set to a File (opened "wb") to stream the response body to disk instead of buffering it in this.body */
+	this.body_length = 0;		/* bytes received for the last response body (to string or file) */
 
 	this.extra_headers = extra_headers;
 	this.username=username;
@@ -184,10 +186,27 @@ HTTPRequest.prototype.ReadHeaders=function() {
 
 HTTPRequest.prototype.ReadBody=function() {
 	var ch;
-	var lastlen=0;
 	var len=this.contentlength;
 	if(len==undefined)
 		len=1024;
+
+	/* Stream the body straight to a file when output_file is set, instead of
+	 * buffering the whole download in a string (costly/risky for large files
+	 * under SpiderMonkey 1.8.5). Only for a final success (2xx) response: a
+	 * redirect (3xx) body is discarded so Get() can re-request, and a 4xx/5xx
+	 * error body stays in this.body for the caller to inspect. Reads in bounded
+	 * chunks so a huge Content-Length doesn't size a single recv(). */
+	if(this.output_file != undefined
+		&& this.response_code >= 200 && this.response_code < 300) {
+		this.body = undefined;
+		this.body_length = 0;
+		while((ch=this.sock.recv(16384, this.recv_timeout))!=null && ch != '') {
+			if(!this.output_file.write(ch))
+				throw new Error("Error writing to file: " + this.output_file.name);
+			this.body_length += ch.length;
+		}
+		return;
+	}
 
 	this.body='';
 	while((ch=this.sock.recv(len, this.recv_timeout))!=null && ch != '') {
@@ -197,6 +216,7 @@ HTTPRequest.prototype.ReadBody=function() {
 			len=1024;
 		js.flatten_string(this.body);
 	}
+	this.body_length = this.body.length;
 };
 
 HTTPRequest.prototype.ReadResponse=function() {
@@ -232,12 +252,133 @@ HTTPRequest.prototype.Get=function(url, referer, base) {
 	return(this.body);
 };
 
+/* Download a URL straight to a file, streaming the body to disk rather than
+ * buffering it in memory -- suitable for large files. Opens `filename` in binary
+ * mode, follows redirects (set .follow_redirects first if needed), and closes the
+ * file before returning. Returns the number of body bytes written to the file.
+ * The HTTP status is in .response_code -- check it for 200: a non-2xx response
+ * writes no file data and leaves the (error/redirect) body in .body. Throws on a
+ * socket or file error. */
+HTTPRequest.prototype.Download=function(url, filename, referer, base) {
+	var f = new File(filename);
+	if(!f.open("wb"))
+		throw new Error("Unable to open file for writing: " + filename);
+	this.output_file = f;
+	try {
+		this.Get(url, referer, base);
+	} finally {
+		f.close();
+		this.output_file = undefined;
+	}
+	return (this.response_code >= 200 && this.response_code < 300) ? this.body_length : 0;
+};
+
 HTTPRequest.prototype.Post=function(url, data, referer, base, content_type) {
 	this.SetupPost(url,referer,base,data, content_type);
 	this.BasicAuth();
 	this.SendRequest();
 	this.ReadResponse();
 	return(this.body);
+};
+
+/* Streaming POST: same shape as Post(), but reads the response in chunks
+ * and invokes `on_chunk(text)` for each body chunk as it arrives. Returns
+ * the full accumulated body string after the stream completes.
+ *
+ * Handles HTTP/1.1 chunked transfer encoding, which is what server-sent
+ * events (SSE) and similar streaming APIs use. Falls back to a single
+ * on_chunk call with the whole body if the server doesn't chunk.
+ *
+ * Sends HTTP/1.1 (vs the default Post()'s 1.0) because chunked transfer
+ * is an HTTP/1.1 feature -- servers using non-chunked frames over 1.0
+ * still work but won't actually stream incrementally. */
+HTTPRequest.prototype.SetupPostStreaming = function(url, referer, base, data, content_type) {
+	if (content_type === undefined)
+		content_type = 'application/x-www-form-urlencoded';
+	this.referer = referer;
+	this.base    = base;
+	this.url     = new URL(url, this.base);
+	if (this.url.scheme != 'http' && this.url.scheme != 'https')
+		throw new Error("Unknown scheme! '" + this.url.scheme + "' in url: " + url);
+	if (this.url.path == '')
+		this.url.path = '/';
+	this.request = "POST " + this.url.request_path + " HTTP/1.1";
+	this.request_headers = [];
+	this.AddDefaultHeaders();
+	this.AddExtraHeaders();
+	this.body = data;
+	this.request_headers.push("Content-Type: " + content_type);
+	this.request_headers.push("Content-Length: " + data.length);
+};
+
+/* Read a chunked-transfer-encoded body, calling on_chunk(text) for each
+ * chunk as it arrives. Decodes the wire format:
+ *     <hex_size>\r\n   (optional ";chunk-extension" after the size)
+ *     <bytes>\r\n
+ *     ...repeats...
+ *     0\r\n
+ *     \r\n              (optional trailers, then empty line)
+ * Sets this.body to the accumulated text. */
+HTTPRequest.prototype.ReadChunkedBody = function(on_chunk) {
+	var accum = '';
+	while (true) {
+		var size_line = this.sock.recvline(64, this.recv_timeout);
+		if (size_line == null)
+			throw new Error("Unable to read chunk size");
+		/* Chunk-size lines can have ";extension" after hex size. */
+		var hex = size_line.replace(/[\r\n;].*$/, '').replace(/^\s+|\s+$/g, '');
+		var chunk_size = parseInt(hex, 16);
+		if (isNaN(chunk_size))
+			throw new Error("Bad chunk size: '" + size_line + "'");
+		if (chunk_size == 0) {
+			/* End of stream: read trailing CRLF (or trailer headers) */
+			while (true) {
+				var trailer = this.sock.recvline(4096, this.recv_timeout);
+				if (trailer == null || trailer == '') break;
+			}
+			break;
+		}
+		/* Read exactly chunk_size bytes. */
+		var remaining = chunk_size;
+		var chunk = '';
+		while (remaining > 0) {
+			var part = this.sock.recv(remaining, this.recv_timeout);
+			if (part == null || part == '')
+				throw new Error("Unable to read chunk data");
+			var s = part.toString();
+			chunk += s;
+			remaining -= s.length;
+		}
+		/* Consume the trailing CRLF after the chunk data. */
+		this.sock.recvline(4, this.recv_timeout);
+
+		accum += chunk;
+		if (on_chunk)
+			on_chunk(chunk);
+	}
+	this.body = accum;
+};
+
+HTTPRequest.prototype.PostStreaming = function(url, data, on_chunk, content_type, referer, base) {
+	this.SetupPostStreaming(url, referer, base, data, content_type);
+	this.BasicAuth();
+	this.SendRequest();
+	this.ReadStatus();
+	this.ReadHeaders();
+	var te_list = this.response_headers_parsed['transfer-encoding']
+	           || this.response_headers_parsed['Transfer-Encoding'];
+	var te = (te_list && te_list.length) ? te_list.join(' ').toLowerCase() : '';
+	if (te.indexOf('chunked') >= 0) {
+		this.ReadChunkedBody(on_chunk);
+	} else {
+		/* Non-chunked response: read the whole body, deliver as a single
+		 * chunk. Caller still gets the on_chunk callback so they don't
+		 * need separate code paths. */
+		this.ReadBody();
+		if (on_chunk && this.body)
+			on_chunk(this.body);
+	}
+	return this.body;
 };
 
 HTTPRequest.prototype.Head=function(url, referer, base) {

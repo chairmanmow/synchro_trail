@@ -29,7 +29,7 @@ if(js.global.console==undefined || !console.term_supports(USER_ANSI))
 
 var debug = false;
 
-var options=load({}, "modopts.js", "sbbslist", {});
+var options=load("modopts.js", "sbbslist", {});
 if(!options.sub)
     options.sub = load({}, "syncdata.js").find();
 if(!options.max_inactivity)
@@ -484,7 +484,7 @@ function import_from_msgbase(list, msgbase, import_ptr, limit, all)
 }
 
 // From sbldefs.h (Do not change, for backwards compatibility):
-const sbl_defs = {
+var sbl_defs = {
     MAX_SYSOPS:     5,
     MAX_NUMBERS:    20,
     MAX_NETS:       10,
@@ -679,6 +679,7 @@ function verify_services(address, timeout)
 		"pop3",
 		"imap",
 		"irc",
+		"finger",
     ];
     var udp_services=[
         "systat",
@@ -816,7 +817,7 @@ function console_beep()
 }
 
 /* Supported list formats (the property values for 2nd & 3rd columns) */
-const list_formats = [
+var list_formats = [
 	[ "sysops", "location" ],
 	[ "phone_number", "service_address" ],
 	[ "since", "software", "web_site" ],
@@ -2373,7 +2374,6 @@ function main()
 	}
 	if(cmds.indexOf("unlock") >= 0) {
 		return lib.unlock() == true ? 0: -1;
-		return 0;
 	}
 
     if(!file_exists(lib.list_fname)) {

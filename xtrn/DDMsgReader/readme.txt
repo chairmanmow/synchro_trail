@@ -1,6 +1,6 @@
                       Digital Distortion Message Reader
-                                 Version 1.97j
-                           Release date: 2026-03-14
+                                 Version 1.97o
+                           Release date: 2026-07-18
 
                                      by
 
@@ -167,9 +167,15 @@ confirmation before deleting the messages.
 If a message has been marked for deletion, it will appear in the message list
 with a blinking red asterisk (*) after the message number.
 
-When displaying a message to the user, this script will honor the attribute
-code toggles set up under Synchronet's configuration program (SCFG),
-under Message Options > Extra Attribute Codes.
+If a message has any of the supported color/attribute codes from different BBS
+software (WWIV, Wildcat, PCBoard, Renegade, or Celerity), this script will honor
+the attribute code toggle options for those BBS attribute codes. The attribute
+code toggles that will be used are in one of two places:
+- As of April 6, 2025 (for Synchronet 3.21), the attribute code toggles are
+  per sub-board, in SCFG > Message Areas > AREA > Message Sub-boards... >
+  SUB-BOARD > Toggle Options > Extra Attribute Codes.
+- For Synchronet systems before APril 6, 2025, this script will use the
+  attribute toggles in SCFG > Message Options > Extra Attribute Codes.
 
 As the sysop, when reading a message, the hotkey Ctrl-O will show the operator
 menu. Most of the operator menu items are already available, but the operator
@@ -675,18 +681,6 @@ readerInterfaceStyle                  The user interface style to use for the
                                       ANSI, the reader will use the traditional
                                       user interface instead, regardless of
                                       this setting.
-
-readerInterfaceStyleForANSIMessages   The user interface style to use for
-                                      reading messages with ANSI content.  Valid
-                                      values are Scrollable and Traditional.
-                                      The scrollable interface allows scrolling
-                                      the message up and down.  If false, the
-                                      reader will use a traditional (non-
-                                      scrolling) user interface to display
-                                      messages with ANSI content.  If a user is
-                                      not using ANSI, the reader will use the
-                                      traditional user interface instead,
-                                      regardless of this setting.
 
 displayBoardInfoInHeader              true/false: Whether or not to display sub-board
                                       information above the column headers when listing

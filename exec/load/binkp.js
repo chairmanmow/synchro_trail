@@ -1,4 +1,4 @@
-const binkp_revision = 4;
+var binkp_revision = 6;
 
 require('sockdefs.js', 'SOCK_STREAM');
 require('fido.js', 'FIDO');
@@ -690,6 +690,7 @@ BinkP.prototype.session = function()
 	var last = Date.now();
 	var cur_timeout;
 	var success = true;
+	var tlvl;
 
 	// Session set up, we're good to go!
 	outer:
@@ -772,8 +773,18 @@ BinkP.prototype.session = function()
 						break;
 					case this.command.M_EOB:
 						this.ack_file();
-						if (this.pending_ack.length > 0)
-							log(LOG_WARNING, "We got an M_EOB, but there are still "+this.pending_ack.length+" files pending M_GOT");
+						if (this.pending_ack.length > 0) {
+							// Mystic always hits this, but the transfer is successful.
+							tlvl = LOG_WARNING;
+							if (this.remote_ver !== undefined) {
+								m = this.remote_ver.match(/^Mystic\/1.12A([0-9]+)$/);
+								if (m !== null) {
+									if (parseInt(m[1], 10) <= 49)
+										tlvl = LOG_INFO;
+								}
+							}
+							log(tlvl, "We got an M_EOB, but there are still "+this.pending_ack.length+" files pending M_GOT");
+						}
 						else {
 							if (this.ver1_1) {
 								if (this.senteob >= 2 && this.goteob >= 2)
@@ -883,18 +894,31 @@ BinkP.prototype.session = function()
 			if (this.sending === undefined) {
 				if (this.receiving === undefined) {
 					if (this.ver1_1) {
-						if (this.senteob == 0 || (this.goteob))
+						if (this.senteob == 0 || (this.goteob)) {
 							if (!this.sendCmd(this.command.M_EOB)) {
-								success = false;
+								// Failure to send a closing M_EOB after all
+								// of our sent files have been acknowledged is
+								// benign - the peer has simply closed the
+								// connection first (common in binkp/1.1's
+								// two-M_EOB handshake, where completion can be
+								// reached by *sending* the final EOB, which the
+								// M_EOB receive-handler doesn't catch).  Only
+								// fail the session if files are still pending
+								// acknowledgement.
+								if (this.pending_ack.length > 0)
+									success = false;
 								break;
 							}
+						}
 					}
 					else {
-						if (!this.senteob)
+						if (!this.senteob) {
 							if (!this.sendCmd(this.command.M_EOB)) {
-								success = false;
+								if (this.pending_ack.length > 0)
+									success = false;
 								break;
 							}
+						}
 					}
 				}
 			}

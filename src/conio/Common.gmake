@@ -62,6 +62,7 @@ else
  CIOLIB-MT_LIBS += -lkernel32
  NO_X			 :=  1
  CIOLIB-MT_CFLAGS        +=  -DDISABLE_X11=1 -DNO_X
+ NEED_KEY_EVENTS := 1
  ifndef WITHOUT_GDI
   CIOLIB-MT_LIBS += -lgdi32 -mwindows
   CIOLIB-MT_CFLAGS += -DWITH_GDI
@@ -93,6 +94,34 @@ ifndef NO_X
  ifeq ($(shell pkg-config xrandr --exists && echo YES), YES)
   CIOLIB-MT_CFLAGS += $(shell pkg-config xrandr --cflags)
   CIOLIB-MT_CFLAGS += -DWITH_XRANDR
+ endif
+endif
+
+ifndef WITHOUT_QUARTZ
+ ifeq ($(os),darwin)
+  WITH_QUARTZ := 1
+  CIOLIB-MT_CFLAGS += -DWITH_QUARTZ
+  CIOLIB-MT_LIBS += -framework Cocoa -framework Carbon
+  NEED_BITMAP := 1
+  NEED_KEY_EVENTS := 1
+ endif
+endif
+
+ifndef WITHOUT_WAYLAND
+ ifndef win
+  ifeq ($(shell pkg-config 'wayland-client >= 1.19.91' --exists 2>/dev/null && echo YES), YES)
+   WITH_WAYLAND := 1
+   CIOLIB-MT_CFLAGS += -DWITH_WAYLAND
+   CIOLIB-MT_CFLAGS += $(shell pkg-config wayland-client --cflags-only-I)
+   NEED_KEY_EVENTS := 1
+  endif
+ endif
+endif
+
+# Quartz and SDL are mutually exclusive on macOS (both need the main thread)
+ifdef WITH_QUARTZ
+ ifdef USE_SDL
+  $(error WITH_QUARTZ and USE_SDL cannot both be enabled on macOS)
  endif
 endif
 
@@ -131,6 +160,7 @@ endif
 
 ifdef WITH_SDL
  NEED_BITMAP := 1
+ NEED_KEY_EVENTS := 1
  # Prefer local include over system includes.
  #CFLAGS += -I$(SRC_ROOT)/../include/sdl
  ifdef SDL_CONFIG
@@ -187,12 +217,23 @@ endif
 
 ifndef NO_X
  NEED_BITMAP := 1
+ NEED_KEY_EVENTS := 1
  CIOLIB_CFLAGS += -DHAS_VSTAT
  CIOLIB-MT_CFLAGS += -DHAS_VSTAT
 else
  ifdef WITH_SDL
   CIOLIB_CFLAGS += -DHAS_VSTAT
   CIOLIB-MT_CFLAGS += -DHAS_VSTAT
+ else
+  ifdef WITH_WAYLAND
+   CIOLIB_CFLAGS += -DHAS_VSTAT
+   CIOLIB-MT_CFLAGS += -DHAS_VSTAT
+  else
+   ifdef WITH_QUARTZ
+    CIOLIB_CFLAGS += -DHAS_VSTAT
+    CIOLIB-MT_CFLAGS += -DHAS_VSTAT
+   endif
+  endif
  endif
 endif
 
@@ -204,4 +245,9 @@ endif
 ifdef NEED_BITMAP
  CIOLIB_CFLAGS += -DHAS_BITMAP
  CIOLIB-MT_CFLAGS += -DHAS_BITMAP
+endif
+
+ifdef NEED_KEY_EVENTS
+ CIOLIB_CFLAGS += -DCIOLIB_KEY_EVENTS
+ CIOLIB-MT_CFLAGS += -DCIOLIB_KEY_EVENTS
 endif

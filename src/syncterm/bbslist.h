@@ -19,6 +19,7 @@
 
 #define LIST_NAME_MAX 30
 #define LIST_ADDR_MAX 64
+#define BBSLIST_MAX_ENTRIES 100000
 #define MAX_USER_LEN 30
 #define MAX_PASSWD_LEN 128
 #define MAX_SYSPASS_LEN 128
@@ -33,6 +34,18 @@ enum {
 	BBSLIST_SELECT
 	,
 	BBSLIST_EDIT
+};
+
+enum bbslist_read_status {
+	BBSLIST_READ_OK,
+	BBSLIST_READ_PASSWORD_REQUIRED,
+	BBSLIST_READ_DECRYPT_FAILED,
+	BBSLIST_READ_FAILED,
+	BBSLIST_READ_MIGRATION_LIST_OPEN_FAILED,
+	BBSLIST_READ_MIGRATION_INI_OPEN_FAILED,
+	BBSLIST_READ_MIGRATION_INI_READ_FAILED,
+	BBSLIST_READ_MIGRATION_LIST_WRITE_FAILED,
+	BBSLIST_READ_MIGRATION_INI_WRITE_FAILED,
 };
 
 enum {
@@ -124,7 +137,6 @@ struct bbslist {
 	short unsigned int port;
 	time_t             added;
 	time_t             connected;
-	int64_t            fast_connected;
 	unsigned int       calls;
 	char               user[MAX_USER_LEN + 1];
 	char               password[MAX_PASSWD_LEN + 1];
@@ -149,11 +161,18 @@ struct bbslist {
 	int                rip;
 	int                flow_control;
 	char               comment[1024];
+	char               wren_scripts[INI_MAX_VALUE_LEN];
 	bool               force_lcf;
 	bool               yellow_is_yellow;
-	bool               has_fingerprint;
-	uint8_t            ssh_fingerprint[20];
+	/* SSH host-key fingerprint.  ssh_fingerprint_len is 0 (no stored
+	   approval), 20 (legacy SHA-1 from the Cryptlib era), or 32
+	   (SHA-256).  A successful connect against a SHA-1 entry rewrites
+	   the stored value as SHA-256; new entries are always SHA-256. */
+	uint8_t            ssh_fingerprint_len;
+	uint8_t            ssh_fingerprint[32];
 	bool               sftp_public_key;
+	bool               ssh_allow_aes128_cbc;
+	bool               ssh_accept_early_data;
 	bool               telnet_no_binary;
 	bool               defer_telnet_negotiation;
 	// No way to get a uint8_t from an ini file.
@@ -164,13 +183,12 @@ struct bbslist {
 	uint32_t           palette[16];
 	unsigned           palette_size;
 	char               term_name[32];
+	bool               lf_expand;
 	int32_t            sort_order;
 };
 
 extern char *music_names[];
 extern char  music_helpbuf[];
-
-struct bbslist *show_bbslist(char *current, int connected);
 
 extern char       *log_levels[];
 extern char       *rate_names[];
@@ -178,19 +196,54 @@ extern int         rates[];
 extern int         sortorder[];
 extern ini_style_t ini_style;
 extern char       *screen_modes_enum[];
+extern char       *screen_modes[];
+extern char       *scaling_names[];
 extern char list_password[1024];
 extern enum iniCryptAlgo list_algo;
 extern int list_keysize;
 
+void init_sort_profiles(FILE *inifile);
+size_t bbslist_sort_field_count(void);
+const char *bbslist_sort_field_name(int field);
+bool bbslist_sort_field_reversed(int field);
+size_t bbslist_sort_profile_count(void);
+const char *bbslist_sort_profile_name(size_t index);
+size_t bbslist_sort_profile_order(size_t index, int *order,
+    size_t capacity);
+int bbslist_active_sort_profile(void);
+bool bbslist_set_active_sort_profile(size_t index);
+bool bbslist_add_sort_profile(size_t index, const char *name,
+    const int *order, size_t count);
+bool bbslist_update_sort_profile(size_t index, const char *name,
+    const int *order, size_t count);
+bool bbslist_delete_sort_profile(size_t index);
+bool bbslist_save_sort_profiles(void);
 void read_item(ini_fp_list_t *listfile, struct bbslist *entry, ini_lv_string_t *bbsname, int id, int type);
 void read_list(char *listpath, struct bbslist **list, struct bbslist *defaults, int *i, int type);
+bool read_list_password(const char *listpath, struct bbslist **list,
+    struct bbslist *defaults, int *count, int type, const char *password,
+    enum bbslist_read_status *status);
 void free_list(struct bbslist **list, int listcount);
-void add_bbs(char *listpath, struct bbslist *bbs, bool isnew);
-int edit_list(struct bbslist **list, struct bbslist *item, char *listpath, int isdefault);
+void sort_bbs_list(struct bbslist **list, int *listcount);
+bool add_bbs(const char *listpath, struct bbslist *bbs, bool isnew);
+bool save_bbs_defaults(const char *listpath, struct bbslist *defaults);
+bool rename_bbs(const char *listpath, const char *old_name,
+    struct bbslist *bbs);
+bool delete_bbs(const char *listpath, struct bbslist *bbs);
+bool bbslist_wren_script_name_valid(const char *name);
+str_list_t bbslist_get_wren_scripts(const struct bbslist *bbs);
+bool bbslist_set_wren_scripts(struct bbslist *bbs, const str_list_t scripts);
+bool rewrite_bbslist_kdf(const char *listpath, const char *kdf_spec);
+bool rewrite_bbslist_encryption(const char *listpath,
+    enum iniCryptAlgo algo, int keysize, const char *new_password);
+bool save_webgets(void);
+void bbslist_sweep_orphan_caches(struct bbslist **list, size_t listcount);
 int get_rate_num(int rate);
 cterm_emulation_t get_emulation(struct bbslist *bbs);
 const char *get_emulation_str(struct bbslist *bbs);
-void get_term_size(struct bbslist *bbs, int *cols, int *rows);
 str_list_t iniReadBBSList(FILE *fp, bool userList);
+str_list_t iniReadBBSListPassword(FILE *fp, bool userList,
+    const char *password, enum bbslist_read_status *status);
+const char *bbslist_read_status_string(enum bbslist_read_status status);
 
 #endif // ifndef _BBSLIST_H_

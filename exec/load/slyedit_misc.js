@@ -103,7 +103,10 @@ var gConfiguredCharset = "";
 //                   this means is that text below it won't be wrapped up
 //                   to this line when re-adjusting the text lines.
 //  pIsQuoteLine: Whether or not the line is a quote line.
-function TextLine(pText, pHardNewlineEnd, pIsQuoteLine)
+//  pUseLiteralText: Optional boolean - Whether or not to use the text literally
+//                   as it is (don't interpret attribute codes, etc.).
+//                   Defaults to false.
+function TextLine(pText, pHardNewlineEnd, pIsQuoteLine, pUseLiteralText)
 {
 	this.text = "";              // The line text
 	this.hardNewlineEnd = false; // Whether or not the line has a hard newline at the end
@@ -140,9 +143,15 @@ function TextLine(pText, pHardNewlineEnd, pIsQuoteLine)
 	this.popAttrsFromFront = TextLine_popAttrsFromFront;
 	this.popAttrsFromEnd = TextLine_popAttrsFromEnd;
 
-	// If pText is a string, then set the text, accounting for attribute codes
+	// If pText is a string, then set the text
 	if (typeof(pText) === "string")
-		this.setText(pText);
+	{
+		var useLiteralText = (typeof(pUseLiteralText) === "boolean" ? pUseLiteralText : false);
+		if (useLiteralText)
+			this.text = pText;
+		else
+			this.setText(pText);
+	}
 }
 // For the TextLine class: Returns whether the line a quote line.  This is true if
 // the line's isQuoteLine property is true.  If the line's text is empty, then this
@@ -3763,6 +3772,13 @@ function ReadUserSettingsFile(pSlyEdCfgObj)
 		dictionaryFilenames: pSlyEdCfgObj.dictionaryFilenames
 	};
 
+	// If the current logged-in user is a G-restricted user (guest), then don't load user
+	// settings, just return the default user settings.  One important thing is that the
+	/// default user settings includes an empty slyEditMode, so guest users will always be
+	// prompeted for which SlyEdit mode to use.
+	if (user.is_guest)
+		return userSettingsObj;
+
 	// Open the user settings file
 	var userSettingsFile = new File(gUserSettingsFilename);
 	if (userSettingsFile.open("r"))
@@ -3810,6 +3826,11 @@ function ReadUserSettingsFile(pSlyEdCfgObj)
 // Return value: Boolean - Whether or not this function succeeded in writing the file.
 function WriteUserSettingsFile(pUserSettingsObj)
 {
+	// If the current logged-in user is a G-restricted user (guest), then don't
+	// save the user settings, just return true (faux success).
+	if (user.is_guest)
+		return true;
+
 	var writeSucceeded = false;
 
 	var userSettingsFile = new File(gUserSettingsFilename);

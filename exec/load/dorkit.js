@@ -2,6 +2,7 @@
 // TODO: Auto-pause stuff...
 
 js.auto_terminate = false;
+js.terminate_on_disconnect = false;
 js.load_path_list.unshift(js.exec_dir+"dorkit/");
 js.on_exit("js.load_path_list.shift()");
 if (js.global.system !== undefined) {
@@ -485,7 +486,7 @@ var dk = {
 			if (dk.connection.inactive_time !== undefined) {
 				elapsed = system.timer - dk.connection.inactive_time;
 				if (elapsed > dk.connection.disconnect_timeout)
-					js.auto_terminate = true;
+					js.auto_terminate = js.terminate_on_disconnect = true;
 				mswait(1);
 				return true;
 			}
@@ -577,6 +578,8 @@ var dk = {
 					}
 					ret=ret.replace(/\x00.*$/,'');
 				}
+				if (ret === this.key.CONNECTION_CLOSED)
+					this.Private_connection_close();
 			}
 			return ret;
 		},

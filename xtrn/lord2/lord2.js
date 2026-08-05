@@ -31,18 +31,60 @@ var pending_timeout;
 
 function handle_timeout(reason)
 {
+/*
+ * In order to do this, more investigation needs to be done
+ * on how the DOS version behaves, expecially around aborted
+ * input loops, if endgame runs on lost carrier, and what,
+ * if anything is adjusted.
+ * Until that works is done, just run endgame and exit.
+ */
+/*
 	if (player.battle || player.busy) {
 		pending_timeout = reason;
 		dk.console.active = false;
 		return;
 	}
+*/
 	switch (reason) {
 		case 'BBS_NO_TIME':
 			sclrscr();
 			lln('`r0`2`c  `%The BBS has reported that you do not have any more time left.');
 			break;
 		case 'IDLE':
-			run_ref('notime', 'help.ref');
+			if (player.battle || player.busy) {
+				dk.console.gotoxy(0, 21);
+				lln("`r0`2  Ack!  Apparently you didn't find this very exciting, because");
+				lln("  you have obviously fallen asleep.  Please come back sometime when");
+				lln("  you feel like actually doing something.");
+			}
+			else {
+				dk.console.gotoxy(0, 22);
+				// @#NOTIME is a display label, not a ref routine
+				var f = new File(getfname("help.ref"));
+				var label = 'NOTIME';
+				var l;
+				var found = false;
+
+				if (!f.open('rb'))
+					break;
+				// First, find the label...
+				while ((l = f.readln()) !== null) {
+					if (l.toLowerCase().indexOf('@#'+label) === 0) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					f.close();
+					break;
+				}
+				while ((l = f.readln()) !== null) {
+					if (l.indexOf('@#') === 0)
+						break;
+					lln(l);
+				}
+				f.close();
+			}
 			break;
 		case 'DISCONNECT':
 			break;
@@ -299,7 +341,7 @@ function insane_run_ref(sec, fname, refret)
 		'getkey':function(args) {
 			if (args.length < 1)
 				throw new Error('@do getkey with no argument');
-			if (!dk.console.waitkey(0))
+			if (!waitkey(0))
 				setvar(args[0], '_');
 			else {
 				lastkey = time();
@@ -743,7 +785,7 @@ function insane_run_ref(sec, fname, refret)
 				} while(ch !== 'Q' && ch !== 'CONNECTION_CLOSED');
 			}
 
-			while(1) {
+			while(!js.terminated) {
 				choice = items_menu(itms, cur, true, false, '', y+1, 22)
 				cur = choice.cur;
 				switch(choice.ch) {
@@ -1080,6 +1122,7 @@ function insane_run_ref(sec, fname, refret)
 						break;
 					lln(l);
 				}
+				f.close();
 			}
 		},
 		'displayfile':function(args) {
@@ -1675,7 +1718,7 @@ rescan:
 				if (cur >= inv.length)
 					cur = 0;
 
-				while(1) {
+				while(!js.terminated) {
 					choice = items_menu(inv, cur, false, true, '', y + 1, 22);
 					cur = choice.cur;
 					switch(choice.ch) {
@@ -1746,7 +1789,7 @@ rescan:
 				if (pages > parseInt(pages, 10))
 					pages = parseInt(pages, 10) + 1;
 
-				while(1) {
+				while(!js.terminated) {
 					sclrscr();
 					dk.console.attr.value = sattr;
 					for (i = 0; i < 22; i++) {
@@ -1895,7 +1938,7 @@ rescan:
 			throw new Error('Unable to open '+f.name);
 		if (enc) {
 			obj.lines = [];
-			while(1) {
+			while(!js.terminated) {
 				i = f.read(2);
 				if (i === '')
 					break;
@@ -2147,7 +2190,7 @@ function mail_check(messenger)
 	file_rename(fn, f.name);
 	if (!f.open('r'))
 		throw new Error('Unable to open '+f.name);
-	while(1) {
+	while(!js.terminated) {
 		l = f.readln();
 		if (l === null)
 			break;
@@ -2218,7 +2261,7 @@ function chat(op)
 	lln('`r0`c`2  You sit down and talk with '+op.name+'`2.');
 	sln('  (enter q or x to exit)');
 	sln('');
-	while(1) {
+	while(!js.terminated) {
 		if (ch.open('r')) {
 			ch.position = pos;
 			l = ch.readln();
@@ -2236,7 +2279,7 @@ function chat(op)
 				continue;
 			}
 		}
-		if (dk.console.waitkey(game.delay)) {
+		if (waitkey(game.delay)) {
 			lastkey = time();
 			sw('  ');
 			l = clean_str(dk.console.getstr({len:72, attr:new Attribute(31), input_box:true, crlf:false, timeout:idle_timeout * 1000}));
@@ -2327,7 +2370,7 @@ function hailed(pl)
 			online_battle(op, false);
 			break;
 		}
-		if (dk.console.waitkey(game.delay)) {
+		if (waitkey(game.delay)) {
 			switch(getkey().toUpperCase()) {
 				case 'CONNECTION_CLOSED':
 				case 'A':
@@ -2705,7 +2748,7 @@ function view_inventory()
 	var y;
 
 rescan:
-	while(1) {
+	while(!js.terminated) {
 		run_ref('stats', 'gametxt.ref');
 		y = scr.pos.y + 1;
 		inv = get_inventory();
@@ -2976,7 +3019,7 @@ function offline_battle(no_super, skip_see)
 		lw('`r0`2');
 	else
 		lw('`r0`2'+enm.see);
-	while(1) {
+	while(!js.terminated) {
 		if (skip_see) {
 			ch = 0;
 			skip_see = 0;
@@ -3238,7 +3281,7 @@ function vbar(choices, args)
 	}
 	dk.console.gotoxy(opt.x, opt.y + ret.cur);
 
-	while(1) {
+	while(!js.terminated) {
 		if (oldcur !== ret.cur) {
 			draw_choice(oldcur);
 			draw_choice(ret.cur);
@@ -3384,7 +3427,7 @@ function items_menu(itms, cur, buying, selling, extras, starty, endy)
 	}
 
 	draw_page();
-	while(1) {
+	while(!js.terminated) {
 		choice = vbar(choices, {cur:cur % cnt, drawall:false, extras:keys, x:0, y:starty, return_on_wrap:true, highlight:'`r1`2', norm:'`r0`2'});
 		oldcur = cur;
 		cur = off + choice.cur;
@@ -4051,7 +4094,7 @@ function hail()
 		f.close();
 
 		while (file_exists(getfname(maildir+'tx'+(player.Record + 1)+'.tmp'))) {
-			if (dk.console.waitkey(game.delay)) {
+			if (waitkey(game.delay)) {
 				getkey();
 				player.battle = 0;
 				update_update();
@@ -4139,7 +4182,7 @@ function do_map()
 
 	ch = ''
 	while (ch != 'Q') {
-		while (!dk.console.waitkey(game.delay)) {
+		while (!waitkey(game.delay)) {
 			update();
 		};
 		ch = getkey().toUpperCase();

@@ -31,7 +31,8 @@ typedef struct {
 	char services_ini[128];     // services.ini filename
 	char login_info_save[INI_MAX_VALUE_LEN];
 	uint max_connects_per_period;
-	uint connect_rate_limit_period;    /* in seconds */
+	uint connect_rate_limit_period;          /* in seconds */
+	struct rate_limit_settings rate_limit;
 
 	/* JavaScript operating parameters */
 	js_startup_t js;

@@ -23,32 +23,32 @@
 */
 
 /* Various permissions that can be set on an O:Line */
-const OLINE_CAN_REHASH		=(1<<0);	/* r */
-const OLINE_CAN_RESTART		=(1<<1);	/* R */
-const OLINE_CAN_DIE			=(1<<2);	/* D */
-const OLINE_CAN_GLOBOPS		=(1<<3);	/* g */
-const OLINE_CAN_WALLOPS		=(1<<4);	/* w */
-const OLINE_CAN_LOCOPS		=(1<<5);	/* l */
-const OLINE_CAN_LSQUITCON	=(1<<6);	/* c */
-const OLINE_CAN_GSQUITCON	=(1<<7);	/* C */
-const OLINE_CAN_LKILL		=(1<<8);	/* k */
-const OLINE_CAN_GKILL		=(1<<9);	/* K */
-const OLINE_CAN_KLINE		=(1<<10);	/* b */
-const OLINE_CAN_UNKLINE		=(1<<11);	/* B */
-const OLINE_CAN_LGNOTICE	=(1<<12);	/* n */
-const OLINE_CAN_GGNOTICE	=(1<<13);	/* N */
-const OLINE_IS_ADMIN		=(1<<14);	/* A */
+var OLINE_CAN_REHASH		=(1<<0);	/* r */
+var OLINE_CAN_RESTART		=(1<<1);	/* R */
+var OLINE_CAN_DIE			=(1<<2);	/* D */
+var OLINE_CAN_GLOBOPS		=(1<<3);	/* g */
+var OLINE_CAN_WALLOPS		=(1<<4);	/* w */
+var OLINE_CAN_LOCOPS		=(1<<5);	/* l */
+var OLINE_CAN_LSQUITCON	=(1<<6);	/* c */
+var OLINE_CAN_GSQUITCON	=(1<<7);	/* C */
+var OLINE_CAN_LKILL		=(1<<8);	/* k */
+var OLINE_CAN_GKILL		=(1<<9);	/* K */
+var OLINE_CAN_KLINE		=(1<<10);	/* b */
+var OLINE_CAN_UNKLINE		=(1<<11);	/* B */
+var OLINE_CAN_LGNOTICE	=(1<<12);	/* n */
+var OLINE_CAN_GGNOTICE	=(1<<13);	/* N */
+var OLINE_IS_ADMIN		=(1<<14);	/* A */
 /* Synchronet IRCd doesn't have umode +a	RESERVED */
-const OLINE_CAN_UMODEC		=(1<<16);	/* c */
-const OLINE_CAN_CHATOPS		=(1<<19);	/* s */
-const OLINE_CHECK_SYSPASSWD	=(1<<20);	/* S */
-const OLINE_CAN_EVAL		=(1<<21);	/* x */
-const OLINE_IS_GOPER		=(1<<22);	/*  "big O" */
+var OLINE_CAN_UMODEC		=(1<<16);	/* c */
+var OLINE_CAN_CHATOPS		=(1<<19);	/* s */
+var OLINE_CHECK_SYSPASSWD	=(1<<20);	/* S */
+var OLINE_CAN_EVAL		=(1<<21);	/* x */
+var OLINE_IS_GOPER		=(1<<22);	/*  "big O" */
 
 /* Part of [Server], former N:Line */
-const NLINE_CHECK_QWKPASSWD             =(1<<0);        // q
-const NLINE_IS_QWKMASTER                =(1<<1);        // w
-const NLINE_CHECK_WITH_QWKMASTER        =(1<<2);        // k
+var NLINE_CHECK_QWKPASSWD             =(1<<0);        // q
+var NLINE_IS_QWKMASTER                =(1<<1);        // w
+var NLINE_CHECK_WITH_QWKMASTER        =(1<<2);        // k
 
 function Epoch() {
 	return parseInt(new Date().getTime()/1000);
@@ -271,6 +271,7 @@ function Clear_Config_Globals() {
 	ULines = [];
 	YLines = [];
 	ZLines = [];
+	WLines = [];
 	RBL = [];
 	Die_Password = "";
 	Restart_Password = "";
@@ -527,6 +528,16 @@ function Write_Config_File(fn) {
 		f.writeln("");
 	}
 
+	/* [WebIRC] */
+	c = 0;
+	for (i in WLines) {
+		c++;
+		f.writeln(format("[WebIRC:%lu]", c));
+		f.writeln(format("Hostname=%s", WLines[i].hostname));
+		f.writeln(format("Password=%s", WLines[i].password));
+		f.writeln("");
+	}
+
 	f.close();
 
 	return true;
@@ -572,6 +583,7 @@ function ini_sections() {
 	this.Ban = ini_Ban;
 	this.Restrict = ini_Restrict;
 	this.RBL = ini_RBL;
+	this.WebIRC = ini_WebIRC;
 	this.Server = ini_Server;
 	this.Hub = ini_Hub;
 }
@@ -866,6 +878,17 @@ function ini_RBL(arg, ini) {
 	RBL.push(new RBL_Config_Object(ini.Hostname, ini.GoodResponses, ini.BadResponses));
 }
 
+function ini_WebIRC(arg, ini) {
+	if (!ini.Hostname || !ini.Password) {
+		log(LOG_WARNING,format(
+			"!WARNING [WebIRC:%s] requires both Hostname and Password. Section ignored.",
+			arg
+		));
+		return;
+	}
+	WLines.push(new WLine(ini.Hostname, ini.Password));
+}
+
 function load_config_defaults() {
 	/*** M:Line ***/
 	ServerName = format("%s.synchro.net", system.qwk_id.toLowerCase());
@@ -1096,6 +1119,11 @@ function read_conf_config(conf) {
 						break;
 					ULines.push(arg[1]);
 					break;
+				case "W":
+					if (!arg[2])
+						break;
+					WLines.push(new WLine(arg[1],arg[2]));
+					break;
 				case "X":
 					Die_Password = arg[1];
 					Restart_Password = arg[2];
@@ -1179,6 +1207,11 @@ function YLine(pingfreq,connfreq,maxlinks,sendq) {
 function ZLine(ipmask,reason) {
 	this.ipmask = ipmask;
 	this.reason = reason;
+}
+
+function WLine(hostname,password) {
+	this.hostname = hostname;
+	this.password = password;
 }
 
 function RBL_Config_Object(hostname, good, bad) {

@@ -1,6 +1,11 @@
 # $Id: GNUmakefile,v 1.63 2020/05/02 08:24:08 deuce Exp $
 
 SRC_ROOT = ../../src
+# Tell Common.gmake (via build/botan.gmake) not to install a
+# subproject-side `botan:` delegation target — we define the real
+# build rule ourselves below.  Without this, Common.gmake's stub
+# rule collides with ours and gmake warns "overriding recipe".
+IN_3RDP_BUILD := 1
 # Cross platform/compiler definitions
 include $(SRC_ROOT)/build/Common.gmake	# defines clean and output directory rules
 
@@ -50,9 +55,19 @@ endif
 
 JS_CONFIGURE_ENV += 'CXXFLAGS=$(CXXFLAGS)'
 
-.PHONY: cryptlib libmozjs
+.PHONY: cryptlib libmozjs botan
 cryptlib: $(CRYPTLIB_BUILD)
 libmozjs: $(JSLIB_BUILD)
+# Botan is only built when the caller asks for vendored (Common.gmake's
+# probe sets USE_VENDORED_BOTAN when neither system Botan 3.6+ nor
+# OpenSSL 3.0+ is available, plus any explicit USE_VENDORED_BOTAN=1
+# override).  Otherwise `make botan` is a no-op so CI jobs can
+# unconditionally invoke it and produce an empty archive.
+ifdef USE_VENDORED_BOTAN
+botan: $(BOTAN_BUILD)
+else
+botan: ; @:
+endif
 
 ###############
 # Directories #
@@ -118,7 +133,7 @@ $(CRYPT_SRC): | $(3RDPSRCDIR)
 $(CRYPT_IDIR): | $(3RDPODIR)
 	$(QUIET)$(IFNOTEXIST) mkdir $(CRYPT_IDIR)
 
-$(CRYPTLIB_BUILD): $(3RDP_ROOT)/dist/cryptlib.zip $(3RDP_ROOT)/build/cl-terminal-params.patch $(3RDP_ROOT)/build/cl-mingw32-static.patch $(3RDP_ROOT)/build/cl-ranlib.patch $(3RDP_ROOT)/build/cl-win32-noasm.patch $(3RDP_ROOT)/build/cl-zz-country.patch $(3RDP_ROOT)/build/cl-algorithms.patch $(3RDP_ROOT)/build/cl-allow-duplicate-ext.patch $(3RDP_ROOT)/build/cl-macosx-minver.patch $(3RDP_ROOT)/build/cl-posix-me-gently.patch $(3RDP_ROOT)/build/cl-PAM-noprompts.patch $(3RDP_ROOT)/build/cl-zlib.patch $(3RDP_ROOT)/build/cl-Dynamic-linked-static-lib.patch $(3RDP_ROOT)/build/cl-SSL-fix.patch $(3RDP_ROOT)/build/cl-bigger-maxattribute.patch $(3RDP_ROOT)/build/cl-endian.patch $(3RDP_ROOT)/build/cl-vcxproj.patch $(3RDP_ROOT)/build/cl-mingw-vcver.patch $(3RDP_ROOT)/build/cl-no-odbc.patch $(3RDP_ROOT)/build/cl-noasm-defines.patch $(3RDP_ROOT)/build/cl-bn-noasm64-fix.patch $(3RDP_ROOT)/build/cl-prefer-ECC.patch $(3RDP_ROOT)/build/cl-prefer-ECC-harder.patch $(3RDP_ROOT)/build/cl-clear-GCM-flag.patch $(3RDP_ROOT)/build/cl-use-ssh-ctr.patch $(3RDP_ROOT)/build/cl-no-tpm.patch $(3RDP_ROOT)/build/cl-no-via-aes.patch $(3RDP_ROOT)/build/cl-just-use-cc.patch $(3RDP_ROOT)/build/cl-no-safe-stack.patch $(3RDP_ROOT)/build/cl-allow-pkcs12.patch $(3RDP_ROOT)/build/cl-allow-none-auth.patch $(3RDP_ROOT)/build/cl-mingw-add-m32.patch $(3RDP_ROOT)/build/cl-poll-not-select.patch $(3RDP_ROOT)/build/cl-good-sockets.patch $(3RDP_ROOT)/build/cl-moar-objects.patch $(3RDP_ROOT)/build/cl-server-term-support.patch $(3RDP_ROOT)/build/cl-add-pubkey-attribute.patch $(3RDP_ROOT)/build/cl-allow-ssh-auth-retries.patch $(3RDP_ROOT)/build/cl-fix-ssh-channel-close.patch $(3RDP_ROOT)/build/cl-vt-lt-2005-always-defined.patch $(3RDP_ROOT)/build/cl-no-pie.patch $(3RDP_ROOT)/build/cl-no-testobjs.patch $(3RDP_ROOT)/build/cl-win32-lean-and-mean.patch $(3RDP_ROOT)/build/cl-thats-not-asm.patch $(3RDP_ROOT)/build/cl-make-channels-work.patch $(3RDP_ROOT)/build/cl-allow-ssh-2.0-go.patch $(3RDP_ROOT)/build/cl-read-timeout-every-time.patch $(3RDP_ROOT)/build/cl-allow-servercheck-pubkeys.patch $(3RDP_ROOT)/build/cl-pass-after-pubkey.patch $(3RDP_ROOT)/build/cl-ssh-list-ctr-modes.patch $(3RDP_ROOT)/build/cl-double-delete-fine-on-close.patch $(3RDP_ROOT)/build/cl-handle-unsupported-pubkey.patch $(3RDP_ROOT)/build/cl-add-patches-info.patch $(3RDP_ROOT)/build/cl-netbsd-hmac-symbol.patch $(3RDP_ROOT)/build/cl-netbsd-no-getfsstat.patch GNUmakefile $(3RDP_ROOT)/build/cl-remove-march.patch $(3RDP_ROOT)/build/cl-fix-shell-exec-types.patch $(3RDP_ROOT)/build/cl-ssh-eof-half-close.patch $(3RDP_ROOT)/build/cl-add-win64.patch $(3RDP_ROOT)/build/cl-fix-mb-w-conv-warnings.patch $(3RDP_ROOT)/build/cl-ssh-service-type-for-channel.patch $(3RDP_ROOT)/build/cl-ssh-sbbs-id-string.patch $(3RDP_ROOT)/build/cl-channel-select-both.patch $(3RDP_ROOT)/build/cl-allow-none-auth-svr.patch $(3RDP_ROOT)/build/cl-quote-cc.patch $(3RDP_ROOT)/build/cl-mingw64-thread-handles.patch $(3RDP_ROOT)/build/cl-mingw64-is-really-new.patch $(3RDP_ROOT)/build/cl-lowercase-versionhelpers.patch $(3RDP_ROOT)/build/cl-fix-cpuid-order.patch $(3RDP_ROOT)/build/cl-fix-cbli-incompatible.patch $(3RDP_ROOT)/build/cl-mingw64-unicode-gibble.patch $(3RDP_ROOT)/build/cl-haiku-build.patch $(3RDP_ROOT)/build/cl-dont-validate-va-list.patch $(3RDP_ROOT)/build/cl-musl-socklen_t.patch $(3RDP_ROOT)/build/cl-no-musl-backtrace.patch $(3RDP_ROOT)/build/cl-fix-constptrptr.patch $(3RDP_ROOT)/build/cl-fix-void-ptrs.patch $(3RDP_ROOT)/build/cl-intptr-t.patch $(3RDP_ROOT)/build/cl-wrong-string-length.patch $(3RDP_ROOT)/build/cl-remove-silly-pragmas.patch $(3RDP_ROOT)/build/cl-size-doesnt-mean-copied.patch $(3RDP_ROOT)/build/cl-add-psk-flag.patch $(3RDP_ROOT)/build/cl-winapi-needed.patch $(3RDP_ROOT)/build/cl-no-stdc-flexarray.patch $(3RDP_ROOT)/build/cl-enable-chacha20.patch $(3RDP_ROOT)/build/cl-no-session-cache.patch | $(CRYPT_SRC) $(CRYPT_IDIR)
+$(CRYPTLIB_BUILD): $(3RDP_ROOT)/dist/cryptlib.zip $(3RDP_ROOT)/build/cl-terminal-params.patch $(3RDP_ROOT)/build/cl-mingw32-static.patch $(3RDP_ROOT)/build/cl-ranlib.patch $(3RDP_ROOT)/build/cl-win32-noasm.patch $(3RDP_ROOT)/build/cl-zz-country.patch $(3RDP_ROOT)/build/cl-algorithms.patch $(3RDP_ROOT)/build/cl-allow-duplicate-ext.patch $(3RDP_ROOT)/build/cl-macosx-minver.patch $(3RDP_ROOT)/build/cl-posix-me-gently.patch $(3RDP_ROOT)/build/cl-PAM-noprompts.patch $(3RDP_ROOT)/build/cl-zlib.patch $(3RDP_ROOT)/build/cl-Dynamic-linked-static-lib.patch $(3RDP_ROOT)/build/cl-SSL-fix.patch $(3RDP_ROOT)/build/cl-bigger-maxattribute.patch $(3RDP_ROOT)/build/cl-endian.patch $(3RDP_ROOT)/build/cl-vcxproj.patch $(3RDP_ROOT)/build/cl-mingw-vcver.patch $(3RDP_ROOT)/build/cl-no-odbc.patch $(3RDP_ROOT)/build/cl-noasm-defines.patch $(3RDP_ROOT)/build/cl-bn-noasm64-fix.patch $(3RDP_ROOT)/build/cl-prefer-ECC.patch $(3RDP_ROOT)/build/cl-prefer-ECC-harder.patch $(3RDP_ROOT)/build/cl-clear-GCM-flag.patch $(3RDP_ROOT)/build/cl-use-ssh-ctr.patch $(3RDP_ROOT)/build/cl-no-tpm.patch $(3RDP_ROOT)/build/cl-no-via-aes.patch $(3RDP_ROOT)/build/cl-just-use-cc.patch $(3RDP_ROOT)/build/cl-no-safe-stack.patch $(3RDP_ROOT)/build/cl-allow-pkcs12.patch $(3RDP_ROOT)/build/cl-allow-none-auth.patch $(3RDP_ROOT)/build/cl-mingw-add-m32.patch $(3RDP_ROOT)/build/cl-poll-not-select.patch $(3RDP_ROOT)/build/cl-good-sockets.patch $(3RDP_ROOT)/build/cl-moar-objects.patch $(3RDP_ROOT)/build/cl-server-term-support.patch $(3RDP_ROOT)/build/cl-add-pubkey-attribute.patch $(3RDP_ROOT)/build/cl-allow-ssh-auth-retries.patch $(3RDP_ROOT)/build/cl-fix-ssh-channel-close.patch $(3RDP_ROOT)/build/cl-vt-lt-2005-always-defined.patch $(3RDP_ROOT)/build/cl-no-pie.patch $(3RDP_ROOT)/build/cl-no-testobjs.patch $(3RDP_ROOT)/build/cl-win32-lean-and-mean.patch $(3RDP_ROOT)/build/cl-thats-not-asm.patch $(3RDP_ROOT)/build/cl-make-channels-work.patch $(3RDP_ROOT)/build/cl-allow-ssh-2.0-go.patch $(3RDP_ROOT)/build/cl-read-timeout-every-time.patch $(3RDP_ROOT)/build/cl-allow-servercheck-pubkeys.patch $(3RDP_ROOT)/build/cl-pass-after-pubkey.patch $(3RDP_ROOT)/build/cl-ssh-list-ctr-modes.patch $(3RDP_ROOT)/build/cl-double-delete-fine-on-close.patch $(3RDP_ROOT)/build/cl-handle-unsupported-pubkey.patch $(3RDP_ROOT)/build/cl-add-patches-info.patch $(3RDP_ROOT)/build/cl-netbsd-hmac-symbol.patch $(3RDP_ROOT)/build/cl-netbsd-no-getfsstat.patch GNUmakefile $(3RDP_ROOT)/build/cl-remove-march.patch $(3RDP_ROOT)/build/cl-fix-shell-exec-types.patch $(3RDP_ROOT)/build/cl-ssh-eof-half-close.patch $(3RDP_ROOT)/build/cl-add-win64.patch $(3RDP_ROOT)/build/cl-fix-mb-w-conv-warnings.patch $(3RDP_ROOT)/build/cl-ssh-service-type-for-channel.patch $(3RDP_ROOT)/build/cl-ssh-sbbs-id-string.patch $(3RDP_ROOT)/build/cl-channel-select-both.patch $(3RDP_ROOT)/build/cl-allow-none-auth-svr.patch $(3RDP_ROOT)/build/cl-quote-cc.patch $(3RDP_ROOT)/build/cl-mingw64-thread-handles.patch $(3RDP_ROOT)/build/cl-mingw64-is-really-new.patch $(3RDP_ROOT)/build/cl-lowercase-versionhelpers.patch $(3RDP_ROOT)/build/cl-fix-cpuid-order.patch $(3RDP_ROOT)/build/cl-fix-cbli-incompatible.patch $(3RDP_ROOT)/build/cl-mingw64-unicode-gibble.patch $(3RDP_ROOT)/build/cl-haiku-build.patch $(3RDP_ROOT)/build/cl-dont-validate-va-list.patch $(3RDP_ROOT)/build/cl-musl-socklen_t.patch $(3RDP_ROOT)/build/cl-no-musl-backtrace.patch $(3RDP_ROOT)/build/cl-fix-constptrptr.patch $(3RDP_ROOT)/build/cl-fix-void-ptrs.patch $(3RDP_ROOT)/build/cl-intptr-t.patch $(3RDP_ROOT)/build/cl-wrong-string-length.patch $(3RDP_ROOT)/build/cl-remove-silly-pragmas.patch $(3RDP_ROOT)/build/cl-size-doesnt-mean-copied.patch $(3RDP_ROOT)/build/cl-add-psk-flag.patch $(3RDP_ROOT)/build/cl-winapi-needed.patch $(3RDP_ROOT)/build/cl-no-stdc-flexarray.patch $(3RDP_ROOT)/build/cl-enable-chacha20.patch $(3RDP_ROOT)/build/cl-no-session-cache.patch $(3RDP_ROOT)/build/cl-iowait-pollhup.patch $(3RDP_ROOT)/build/cl-psk-only-client.patch $(3RDP_ROOT)/build/cl-visibility.patch | $(CRYPT_SRC) $(CRYPT_IDIR)
 	@echo Creating $@ ...
 	$(QUIET)-rm -rf $(CRYPT_SRC)/*
 	$(QUIET)unzip -oa $(3RDPDISTDIR)/cryptlib.zip -d $(CRYPT_SRC)
@@ -208,6 +223,9 @@ $(CRYPTLIB_BUILD): $(3RDP_ROOT)/dist/cryptlib.zip $(3RDP_ROOT)/build/cl-terminal
 	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-no-stdc-flexarray.patch
 	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-enable-chacha20.patch
 	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-no-session-cache.patch
+	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-iowait-pollhup.patch
+	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-psk-only-client.patch
+	$(QUIET)patch -b -p0 -d $(CRYPT_SRC) < cl-visibility.patch
 	$(QUIET)perl -pi.bak -e 's/^(#define CRYPTLIB_VERSION.*)$$/"$$1\n#define CRYPTLIB_PATCHES \"" . (chomp($$val = `cat cl-*.patch | if (which md5sum > \/dev\/null 2>&1); then md5sum; else md5; fi`), $$val) . "\""/e' $(CRYPT_SRC)/cryptlib.h
 	$(QUIET)sed -E -iorig 's/%%MIN_MAC_OSX_VERSION%%/${MIN_MAC_OSX_VERSION}/g' $(CRYPT_SRC)/tools/ccopts.sh
 ifdef FIXED_FIXED_SEED
@@ -241,3 +259,170 @@ endif
 endif
 	$(QUIET)cp $(CRYPT_SRC)/libcl.a $(CRYPT_IDIR)
 	$(QUIET)cp $(CRYPT_SRC)/cryptlib.h $(CRYPT_IDIR)
+
+##########
+# Botan  #
+##########
+#
+# Built only when the consumer (usually SyncTERM) asks for it, because
+# the system already has Botan 3.9+ / OpenSSL 3.0+ in the common case.
+# No patches — the tarball compiles cleanly on every platform we ship
+# to.  Installs a static libbotan-3.a plus botan-3.pc under
+# $(BOTAN_IDIR); consumers prepend $(BOTAN_PKGCONFIG_DIR) to
+# PKG_CONFIG_PATH and every pkg-config lookup picks up the vendored
+# copy transparently.
+#
+# Botan's configure.py auto-detects the target for native builds.
+# For mingw cross-compile we explicitly pin --os=mingw and pass the
+# cross toolchain; otherwise auto-detect would try to match the host.
+
+ifeq ($(os),win64)
+ # Quote --cc-bin: CXX can contain "ccache <path>" which would otherwise
+ # split into two shell tokens and make configure.py treat the path as
+ # an unknown positional ("Unhandled option(s): /path/to/g++").
+ BOTAN_CONFIGURE_EXTRA := --os=mingw --cpu=x86_64 \
+                          '--cc-bin=$(CXX)' '--ar-command=$(AR)'
+else ifeq ($(os),win32)
+ BOTAN_CONFIGURE_EXTRA := --os=mingw --cpu=x86 \
+                          '--cc-bin=$(CXX)' '--ar-command=$(AR)'
+else
+ BOTAN_CONFIGURE_EXTRA :=
+endif
+
+# Only build the Botan modules SyncTERM (+ DeuceSSH) actually touches.
+# Botan pulls transitive deps automatically under --minimized-build;
+# this list names the top-level algorithms / protocols we CALL.  Keep
+# synchronised with the matching block in src/syncterm/CMakeLists.txt.
+#
+# tls12,tls13               — xp_tls (TelnetS, HTTPS)
+# aes,cbc,ctr               — xp_crypt encrypted-INI + DeuceSSH AES-256/CTR
+# chacha,chacha20poly1305   — xp_crypt ChaCha20 + TLS 1.3 AEAD
+# rc4,des,cast128           — legacy decrypt-only paths in xp_crypt
+# hmac,pbkdf2,scrypt        — xp_crypt KDF + SSH MAC
+# sha1,sha2_32,sha2_64      — legacy fingerprints + current SHA-256/-512
+# rsa,ed25519,x25519,dh     — SSH host/user keys + TLS sig/kex
+# ecdsa,ecdh                — TLS 1.2/1.3 cert + kex
+# ml_kem                    — SSH mlkem768x25519-sha256 post-quantum kex
+# pcurves_secp{256,384,521} — NIST curves for TLS ECDSA
+# x509                      — TLS cert chain parsing
+# system_rng,auto_rng       — RNG stack
+# Line continuations in a := assignment fold to a single space
+# between segments — the space confuses Botan's configure.py
+# ("Unhandled option(s): ..."), so strip it back out after the join.
+BOTAN_MODULES := $(subst $() ,,tls12,tls13,aes,cbc,ctr,chacha,chacha20poly1305,\
+rc4,des,cast128,hmac,pbkdf2,scrypt,sha1,sha2_32,sha2_64,rsa,ed25519,\
+x25519,dh,ecdsa,ecdh,ml_kem,pcurves_secp256r1,pcurves_secp384r1,\
+pcurves_secp521r1,x509,system_rng,auto_rng)
+
+# Botan's generated Makefile doesn't use a jobserver, so -j has to be
+# passed explicitly.  Detect a sane default; user can override with
+# BOTAN_JOBS=N on the command line.
+BOTAN_JOBS ?= $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)
+
+# macOS universal-binary path.  Botan's configure.py probes a single
+# CPU per source tree (build.h + the per-arch intrinsic .cpp module
+# list are CPU-specific), so we extract twice into per-arch source
+# directories, configure each with --cpu=<arch>, build, then lipo
+# the two libbotan-3.a archives into a single fat one over the
+# installed copy.  Headers + pkgconfig are arch-independent so the
+# x86_64 install carries those.  Gated on os==darwin && FAT.
+#
+# MACOS_PORTABLE additionally pins per-arch microarch floors
+# (Skylake / apple-m1) into --cc-abi-flags so the resulting fat
+# archive matches what redistributable nightly builds want.
+ifeq ($(os),darwin)
+ ifdef FAT
+  BOTAN_FAT := 1
+ endif
+endif
+
+ifdef MACOS_PORTABLE
+ BOTAN_FAT_X86_TUNE := -march=skylake
+ BOTAN_FAT_ARM_TUNE := -mcpu=apple-m1
+endif
+ifdef MIN_MAC_OSX_VERSION
+ BOTAN_VMIN_FLAG := -mmacosx-version-min=$(MIN_MAC_OSX_VERSION)
+endif
+BOTAN_FAT_X86_FLAGS := -arch x86_64 $(BOTAN_FAT_X86_TUNE) $(BOTAN_VMIN_FLAG)
+BOTAN_FAT_ARM_FLAGS := -arch arm64  $(BOTAN_FAT_ARM_TUNE) $(BOTAN_VMIN_FLAG)
+
+# The two per-arch source trees, only used when BOTAN_FAT is set.
+BOTAN_FAT_X86_DIR := $(BOTAN_SRC)-x86_64
+BOTAN_FAT_ARM_DIR := $(BOTAN_SRC)-arm64
+
+# Common configure flags shared between single-arch and per-slice
+# builds.  Spelled once so the FAT path mirrors the standard one.
+BOTAN_CFG_BASE = python3 configure.py \
+    --prefix=$(shell cd $(dir $(BOTAN_IDIR)) && pwd)/$(notdir $(BOTAN_IDIR)) \
+    --disable-shared-library \
+    --without-documentation \
+    --build-targets=static \
+    --minimized-build \
+    --enable-modules=$(BOTAN_MODULES) \
+    --build-tool=make
+
+$(BOTAN_SRC): | $(3RDPSRCDIR)
+	$(QUIET)$(IFNOTEXIST) mkdir $(BOTAN_SRC)
+
+$(BOTAN_IDIR): | $(3RDPODIR)
+	$(QUIET)$(IFNOTEXIST) mkdir $(BOTAN_IDIR)
+
+ifdef BOTAN_FAT
+$(BOTAN_BUILD): $(3RDP_ROOT)/dist/Botan.tar.xz GNUmakefile | $(BOTAN_SRC) $(BOTAN_IDIR)
+	@echo Creating $@ ...  '(universal: x86_64 + arm64)'
+	$(QUIET)# rm both per-arch trees so the post-extract rename
+	$(QUIET)# `mv Botan-* <dir>` becomes a directory rename rather
+	$(QUIET)# than an in-place move INTO an existing <dir>.
+	$(QUIET)-rm -rf $(BOTAN_FAT_X86_DIR) $(BOTAN_FAT_ARM_DIR)
+	$(QUIET)xz -dc $(3RDPDISTDIR)/Botan.tar.xz | tar -xf - -C $(dir $(BOTAN_FAT_X86_DIR))
+	$(QUIET)mv $(dir $(BOTAN_FAT_X86_DIR))Botan-* $(BOTAN_FAT_X86_DIR)
+	$(QUIET)xz -dc $(3RDPDISTDIR)/Botan.tar.xz | tar -xf - -C $(dir $(BOTAN_FAT_ARM_DIR))
+	$(QUIET)mv $(dir $(BOTAN_FAT_ARM_DIR))Botan-* $(BOTAN_FAT_ARM_DIR)
+	$(QUIET)# x86_64 slice: configure, build, install (the install
+	$(QUIET)# carries headers + pkgconfig + an x86_64-only libbotan-3.a;
+	$(QUIET)# we'll overwrite the .a with the lipo-merged one below).
+	$(QUIET)cd $(BOTAN_FAT_X86_DIR) && $(BOTAN_CFG_BASE) \
+	    --cpu=x86_64 --os=darwin \
+	    --cc-abi-flags='$(BOTAN_FAT_X86_FLAGS)'
+	$(QUIET)$(MAKE) -j$(BOTAN_JOBS) -C $(BOTAN_FAT_X86_DIR)
+	$(QUIET)$(MAKE) -C $(BOTAN_FAT_X86_DIR) install
+	$(QUIET)# arm64 slice: configure + build only (no install — its
+	$(QUIET)# libbotan-3.a is the second input to lipo, the headers
+	$(QUIET)# and pkgconfig are identical to the x86_64 install).
+	$(QUIET)cd $(BOTAN_FAT_ARM_DIR) && $(BOTAN_CFG_BASE) \
+	    --cpu=arm64 --os=darwin \
+	    --cc-abi-flags='$(BOTAN_FAT_ARM_FLAGS)'
+	$(QUIET)$(MAKE) -j$(BOTAN_JOBS) -C $(BOTAN_FAT_ARM_DIR)
+	$(QUIET)# Lipo-merge the two single-arch archives over the installed one.
+	$(QUIET)lipo -create \
+	    $(BOTAN_FAT_X86_DIR)/libbotan-3.a \
+	    $(BOTAN_FAT_ARM_DIR)/libbotan-3.a \
+	    -output $(BOTAN_IDIR)/lib/libbotan-3.a
+	$(QUIET)# Make botan-3.pc relocatable — same rationale as the
+	$(QUIET)# single-arch path (see comment in else branch).
+	$(QUIET)sed -e 's|^prefix=.*|prefix=$${pcfiledir}/../..|' \
+	            -e 's|^libdir=.*|libdir=$${prefix}/lib|' \
+	            $(BOTAN_PKGCONFIG_DIR)/botan-3.pc \
+	            > $(BOTAN_PKGCONFIG_DIR)/botan-3.pc.new
+	$(QUIET)mv $(BOTAN_PKGCONFIG_DIR)/botan-3.pc.new $(BOTAN_PKGCONFIG_DIR)/botan-3.pc
+else
+$(BOTAN_BUILD): $(3RDP_ROOT)/dist/Botan.tar.xz GNUmakefile | $(BOTAN_SRC) $(BOTAN_IDIR)
+	@echo Creating $@ ...
+	$(QUIET)-rm -rf $(BOTAN_SRC)
+	$(QUIET)xz -dc $(3RDPDISTDIR)/Botan.tar.xz | tar -xf - -C $(dir $(BOTAN_SRC))
+	$(QUIET)mv $(dir $(BOTAN_SRC))Botan-* $(BOTAN_SRC)
+	$(QUIET)cd $(BOTAN_SRC) && $(BOTAN_CFG_BASE) $(BOTAN_CONFIGURE_EXTRA)
+	$(QUIET)$(MAKE) -j$(BOTAN_JOBS) -C $(BOTAN_SRC)
+	$(QUIET)$(MAKE) -C $(BOTAN_SRC) install
+	$(QUIET)# Make botan-3.pc relocatable: Botan's install bakes in the
+	$(QUIET)# absolute --prefix, which breaks CI pipelines where the
+	$(QUIET)# archive is built in one runner concurrent-id's builds dir
+	$(QUIET)# and extracted in another.  Rewrite prefix/libdir to use
+	$(QUIET)# ${pcfiledir} so the .pc resolves relative to its own path.
+	$(QUIET)# Portable (BSD+GNU) in-place edit via temp file.
+	$(QUIET)sed -e 's|^prefix=.*|prefix=$${pcfiledir}/../..|' \
+	            -e 's|^libdir=.*|libdir=$${prefix}/lib|' \
+	            $(BOTAN_PKGCONFIG_DIR)/botan-3.pc \
+	            > $(BOTAN_PKGCONFIG_DIR)/botan-3.pc.new
+	$(QUIET)mv $(BOTAN_PKGCONFIG_DIR)/botan-3.pc.new $(BOTAN_PKGCONFIG_DIR)/botan-3.pc
+endif

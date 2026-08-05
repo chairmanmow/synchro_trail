@@ -7,6 +7,8 @@ set(WITHOUT_SDL_AUDIO OFF CACHE BOOL "Disable SDL Audio")
 set(WITHOUT_ALSA OFF CACHE BOOL "Disable ALSA Audio")
 set(WITHOUT_PORTAUDIO OFF CACHE BOOL "Disable PortAudio Audio")
 set(WITHOUT_PULSEAUDIO OFF CACHE BOOL "Disable PulseAudio Audio")
+set(WITHOUT_PIPEWIRE OFF CACHE BOOL "Disable PipeWire Audio")
+set(WITHOUT_COREAUDIO OFF CACHE BOOL "Disable Core Audio (macOS)")
 
 include(CheckSymbolExists)
 include(CheckIncludeFiles)
@@ -32,6 +34,9 @@ if(PKGCONFIG_FOUND)
 			set(PORTAUDIO_FOUND TRUE)
 		endif()
 	endif()
+	if(NOT WITHOUT_PIPEWIRE)
+		pkg_check_modules(PIPEWIRE libpipewire-0.3)
+	endif()
 endif()
 
 set(SOURCE
@@ -47,9 +52,12 @@ set(SOURCE
     multisock.c
     named_str_list.c
     netwrap.c
+    os_info.c
+    rwlockwrap.c
     semfile.c
     semwrap.c
     sockwrap.c
+    stbuf.c
     str_list.c
     strwrap.c
     threadwrap.c
@@ -132,9 +140,12 @@ if(NOT WITHOUT_OSS)
 endif()
 
 add_library(xpdev OBJECT ${SOURCE})
+
 if(WIN32)
 	target_compile_definitions(xpdev PUBLIC _WIN32 _WIN32_WINNT=0x0501 WINVER=0x0501 MSVCRT_VERSION=0x0501 _WIN32_IE=0x0500)
-	target_link_libraries(xpdev iphlpapi ws2_32 winmm netapi32)
+	# ole32 / uuid needed by the WASAPI code in xpbeep.c (MT only; xpbeep.c
+	# bumps its own _WIN32_WINNT to 0x0600 before <windows.h> in that case).
+	target_link_libraries(xpdev iphlpapi ws2_32 winmm netapi32 ole32 uuid)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Haiku")
 	target_compile_definitions(xpdev PUBLIC __unix__ USE_SNPRINTF)
 	target_link_libraries(xpdev m network)
@@ -162,6 +173,18 @@ endif()
 
 target_compile_features(xpdev PUBLIC c_std_11)
 
+# MSVC requires /experimental:c11atomics to enable <stdatomic.h> + _Atomic
+# (otherwise __STDC_NO_ATOMICS__ stays defined and xpbeep.c's atomic
+# declarations fail to parse).  The hand-written xpdev.vcxproj ships this
+# same flag; cmake needs it added explicitly.  PUBLIC because threadwrap.h
+# exposes _Atomic(intN_t) typedefs in its public interface, so consumers
+# (conio, syncterm, ...) that include the header need the flag too.
+# C-only (MSVC rejects it on /TP C++ translation units).
+if(MSVC)
+	target_compile_options(xpdev PUBLIC
+	    $<$<COMPILE_LANGUAGE:C>:/experimental:c11atomics>)
+endif()
+
 target_link_libraries(xpdev ${CMAKE_DL_LIBS})
 target_link_libraries(xpdev ${CMAKE_THREAD_LIBS_INIT})
 
@@ -171,6 +194,9 @@ if(NOT WIN32)
 	target_compile_definitions(xpdev PUBLIC USE_XP_SEMAPHORES PREFER_POLL)
 endif()
 target_compile_definitions(xpdev PUBLIC LINK_LIST_THREADSAFE)
+# SyncTERM (the only cmake consumer of xpdev) is multithreaded; xp_audio_*
+# streaming-mixer API in xpbeep.c is #ifdef'd on XPDEV_THREAD_SAFE.
+target_compile_definitions(xpdev PUBLIC XPDEV_THREAD_SAFE)
 
 if(HAS_INTTYPES_H)
 	target_compile_definitions(xpdev PUBLIC HAS_INTTYPES_H)
@@ -246,6 +272,23 @@ if(NOT WITHOUT_PULSEAUDIO)
 	endif()
 endif()
 
+if(NOT WITHOUT_PIPEWIRE)
+	if(PIPEWIRE_FOUND)
+		target_include_directories(xpdev PUBLIC ${PIPEWIRE_INCLUDE_DIRS})
+		target_compile_definitions(xpdev PUBLIC WITH_PIPEWIRE)
+	endif()
+endif()
+
+if(NOT WITHOUT_COREAUDIO)
+	if(APPLE)
+		find_library(AUDIOTOOLBOX_FRAMEWORK AudioToolbox)
+		if(AUDIOTOOLBOX_FRAMEWORK)
+			target_compile_definitions(xpdev PUBLIC WITH_COREAUDIO)
+			target_link_libraries(xpdev ${AUDIOTOOLBOX_FRAMEWORK})
+		endif()
+	endif()
+endif()
+
 if(NOT WITHOUT_ALSA)
 	if(ALSA_FOUND)
 		target_include_directories(xpdev PUBLIC ${ALSA_INCLUDE_DIRS})
@@ -264,7 +307,4 @@ endif()
 
 if(WITHOUT_CRYPTLIB)
 	target_compile_definitions(xpdev PUBLIC WITHOUT_CRYPTLIB)
-else()
-	target_compile_definitions(xpdev PUBLIC WITH_CRYPTLIB)
-	target_link_libraries(xpdev cl)
 endif()

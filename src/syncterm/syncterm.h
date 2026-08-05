@@ -19,7 +19,9 @@ enum {
 	SYNCTERM_DEFAULT_TRANSFER_PATH,
 	SYNCTERM_PATH_CACHE,
 	SYNCTERM_PATH_KEYS,
-	SYNCTERM_PATH_SYSTEM_CACHE
+	SYNCTERM_PATH_SYSTEM_CACHE,
+	SYNCTERM_PATH_SCRIPTS,
+	SYNCTERM_PATH_THEMES
 };
 
 enum CursorTypeEnum {
@@ -45,9 +47,9 @@ enum CursorTypeEnum {
 
 /* "ALT/META" key name string */
 #if defined(__APPLE__) && defined(__MACH__)
- #define ALT_KEY_NAME "OPTION"
- #define ALT_KEY_NAMEP "Option"
- #define ALT_KEY_NAME3CH "OPT"
+ #define ALT_KEY_NAME "COMMAND"
+ #define ALT_KEY_NAMEP "Command"
+ #define ALT_KEY_NAME3CH "CMD"
 #else
  #define ALT_KEY_NAME "ALT"
  #define ALT_KEY_NAMEP "Alt"
@@ -90,14 +92,16 @@ struct syncterm_settings {
 	uint                  audio_output_modes;
 	bool                  invert_wheel;
 	bool                  webgetUserList;
-	int                   keyDerivationIterations;
+	char                  keyDerivationIterations[32];	/* KDF spec string, e.g. "scrypt-N15" */
 	enum CursorTypeEnum   defaultCursor;
-	unsigned              uifc_hclr;
-	unsigned              uifc_lclr;
-	unsigned              uifc_bclr;
-	unsigned              uifc_cclr;
-	unsigned              uifc_lbclr;
-	unsigned              uifc_lbbclr;
+	unsigned              theme_frame_color;
+	unsigned              theme_text_color;
+	unsigned              theme_background_color;
+	unsigned              theme_inverse_color;
+	unsigned              theme_lightbar_color;
+	unsigned              theme_lightbar_background_color;
+	char                  theme_file[MAX_PATH + 1];
+	char                  theme_package[MAX_PATH + 1];
 };
 
 extern ini_bitdesc_t audio_output_bits[];
@@ -130,10 +134,17 @@ extern const char * const bg_colour_enum[10];
 void parse_url(char *url, struct bbslist *bbs, int dflt_conn_type, int force_defaults);
 char *get_syncterm_filename(char *fn, int fnlen, int type, bool shared);
 void load_settings(struct syncterm_settings *set);
+void resolve_list_path(struct syncterm_settings *set);
 int ciolib_to_screen(int screen);
 int screen_to_ciolib(int ciolib);
 bool check_exit(bool force);
+int syncterm_getkey(void);
 void set_default_cursor(void);
 
+/* Cross-thread popup queue.  Background threads post (title, body)
+ * pairs here instead of drawing dialogs directly; the doterm() main loop
+ * drains the queue and displays them on the UI thread. */
+void popup_queue_post(const char *title, const char *body);
+bool popup_queue_drain(void);
 
 #endif // ifndef _SYNCTERM_H_

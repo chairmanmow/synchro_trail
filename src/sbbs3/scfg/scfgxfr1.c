@@ -82,7 +82,7 @@ bool get_new_fview(fview_t* fview)
 {
 	memset(fview, 0, sizeof *fview);
 	fview->ex_mode = EX_NATIVE;
-	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. txt, zip or *)", fview->ext, MAX_FILEEXT_LEN, K_UPPER | K_TRIM) <= 0)
+	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. txt, zip or *)", fview->ext, MAX_FILEEXT_LEN, K_TRIM) <= 0)
 		return false;
 	uifc.helpbuf = SCFG_CMDLINE_PREFIX_HELP SCFG_CMDLINE_SPEC_HELP;
 	return uifc.input(WIN_MID | WIN_SAV, 0, 0, "Command Line", fview->cmd, LEN_CMD, K_TRIM) > 0;
@@ -92,7 +92,7 @@ bool get_new_ftest(ftest_t* ftest)
 {
 	memset(ftest, 0, sizeof *ftest);
 	ftest->ex_mode = EX_NATIVE;
-	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. zip or *)", ftest->ext, MAX_FILEEXT_LEN, K_UPPER | K_TRIM) < 1)
+	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. zip or *)", ftest->ext, MAX_FILEEXT_LEN, K_TRIM) < 1)
 		return false;
 	uifc.helpbuf = SCFG_CMDLINE_PREFIX_HELP SCFG_CMDLINE_SPEC_HELP;
 	return uifc.input(WIN_MID | WIN_SAV, 0, 0, "Command Line", ftest->cmd, LEN_CMD, K_TRIM) > 0;
@@ -102,7 +102,7 @@ bool get_new_fcomp(fcomp_t* fcomp)
 {
 	memset(fcomp, 0, sizeof *fcomp);
 	fcomp->ex_mode = EX_NATIVE;
-	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. zip or *)", fcomp->ext, MAX_FILEEXT_LEN, K_UPPER | K_TRIM) < 1)
+	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. zip or *)", fcomp->ext, MAX_FILEEXT_LEN, K_TRIM) < 1)
 		return false;
 	uifc.helpbuf = SCFG_CMDLINE_PREFIX_HELP SCFG_CMDLINE_SPEC_HELP;
 	return uifc.input(WIN_MID | WIN_SAV, 0, 0, "Command Line", fcomp->cmd, LEN_CMD, K_TRIM) > 0;
@@ -112,7 +112,7 @@ bool get_new_dlevent(dlevent_t* dlevent)
 {
 	memset(dlevent, 0, sizeof *dlevent);
 	dlevent->ex_mode = EX_NATIVE;
-	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. zip or *)", dlevent->ext, MAX_FILEEXT_LEN, K_UPPER | K_TRIM) < 1)
+	if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "File Extension (e.g. zip or *)", dlevent->ext, MAX_FILEEXT_LEN, K_TRIM) < 1)
 		return false;
 	uifc.helpbuf = SCFG_CMDLINE_PREFIX_HELP SCFG_CMDLINE_SPEC_HELP;
 	return uifc.input(WIN_MID | WIN_SAV, 0, 0, "Command Line", dlevent->cmd, LEN_CMD, K_TRIM) > 0;
@@ -188,8 +188,66 @@ void xfer_opts()
 		uifc.helpbuf =
 			"`File Options:`\n"
 			"\n"
-			"This menu has options and sub-menus that pertain specifically to the\n"
-			"file transfer section of the BBS.\n"
+			"System-wide knobs and sub-menus for the file-transfer section: upload/\n"
+			"download credit ratios, batch queue limits, filename rules, archive\n"
+			"format handling, and the per-handler sub-menus (viewers, testers,\n"
+			"extractors, compressors, transfer protocols, download events).\n"
+			"Changes take effect after the Terminal Server is recycled.\n"
+			"\n"
+			"`Minimum Free Disk Space`: free bytes that must remain on the upload\n"
+			"directory's filesystem; uploads are refused below this threshold.\n"
+			"\n"
+			"`Max Files in Batch UL Queue`: cap on the number of files a user may\n"
+			"stage in their batch upload queue.\n"
+			"\n"
+			"`Max Files in Batch DL Queue`: cap on the number of files in their\n"
+			"batch download queue.\n"
+			"\n"
+			"`Max Users in User Transfers`: cap on the number of recipient users\n"
+			"allowed in a single user-to-user upload.\n"
+			"\n"
+			"`Default Credit on Upload`: percent of the file's byte count credited\n"
+			"back to the uploader (per directory; this is the default starting\n"
+			"point for new dirs).  `100` = full size, `0` = no credit.\n"
+			"\n"
+			"`Default Credit on Download`: percent of the file's byte count\n"
+			"charged to the downloader (per directory; default for new dirs).\n"
+			"`100` = full size, `0` = free.\n"
+			"\n"
+			"`Leech Protocol Detection`: detect users repeatedly aborting transfers\n"
+			"to \"leech\" credit-refund quirks.  Configured as a percent of file size\n"
+			"transferred within N seconds after which the abort no longer refunds.\n"
+			"`disabled` = no detection.\n"
+			"\n"
+			"`Allowed Filename Length`: maximum filename length accepted in\n"
+			"uploads/transfers.  Long-filename support varies by archive and\n"
+			"client tooling.\n"
+			"\n"
+			"`Allowed Filename Characters`: which characters are permitted in\n"
+			"filenames -- `Safest Subset`, or `Most ASCII/CP437` with optional\n"
+			"spaces.  Tighter = fewer compatibility headaches across clients.\n"
+			"\n"
+			"`Supported Archive Formats`: comma-separated list of archive\n"
+			"extensions Synchronet recognizes for QWK/REP, mail attachments, and\n"
+			"the testable/extractable file dispatchers.\n"
+			"\n"
+			"`Viewable Files...`: per-file-type dispatchers that list the contents\n"
+			"of an archive without extracting it (e.g. `zip -l`).\n"
+			"\n"
+			"`Testable Files...`: per-file-type dispatchers that verify archive\n"
+			"integrity before accepting an upload.\n"
+			"\n"
+			"`Download Events...`: external commands run when a file is\n"
+			"downloaded (logging, mirroring, notifications, etc.).\n"
+			"\n"
+			"`Extractable Files...`: per-file-type dispatchers used when a user\n"
+			"selectively extracts files from an archive in the temp section.\n"
+			"\n"
+			"`Compressible Files...`: per-file-type dispatchers used to build\n"
+			"archives on the fly (e.g. for QWK packing, temp downloads).\n"
+			"\n"
+			"`Transfer Protocols...`: configured upload/download protocols\n"
+			"(ZMODEM, YMODEM, XMODEM, Kermit, etc.) and their command-lines.\n"
 		;
 		switch (uifc.list(WIN_ORG | WIN_ACT | WIN_CHE, 0, 0, 72, &xfr_dflt, 0
 		                  , "File Options", opt)) {

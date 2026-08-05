@@ -16,14 +16,23 @@ ifdef WITH_SDL_AUDIO
  OBJS	+=	$(OBJODIR)$(DIRSEP)sdlfuncs$(OFILE)
 endif
 
-ifdef WITHOUT_CRYPTLIB
+
+# WITHOUT_CRYPTLIB is the legacy knob name that Synchronet server
+# code still checks to suppress crypto-dependent paths.  xpdev itself
+# has no crypto dependency — the TLS + encrypted-INI wrappers moved
+# to syncterm where their only consumer lives — but forward the
+# WITHOUT_CRYPTO / WITHOUT_CRYPTLIB knobs so downstream code honours them.
+ifdef WITHOUT_CRYPTO
+ WITHOUT_CRYPTLIB := 1
  CFLAGS += -DWITHOUT_CRYPTLIB
-else
- DEPS += $(CRYPT_LIB)
 endif
 
 # Executable Build Rule
 $(WRAPTEST): $(MTOBJODIR)/wraptest.o $(DEPS) | $(EXEODIR)
+	@echo Linking $@
+	$(QUIET)$(CC) -o $@ $(LDFLAGS) $(MT_LDFLAGS) $^ $(XPDEV-MT_LIB_BUILD) -lm $(XPDEV-MT_LIBS)
+
+$(MIXERTEST): $(MTOBJODIR)/mixertest.o $(DEPS) | $(EXEODIR)
 	@echo Linking $@
 	$(QUIET)$(CC) -o $@ $(LDFLAGS) $(MT_LDFLAGS) $^ $(XPDEV-MT_LIB_BUILD) -lm $(XPDEV-MT_LIBS)
 

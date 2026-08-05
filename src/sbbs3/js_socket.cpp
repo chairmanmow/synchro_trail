@@ -276,6 +276,29 @@ static bool js_socket_peek_byte(JSContext *cx, js_socket_private_t *p)
 	return false;
 }
 
+bool js_socket_tls_readable(js_socket_private_t* p)
+{
+	int copied;
+	int status;
+
+	if (p == NULL || p->session == -1)
+		return false;
+	if (p->peeked)
+		return true;
+	if (do_cryptAttribute(p->session, CRYPT_OPTION_NET_READTIMEOUT, 0) != CRYPT_OK)
+		return true;
+	status = cryptPopData(p->session, &p->peeked_byte, 1, &copied);
+	if (status == CRYPT_OK) {
+		if (copied == 1) {
+			p->peeked = true;
+			return true;
+		}
+		return false;
+	}
+	/* Let the normal receive path handle EOF and errors. */
+	return status != CRYPT_ERROR_TIMEOUT;
+}
+
 /* Returns > 0 upon successful data received (even if there was an error or disconnection) */
 /* Returns -1 upon error (and no data received) */
 /* Returns 0 upon timeout or disconnection (and no data received) */
@@ -1249,7 +1272,7 @@ js_sendto(JSContext *cx, uintN argc, jsval *arglist)
 	hints.ai_flags = AI_ADDRCONFIG;
 	dbprintf(false, p, "resolving hostname: %s", p->hostname);
 
-	if ((result = getaddrinfo(p->hostname, NULL, &hints, &res) != 0)) {
+	if ((result = getaddrinfo(p->hostname, NULL, &hints, &res)) != 0) {
 		store_socket_error(p, result, gai_strerror(result));
 		dbprintf(true, p, "getaddrinfo(%s) failed with error %d", p->hostname, result);
 		JS_SET_RVAL(cx, arglist, JSVAL_FALSE);
@@ -1941,6 +1964,7 @@ js_poll(JSContext *cx, uintN argc, jsval *arglist)
 	jsval *              argv = JS_ARGV(cx, arglist);
 	js_socket_private_t* p;
 	bool                 poll_for_write = false;
+	bool                 tls_readable;
 	uintN                argn;
 	int                  result;
 	jsrefcount           rc;
@@ -1981,10 +2005,11 @@ js_poll(JSContext *cx, uintN argc, jsval *arglist)
 #endif
 		}
 	}
+	tls_readable = !poll_for_write && js_socket_tls_readable(p);
 
 	rc = JS_SUSPENDREQUEST(cx);
 #ifdef PREFER_POLL
-	if (p->peeked && !poll_for_write) {
+	if (tls_readable) {
 		result = 1;
 	}
 	else {
@@ -2018,7 +2043,7 @@ js_poll(JSContext *cx, uintN argc, jsval *arglist)
 	else
 		rd_set = &socket_set;
 
-	if (p->peeked && !poll_for_write)
+	if (tls_readable)
 		result = 1;
 	else
 		result = select(high + 1, rd_set, wr_set, NULL, &tv);
@@ -2358,7 +2383,7 @@ static JSBool js_socket_set(JSContext *cx, JSObject *obj, jsid id, JSBool strict
 							ulong nb = 0;
 							ioctlsocket(p->sock, FIONBIO, &nb);
 							nb = 1;
-							setsockopt(p->sock, IPPROTO_TCP, TCP_NODELAY, (char*)&nb, sizeof(nb));
+							(void)setsockopt(p->sock, IPPROTO_TCP, TCP_NODELAY, (char*)&nb, sizeof(nb));
 							if ((ret = do_cryptAttribute(p->session, CRYPT_SESSINFO_NETWORKSOCKET, p->sock)) == CRYPT_OK) {
 								int minver = CRYPT_TLSOPTION_MINVER_TLS12;
 								if (p->tls_minver == 100)
@@ -3245,6 +3270,7 @@ js_connected_socket_constructor(JSContext *cx, uintN argc, jsval *arglist)
 		goto fail;
 	}
 	memset(p, 0, sizeof(js_socket_private_t));
+	p->sock = INVALID_SOCKET;
 
 	rc = JS_SUSPENDREQUEST(cx);
 	sprintf(pstr, "%hu", port);
@@ -3258,7 +3284,6 @@ js_connected_socket_constructor(JSContext *cx, uintN argc, jsval *arglist)
 		JS_ReportError(cx, gai_strerror(i));
 		goto fail;
 	}
-	p->sock = INVALID_SOCKET;
 	for (cur = res; cur && p->sock == INVALID_SOCKET; cur = cur->ai_next) {
 		if (p->sock == INVALID_SOCKET) {
 			p->sock = socket(cur->ai_family, cur->ai_socktype, cur->ai_protocol);
@@ -3383,7 +3408,11 @@ connected:
 	return JS_TRUE;
 
 fail:
-	free(p);
+	if (p != nullptr) {
+		if (p->sock != INVALID_SOCKET)
+			closesocket(p->sock);
+		free(p);
+	}
 	free(protocol);
 	free(host);
 	return JS_FALSE;

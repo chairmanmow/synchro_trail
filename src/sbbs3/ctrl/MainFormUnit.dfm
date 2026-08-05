@@ -14006,6 +14006,31 @@ object MainForm: TMainForm
       object N6: TMenuItem
         Caption = '-'
       end
+      object TelnetViewMenuItem: TMenuItem
+        AutoHotkeys = maManual
+        Caption = '&View'
+        ImageIndex = 47
+        object TelnetViewTodaysLog: TMenuItem
+          Caption = 'Today'#39's Log'
+          Hint = 'ts'
+          ImageIndex = 47
+          OnClick = ViewLogClick
+        end
+        object TelnetViewYesterdaysLog: TMenuItem
+          Tag = 1
+          Caption = 'Yesterday'#39's Log'
+          Hint = 'ts'
+          ImageIndex = 53
+          OnClick = ViewLogClick
+        end
+        object TelnetViewDatesLog: TMenuItem
+          Tag = -1
+          Caption = 'Another Day'#39's Log'
+          Hint = 'ts'
+          ImageIndex = 51
+          OnClick = ViewLogClick
+        end
+      end
       object TelnetEditMenuItem: TMenuItem
         AutoHotkeys = maManual
         Caption = '&Edit'
@@ -14222,6 +14247,31 @@ object MainForm: TMainForm
       end
       object N11: TMenuItem
         Caption = '-'
+      end
+      object WebViewMenuItem: TMenuItem
+        AutoHotkeys = maManual
+        Caption = '&View'
+        ImageIndex = 47
+        object WebViewTodaysLog: TMenuItem
+          Caption = 'Today'#39's Log'
+          Hint = 'ws'
+          ImageIndex = 47
+          OnClick = ViewLogClick
+        end
+        object WebViewYesterdaysLog: TMenuItem
+          Tag = 1
+          Caption = 'Yesterday'#39's Log'
+          Hint = 'ws'
+          ImageIndex = 53
+          OnClick = ViewLogClick
+        end
+        object WebViewDatesLog: TMenuItem
+          Tag = -1
+          Caption = 'Another Day'#39's Log'
+          Hint = 'ws'
+          ImageIndex = 51
+          OnClick = ViewLogClick
+        end
       end
       object WebEditMenuItem: TMenuItem
         AutoHotkeys = maManual

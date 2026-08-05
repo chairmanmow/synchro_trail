@@ -280,10 +280,41 @@ void xprogs_cfg()
 		strcpy(opt[i++], "Online Programs (Doors)");
 		opt[i][0] = 0;
 		uifc.helpbuf =
-			"`Online External Programs:`\n"
+			"`External Programs:`\n"
 			"\n"
-			"From this menu, you can configure external events, external message\n"
-			"editors, or online external programs (e.g. `door games`).\n"
+			"Configuration entry points for the various ways Synchronet runs\n"
+			"external programs and scripts: scheduled events, native-vs-DOS\n"
+			"dispatch hints, the user-facing message editor list, global hot-key\n"
+			"events, and the classic \"doors\" (online programs) section users see\n"
+			"in the BBS.  All of these run under the Terminal Server (events run\n"
+			"on its event thread; the rest in the context of an online user node).\n"
+			"\n"
+			"`Fixed Events`: built-in events that fire at known points in the BBS\n"
+			"lifecycle (daily maintenance, logon, logoff, etc.).  Each slot is a\n"
+			"command-line plus a few flags.\n"
+			"\n"
+			"`Timed Events`: user-defined events run at scheduled times (cron-like)\n"
+			"or in response to semaphore files.  Used for nightly batch jobs, QWK\n"
+			"packet runs, message-base maintenance, etc.\n"
+			"\n"
+			"`Native Program List`: list of program filenames (or wildcards) that\n"
+			"Synchronet should treat as native executables (as opposed to running\n"
+			"under an emulated DOS environment).\n"
+			"\n"
+			"`Message Editors`: configures the full-screen message editors users\n"
+			"may choose from when composing posts and e-mail.  Each editor is\n"
+			"referenced by its short code (e.g. `SlyEdit`, `FSEDITOR`).\n"
+			"\n"
+			"`Global Hot Key Events`: maps single keystrokes typed anywhere in the\n"
+			"BBS to a command or external program, gated by per-event Access\n"
+			"Requirements (i.e. not sysop-only -- any user meeting the ARS can\n"
+			"trigger them).  See also the `Control Key Pass-through` knob under\n"
+			"`System > Advanced Options`.\n"
+			"\n"
+			"`Online Programs (Doors)`: the doors / external programs section,\n"
+			"organized into sections (groups) of programs.  Each program is a\n"
+			"command-line plus access requirements, cost, and other per-door\n"
+			"metadata.\n"
 		;
 		switch (uifc.list(WIN_ORG | WIN_CHE | WIN_ACT, 0, 0, 0, &xprogs_dflt, 0
 		                  , "External Programs", opt)) {
@@ -1040,12 +1071,13 @@ const char* io_method(uint32_t mode)
 {
 	static char str[128];
 
-	sprintf(str, "%s%s%s"
+	sprintf(str, "%s%s%s%s"
 	        , mode & XTRN_UART ? "UART" : (mode & XTRN_FOSSIL) ? "FOSSIL"
 	            : (mode & XTRN_STDIO ? "Standard"
 	                : mode & XTRN_CONIO ? "Console": (mode & XTRN_NATIVE ? "Socket" : "FOSSIL or UART"))
 	        , (mode & (XTRN_STDIO | WWIVCOLOR)) == (XTRN_STDIO | WWIVCOLOR) ? ", WWIV Color" : ""
-	        , (mode & (XTRN_STDIO | XTRN_NOECHO)) == (XTRN_STDIO | XTRN_NOECHO) ? ", No Echo" : "");
+	        , (mode & (XTRN_STDIO | XTRN_NOECHO)) == (XTRN_STDIO | XTRN_NOECHO) ? ", No Echo" : ""
+	        , (mode & XTRN_BIN) ? ", Untranslated" : "");
 	return str;
 }
 
@@ -1184,6 +1216,29 @@ void choose_io_method(uint32_t* misc)
 				uifc.changes = TRUE;
 			}
 			break;
+	}
+
+	k = ((*misc) & XTRN_BIN) ? 1 : 0;
+	uifc.helpbuf =
+		"`Translate Character Set:`\n"
+		"\n"
+		"When ~Yes~ (the default), Synchronet translates this program's output\n"
+		"to the remote terminal's character set (e.g. CP437 to UTF-8) and\n"
+		"converts bare line-feeds to CR/LF.\n"
+		"\n"
+		"Set to ~No~ for a program that emits output already encoded for the\n"
+		"terminal (its own UTF-8 or raw graphics) and handles line-endings\n"
+		"itself; its output is then passed through `Untranslated`.\n"
+	;
+	k = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &k, 0
+	              , "Translate Character Set"
+	              , uifcYesNoOpts);
+	if (!k && ((*misc) & XTRN_BIN)) {              /* Yes -> translate */
+		(*misc) &= ~XTRN_BIN;
+		uifc.changes = TRUE;
+	} else if (k == 1 && !((*misc) & XTRN_BIN)) {  /* No -> untranslated */
+		(*misc) |= XTRN_BIN;
+		uifc.changes = TRUE;
 	}
 }
 
@@ -2699,6 +2754,7 @@ void hotkey_cfg(void)
 			snprintf(opt[k++], MAX_OPLN, "%-27.27sCtrl-%c", "Global Hot Key"
 			         , cfg.hotkey[i]->key + '@');
 			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "Command Line", cfg.hotkey[i]->cmd);
+			snprintf(opt[k++], MAX_OPLN, "%-27.27s%s", "I/O Method", io_method(cfg.hotkey[i]->misc));
 			opt[k][0] = 0;
 			uifc.helpbuf =
 				"`Global Hot Key Event:`\n"
@@ -2747,6 +2803,9 @@ void hotkey_cfg(void)
 					;
 					uifc.input(WIN_MID | WIN_SAV, 0, 10, "Command"
 					           , cfg.hotkey[i]->cmd, sizeof(cfg.hotkey[i]->cmd) - 1, K_EDIT);
+					break;
+				case 2:
+					choose_io_method(&cfg.hotkey[i]->misc);
 					break;
 			}
 		}

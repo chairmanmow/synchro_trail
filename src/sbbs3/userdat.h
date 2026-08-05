@@ -68,6 +68,7 @@ DLLEXPORT int   fgetuserdat(scfg_t*, user_t*, int file);
 DLLEXPORT int   fputuserdat(scfg_t*, user_t*, int file);
 DLLEXPORT bool  format_userdat(scfg_t*, user_t*, char userdat[]);
 DLLEXPORT bool  lockuserdat(int file, int user_number);
+DLLEXPORT bool  rdlockuserdat(int file, int user_number);
 DLLEXPORT bool  unlockuserdat(int file, int user_number);
 DLLEXPORT int   putuserdat(scfg_t*, user_t*);   // Put user_t into user file
 DLLEXPORT int   newuserdat(scfg_t*, user_t*);   // Create new user in user file
@@ -125,6 +126,7 @@ DLLEXPORT bool  set_node_status(scfg_t*, int node_num, enum node_status);
 DLLEXPORT bool  set_node_misc(scfg_t*, int node_num, uint);
 DLLEXPORT bool  set_node_errors(scfg_t*, int node_num, uint);
 DLLEXPORT bool  xtrn_is_running(scfg_t*, int xtrn_num);
+DLLEXPORT bool  user_can_access_xtrn(scfg_t*, int xtrn_num, user_t*, client_t* client);
 
 DLLEXPORT int  finduserstr(scfg_t*, int usernumber, enum user_field, const char *str
                             , bool del, bool next, void (*progress)(void*, int, int), void* cbdata);
@@ -244,6 +246,7 @@ DLLEXPORT link_list_t*      loginAttemptListInit(link_list_t*);
 DLLEXPORT bool              loginAttemptListFree(link_list_t*);
 DLLEXPORT long              loginAttemptListCount(link_list_t*);
 DLLEXPORT long              loginAttemptListClear(link_list_t*);
+DLLEXPORT long              loginAttemptListClearAddr(link_list_t*, const char* ip_addr);
 DLLEXPORT long              loginAttempts(link_list_t*, const union xp_sockaddr*);
 DLLEXPORT void              loginSuccess(link_list_t*, const union xp_sockaddr*);
 DLLEXPORT ulong             loginFailure(link_list_t*, const union xp_sockaddr*, const char* prot, const char* user, const char* pass, login_attempt_t*);

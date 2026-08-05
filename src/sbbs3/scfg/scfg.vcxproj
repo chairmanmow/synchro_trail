@@ -173,6 +173,7 @@
     <ClCompile Include="..\msgdate.c" />
     <ClCompile Include="..\sbbs_ini.c" />
     <ClCompile Include="..\trash.c" />
+    <ClCompile Include="..\getmail.c" />
     <ClCompile Include="..\userdat.c" />
     <ClCompile Include="scfg.c">
       <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -210,6 +211,7 @@
       <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
+    <ClCompile Include="scfgsrch.c" />
     <ClCompile Include="scfgsrvr.c" />
     <ClCompile Include="scfgsub.c">
       <AdditionalIncludeDirectories Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
@@ -263,6 +265,8 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="resource.h" />
+    <ClInclude Include="scfgindex.h" />
+    <ClInclude Include="scfgsrch.h" />
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="scfg.rc" />

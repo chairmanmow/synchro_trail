@@ -310,21 +310,21 @@ echostat_msg_t parse_echostat_msg(str_list_t ini, const char* section, const cha
 	char           key[128];
 	echostat_msg_t msg = {{0}};
 
-	snprintf(key, sizeof key, "%s.to", prefix),         iniGetString(ini, section, key, NULL, msg.to);
-	snprintf(key, sizeof key, "%s.from", prefix),       iniGetString(ini, section, key, NULL, msg.from);
-	snprintf(key, sizeof key, "%s.subj", prefix),       iniGetString(ini, section, key, NULL, msg.subj);
-	snprintf(key, sizeof key, "%s.msg_id", prefix),     iniGetString(ini, section, key, NULL, msg.msg_id);
-	snprintf(key, sizeof key, "%s.reply_id", prefix),   iniGetString(ini, section, key, NULL, msg.reply_id);
-	snprintf(key, sizeof key, "%s.pid", prefix),            iniGetString(ini, section, key, NULL, msg.pid);
-	snprintf(key, sizeof key, "%s.tid", prefix),            iniGetString(ini, section, key, NULL, msg.tid);
-	snprintf(key, sizeof key, "%s.msg_tz", prefix),     iniGetString(ini, section, key, NULL, msg.msg_tz);
+	snprintf(key, sizeof key, "%s.to", prefix),         iniGetSString(ini, section, key, NULL, msg.to, sizeof msg.to);
+	snprintf(key, sizeof key, "%s.from", prefix),       iniGetSString(ini, section, key, NULL, msg.from, sizeof msg.from);
+	snprintf(key, sizeof key, "%s.subj", prefix),       iniGetSString(ini, section, key, NULL, msg.subj, sizeof msg.subj);
+	snprintf(key, sizeof key, "%s.msg_id", prefix),     iniGetSString(ini, section, key, NULL, msg.msg_id, sizeof msg.msg_id);
+	snprintf(key, sizeof key, "%s.reply_id", prefix),   iniGetSString(ini, section, key, NULL, msg.reply_id, sizeof msg.reply_id);
+	snprintf(key, sizeof key, "%s.pid", prefix),            iniGetSString(ini, section, key, NULL, msg.pid, sizeof msg.pid);
+	snprintf(key, sizeof key, "%s.tid", prefix),            iniGetSString(ini, section, key, NULL, msg.tid, sizeof msg.tid);
+	snprintf(key, sizeof key, "%s.msg_tz", prefix),     iniGetSString(ini, section, key, NULL, msg.msg_tz, sizeof msg.msg_tz);
 	snprintf(key, sizeof key, "%s.msg_time", prefix),   msg.msg_time = iniGetDateTime(ini, section, key, 0);
 	snprintf(key, sizeof key, "%s.localtime", prefix),  msg.localtime = iniGetDateTime(ini, section, key, 0);
 	snprintf(key, sizeof key, "%s.length", prefix),     msg.length = (size_t)iniGetBytes(ini, section, key, 1, 0);
-	snprintf(key, sizeof key, "%s.origaddr", prefix),   iniGetString(ini, section, key, NULL, str);
+	snprintf(key, sizeof key, "%s.origaddr", prefix),   iniGetSString(ini, section, key, NULL, str, sizeof str);
 	if (str[0])
 		msg.origaddr = atofaddr(str);
-	snprintf(key, sizeof key, "%s.pkt_orig", prefix),   iniGetString(ini, section, key, NULL, str);
+	snprintf(key, sizeof key, "%s.pkt_orig", prefix),   iniGetSString(ini, section, key, NULL, str, sizeof str);
 	if (str[0])
 		msg.pkt_orig = atofaddr(str);
 
@@ -2038,13 +2038,13 @@ void alter_areas(str_list_t add_area, str_list_t del_area, nodecfg_t* nodecfg, c
 		        , smb_faddrtoa(&addr, NULL), (ulong)deleted, cfg.areafile);
 	if (added || deleted) {
 		if (stat(cfg.areafile, &st) == 0)
-			chmod(outpath, st.st_mode);
+			(void)chmod(outpath, st.st_mode); /* best-effort permission preserve before rename */
 		if (cfg.areafile_backups == 0 || !backup(cfg.areafile, cfg.areafile_backups, /* ren: */ TRUE))
 			delfile(cfg.areafile, __LINE__);                    /* Delete AREAS.BBS */
 		if (rename(outpath, cfg.areafile))           /* Rename new AREAS.BBS file */
 			lprintf(LOG_ERR, "ERROR line %d renaming %s to %s", __LINE__, outpath, cfg.areafile);
 	}
-	remove(outpath); // expected to fail (file does not exist) much of the time
+	(void)remove(outpath); // expected to fail (file does not exist) much of the time
 }
 
 bool add_sub_to_arealist(sub_t* sub, fidoaddr_t uplink)
@@ -4578,7 +4578,7 @@ bool pkt_to_msg(FILE* fidomsg, fmsghdr_t* hdr, const char* info, const char* inb
 	char  path[MAX_PATH + 1];
 	char* fmsgbuf;
 	int   i, file;
-	ulong l;
+	size_t l;
 	bool  result = true;
 
 	if ((fmsgbuf = getfmsg(fidomsg, &l)) == NULL) {
@@ -4660,7 +4660,7 @@ int import_netmail(const char* path, const fmsghdr_t* inhdr, FILE** fp, const ch
 	char       tmp[MAX_PATH + 1];
 	char *     fmsgbuf = NULL, *p, *tp;
 	int        i, match, usernumber = 0;
-	ulong      length;
+	size_t     length;
 	fidoaddr_t addr;
 	fmsghdr_t  hdr = *inhdr;
 	bool       is_pkt = (path[0] == 0);
@@ -4860,6 +4860,11 @@ int import_netmail(const char* path, const fmsghdr_t* inhdr, FILE** fp, const ch
 		}
 
 		usernumber = atoi(hdr.to);
+		if (usernumber) {   /* Addressed by user number: don't accept an inactive account */
+			user_t user = { .number = usernumber };
+			if (getuserdat(&scfg, &user) != USER_SUCCESS || !user_is_active(&user))
+				usernumber = 0;
+		}
 		if (!usernumber && strListFind(cfg.sysop_alias_list, hdr.to, /* case sensitive: */ false) >= 0)
 			usernumber = 1;
 		if (!usernumber)
@@ -6058,6 +6063,7 @@ void find_stray_packets(void)
 		else {
 			if ((pkt->fp = fopen(pkt->filename, "ab")) == NULL) {
 				lprintf(LOG_ERR, "ERROR %d (%s) line %d opening %s", errno, strerror(errno), __LINE__, pkt->filename);
+				free(pkt->filename);
 				free(pkt);
 				continue;
 			}

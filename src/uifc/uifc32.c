@@ -193,12 +193,14 @@ int inkey(void)
 {
 	int c;
 
-	c = getch();
-	if (!c || c == 0xe0) {
-		c |= (getch() << 8);
-		if (c == CIO_KEY_LITERAL_E0)
-			c = 0xe0;
-	}
+	do {
+		c = getch();
+		if (!c || c == 0xe0) {
+			c |= (getch() << 8);
+			if (c == CIO_KEY_LITERAL_E0)
+				c = 0xe0;
+		}
+	} while (c == CIO_KEY_KEY_EVENT);
 	return c;
 }
 
@@ -213,6 +215,7 @@ fill_blk_scrn(BOOL force)
 			blk_scrn[i].legacy_attr = attr;
 			blk_scrn[i].ch = api->chars->background;
 			blk_scrn[i].font = 0;
+			blk_scrn[i].hyperlink_id = 0;
 			attr2palette(blk_scrn[i].legacy_attr, &blk_scrn[i].fg, &blk_scrn[i].bg);
 		}
 		blk_scrn_ch = api->chars->background;
@@ -418,6 +421,8 @@ void docopy(void)
 			if (key == CIO_KEY_LITERAL_E0)
 				key = 0xe0;
 		}
+		if (key == CIO_KEY_KEY_EVENT)
+			continue;
 		switch (key) {
 			case CIO_KEY_MOUSE:
 				getmouse(&mevent);
@@ -755,7 +760,6 @@ int ulist(uifc_winmode_t mode, int left, int top, int width, int *cur, int *bar
 		width = title_len + hbrdrsize + 2;
 		for (i = 0; i < opts; i++) {
 			if (option[i] != NULL) {
-				truncspctrl(option[i]);
 				if ((j = strlen(option[i]) + hbrdrsize + 2 + 1) > width)
 					width = j;
 			}
@@ -1813,6 +1817,16 @@ int ulist(uifc_winmode_t mode, int left, int top, int width, int *cur, int *bar
 							return -1;
 						case CTRL_F:            /* find */
 						case CTRL_G:
+							/* When WIN_NOFIND is set the caller wants to
+							 * intercept Ctrl-F/Ctrl-G itself (typically to
+							 * invoke a richer "find" implementation). Hand
+							 * the key back via WIN_EXTKEYS rather than
+							 * running the built-in linear find. */
+							if (mode & WIN_NOFIND) {
+								if (mode & WIN_EXTKEYS)
+									return -2 - gotkey;
+								break;
+							}
 							if (/*!(api->mode&UIFC_NOCTRL)*/ 1) { // No no, *this* control key is fine!
 								if (gotkey == CTRL_G || api->input(WIN_MID | WIN_SAV, 0, 0, "Find", search, sizeof(search), K_EDIT | K_FIND) > 0) {
 									for (j = (*cur) + 1; j != *cur; j++, j = (j >= opts) ? 0 : j) {
@@ -2618,7 +2632,8 @@ void bottomline(uifc_winmode_t mode)
 	}
 	if (mode & WIN_EDIT) {
 		i += uprintf(i, api->scrn_len + 1, api->bclr | (api->cclr << 4), "F2 ");
-		i += uprintf(i, api->scrn_len + 1, BLACK | (api->cclr << 4), "Edit Item  ");
+		i += uprintf(i, api->scrn_len + 1, BLACK | (api->cclr << 4), "%s",
+		    api->edit_item != NULL ? api->edit_item : "Edit Item  ");
 	}
 	if (mode & WIN_TAG) {
 		i += uprintf(i, api->scrn_len + 1, api->bclr | (api->cclr << 4), "Space ");
@@ -2859,8 +2874,13 @@ void showbuf(uifc_winmode_t mode, int left, int top, int width, int height, cons
 
 	if ((unsigned)(top + height) >= api->scrn_len)
 		height = api->scrn_len - top;
-	if (!width || (unsigned)width < title_len + 6)
-		width = title_len + 6;
+	/* Layout is `<TL><h><h><tbL><sp>title<sp><tbR><h><h><TR>` - the title's
+	 * bracket pair plus its surrounding spaces, top corners, and a minimum
+	 * of two horizontal segments per side cost title_len + 8 cells. The
+	 * old +6 minimum left titlebreak_right and top_right one cell each
+	 * past the row, corrupting row 2's left edge. */
+	if (!width || (unsigned)width < title_len + 8)
+		width = title_len + 8;
 	if ((unsigned)(width + left) > api->scrn_width)
 		width = api->scrn_width - left;
 	if (mode & WIN_L2R)

@@ -67,10 +67,10 @@ else
 }
 
 
-const EDITOR_PROGRAM_NAME = "SlyEdit";
-const ERRORMSG_PAUSE_MS = 1500;
-const TEXT_SEARCH_PAUSE_MS = 1500;
-const SPELL_CHECK_PAUSE_MS = 1000;
+var EDITOR_PROGRAM_NAME = "SlyEdit";
+var ERRORMSG_PAUSE_MS = 1500;
+var TEXT_SEARCH_PAUSE_MS = 1500;
+var SPELL_CHECK_PAUSE_MS = 1000;
 
 // This script requires Synchronet version 3.14 or higher.
 // Exit if the Synchronet version is below the minimum.
@@ -102,8 +102,8 @@ if (console.screen_columns < 80)
 }
 
 // Version information
-var EDITOR_VERSION = "2.00";
-var EDITOR_VER_DATE = "2026-03-05";
+var EDITOR_VERSION = "2.03";
+var EDITOR_VER_DATE = "2026-06-30";
 
 
 // Program variables
@@ -346,8 +346,8 @@ var gEditLines = [];
 var gEditLinesIndex = 0;      // Index into gEditLines for the line being edited
 var gTextLineIndex = 0;       // Index into the current text line being edited
 // Format strings used for printf() to display text in the edit area
-const gFormatStr = "%-" + gEditWidth + "s";
-const gFormatStrWithAttr = "%s%-" + gEditWidth + "s";
+var gFormatStr = "%-" + gEditWidth + "s";
+var gFormatStrWithAttr = "%s%-" + gEditWidth + "s";
 // Will contain valid word characters, for spell checking
 var gValidWordChars = "";
 
@@ -356,11 +356,11 @@ var gValidWordChars = "";
 var gUploadedMessageFile = false;
 
 // Definitions for actions to take after the Enter key is pressed
-const ENTER_ACTION_NONE = 0;
-const ENTER_ACTION_DO_QUOTE_SELECTION = 1;
-const ENTER_ACTION_DO_CROSS_POST_SELECTION = 2;
-const ENTER_ACTION_DO_MEME_INPUT = 3;
-const ENTER_ACTION_SHOW_HELP = 4;
+var ENTER_ACTION_NONE = 0;
+var ENTER_ACTION_DO_QUOTE_SELECTION = 1;
+var ENTER_ACTION_DO_CROSS_POST_SELECTION = 2;
+var ENTER_ACTION_DO_MEME_INPUT = 3;
+var ENTER_ACTION_SHOW_HELP = 4;
 
 // gEditAreaBuffer will be an array of strings for the edit area, which
 // will be checked by displayEditLines() before outputting text lines
@@ -2751,9 +2751,8 @@ function handleSlashCommands(pCurpos, pCurrentWordLength)
 			return retObj;
 		}
 	}
-
 	// /UL or /UPLOAD
-	if ((lineLen == 3 && lineUpper == "/UL") || (lineLen == 7 && lineUpper == "/UPLOAD"))
+	else if ((lineLen == 3 && lineUpper == "/UL") || (lineLen == 7 && lineUpper == "/UPLOAD"))
 	{
 		if (letUserUploadMessageFile())
 		{
@@ -3263,6 +3262,8 @@ function doQuoteSelection(pCurpos, pCurrentWordLength, pQuoteKey)
 
 	var quoteLineMenu = createQuoteLineMenu(quoteTopScreenRow, pQuoteKey);
 	var insertedQuoteLines = false;
+	var quoteLinesHaveAttrs = false;
+	var lastEditLineIndexWithNewQuoteLine = -1;
 	// Customize the menu's OnItemSelect function to add the selected quote
 	// line to the message.  Note that the menu's exitOnItemSelect is set
 	// to false in createQuoteLineMenu() so that its input loop won't
@@ -3280,8 +3281,11 @@ function doQuoteSelection(pCurpos, pCurrentWordLength, pQuoteKey)
 
 		// Insert the quote line into gEditLines after the current gEditLines index.
 		var quoteLine = getQuoteTextLine(pQuoteLineIdx, quoteLineMenu.size.width);
-		var insertedBelow = insertLineIntoMsg(gEditLinesIndex, quoteLine, true, true);
-		if (insertedBelow)
+		var insertRetObj = insertLineIntoMsg(gEditLinesIndex, quoteLine, true, true);
+		lastEditLineIndexWithNewQuoteLine = gEditLinesIndex;
+		if (insertRetObj.hasAttrs)
+			quoteLinesHaveAttrs = true;
+		if (insertRetObj.insertedBelow)
 		{
 			// The cursor will need to be moved down 1 more line.
 			// So, increment numTimesToMoveDown, and set curpos.x
@@ -3334,6 +3338,17 @@ function doQuoteSelection(pCurpos, pCurrentWordLength, pQuoteKey)
 	quoteLineMenu.GetVal();
 	doQuoteSelection.selectedQuoteLineIdx = quoteLineMenu.selectedItemIdx;
 	doQuoteSelection.topQuoteLineIdx = quoteLineMenu.topItemIdx;
+
+	// If the quote lines have attribute codes, then append a
+	// normal attribute to the last inserted quote line so that
+	// the attribute code doesn't apply to additiona lines that
+	// the user writes.
+	if (quoteLinesHaveAttrs && lastEditLineIndexWithNewQuoteLine > -1)
+	{
+		gEditLines[lastEditLineIndexWithNewQuoteLine].text += "\x01n";
+		var quoteLineLen = console.strlen(gEditLines[lastEditLineIndexWithNewQuoteLine].text);
+		gEditLines[lastEditLineIndexWithNewQuoteLine].attrs[quoteLineLen] = "\x01n";
+	}
 
 	// We've exited quote mode.  Refresh the message text on the screen.  Note:
 	// This will refresh only the quote window portion of the screen if the
@@ -4096,13 +4111,19 @@ function getWordLength(pEditLinesIndex, pTextLineIndex)
 //  pHardNewline: Whether or not to enable the hard newline flag for the line
 //  pIsQuoteLine: Whether or not the line is a quote line
 //
-// Return value: Whether or not the line was inserted below the given index
-//               (as opposed to above).
+// Return value: An object with the following properties:
+//               insertedBelow: Whether or not the line was inserted below the given index
+//                              (as opposed to above).
+//               hasAttrs: Whether or not the line has attribute codes
 function insertLineIntoMsg(pInsertLineIndex, pString, pHardNewline, pIsQuoteLine)
 {
-	var insertedBelow = false;
+	var retObj = {
+		insertedBelow: false,
+		hasAttrs: false
+	};
 	// Create the new text line
 	var line = new TextLine(pString, pHardNewline, pIsQuoteLine);
+	retObj.hasAttrs = line.hasAttrs();
 	// If the current message line is empty, insert the quote line above
 	// the current line.  Otherwise, insert the quote line below the
 	// current line.
@@ -4120,9 +4141,9 @@ function insertLineIntoMsg(pInsertLineIndex, pString, pHardNewline, pIsQuoteLine
 		// The current message line should have its hardNewlineEnd set
 		// true so that the quote line won't get wrapped up.
 		gEditLines[pInsertLineIndex].hardNewlineEnd = true;
-		insertedBelow = true;
+		retObj.insertedBelow = true;
 	}
-	return insertedBelow;
+	return retObj;
 }
 
 // Prompts the user for a filename on the BBS computer and loads its contents
@@ -6723,7 +6744,7 @@ function letUserUploadMessageFile(pCurpos)
 	gUploadedMessageFile = false;
 
 	var originalCurpos;
-	if ((typeof(pCurpos) == "object") && pCurpos.hasOwnProperty("x") && pCurpos.hasOwnProperty("y"))
+	if (typeof(pCurpos) === "object" && pCurpos.hasOwnProperty("x") && pCurpos.hasOwnProperty("y"))
 		originalCurpos = pCurpos;
 	else
 		originalCurpos = console.getxy();
@@ -6740,7 +6761,7 @@ function letUserUploadMessageFile(pCurpos)
 			console.print("Upload succeeded.\r\n");
 			// Read the file and populate gEditLines
 			var msgFile = new File(msgFilename);
-			if (msgFile.open("r"))
+			if (msgFile.open("rb"))
 			{
 				uploadedMessage = true;
 				gUploadedMessageFile = true;
@@ -6751,21 +6772,19 @@ function letUserUploadMessageFile(pCurpos)
 					delete gEditLines[i];
 				gEditLines = [];
 
-				var fileLine;
+				// Read the file lines and populate gEditLines
 				while (!msgFile.eof)
 				{
 					// Read the next line from the file
-					fileLine = msgFile.readln(2048);
+					var fileLine = msgFile.readln(2048);
 
 					// fileLine should be a string, but I've seen some cases
 					// where for some reason it isn't.  If it's not a string,
 					// then continue onto the next line.
-					if (typeof(fileLine) != "string")
+					if (typeof(fileLine) !== "string")
 						continue;
 					// Add the line to gEditLines
-					// TODO: It seems this isn't populating gEditLines and
-					// it's sending an empty message.
-					gEditLines.push(new TextLine(fileLine, true, false));
+					gEditLines.push(new TextLine(fileLine, true, false, true));
 				}
 
 				msgFile.close();

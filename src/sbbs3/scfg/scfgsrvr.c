@@ -132,6 +132,349 @@ static void login_attempt_cfg(struct login_attempt_settings* login_attempt)
 	}
 }
 
+static void max_concurrent_cfg(uint* max, struct max_concurrent_settings* settings)
+{
+	static int cur, bar;
+	char       str[256];
+	bool       changes = uifc.changes;
+
+	while (1) {
+		int i = 0;
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Maximum (Unauthenticated)", maximum(*max));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Auto-Filter Threshold", threshold(settings->filter_threshold));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Auto-Filter Duration"
+		         , vduration(settings->filter_duration, strInfinite));
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Auto-Filter Silently"
+		         , settings->filter_silent ? "Yes" : "No");
+		opt[i][0] = '\0';
+
+		uifc.helpbuf =
+			"`Max Concurrent Connections Settings:`\n"
+			"\n"
+			"Limit the number of simultaneous unauthenticated connections from a\n"
+			"single IP address.  Optionally, IP addresses that hit this limit\n"
+			"repeatedly are automatically added to the IP filter (`text/ip.can`).\n"
+			"\n"
+			"`Maximum`: maximum number of concurrent unauthenticated connections\n"
+			"allowed from a single client IP address.\n"
+			"\n"
+			"`Auto-Filter Threshold`: number of times a client IP may hit the\n"
+			"`Maximum` connection limit before being automatically added to the\n"
+			"IP filter file.  Set to `0` to disable auto-filtering.\n"
+			"\n"
+			"`Auto-Filter Duration`: lifetime of an automatically-added entry in\n"
+			"`text/ip.can`.  Set to `0` to filter the IP indefinitely.\n"
+			"\n"
+			"`Auto-Filter Silently`: if `Yes`, abuser IPs are added to\n"
+			"`text/ip-silent.can` instead of `text/ip.can`, so subsequent\n"
+			"connections from those IPs are dropped without logging a\n"
+			"`blocked` notice.\n"
+			"\n"
+			"The strike counter for an IP is held in memory and is cleared on\n"
+			"any of: a successful login from that IP, terminal server recycle\n"
+			"or restart, the `clear*.term` semaphore file, or the MQTT `clear`\n"
+			"topic.\n"
+		;
+		switch (uifc.list(WIN_ACT | WIN_BOT | WIN_SAV, 0, 0, 0, &cur, &bar
+		                  , "Max Concurrent Connections", opt)) {
+			case 0:
+				SAFECOPY(str, maximum(*max));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Concurrent (Unauthenticated) Connections", str, 10, K_EDIT) > 0)
+					*max = atoi(str);
+				break;
+			case 1:
+				SAFEPRINTF(str, "%u", settings->filter_threshold);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Threshold for Auto-Filtering of IPs Exceeding Connection Limit", str, 4, K_NUMBER | K_EDIT) > 0)
+					settings->filter_threshold = atoi(str);
+				break;
+			case 2:
+				SAFECOPY(str, duration(settings->filter_duration, false, strInfinite));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Lifetime of Auto-Filter of IPs", str, 10, K_EDIT) > 0)
+					settings->filter_duration = (uint)parse_duration(str);
+				break;
+			case 3:
+				i = settings->filter_silent ? 0 : 1;
+				i = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, 0
+				              , "Add Abuser IPs to ip-silent.can (instead of ip.can)", uifcYesNoOpts);
+				if (i == 0)
+					settings->filter_silent = true;
+				else if (i == 1)
+					settings->filter_silent = false;
+				break;
+			default:
+				uifc.changes = changes;
+				return;
+		}
+	}
+}
+
+/* View struct passed to rate_limit_cfg() so a single SCFG menu function can
+ * serve servers with different combinations of rate-limit knobs.  Set any
+ * pointer to NULL to hide the corresponding menu item; e.g. FTP/Mail don't
+ * have connect-rate limiting, Services doesn't have request-rate limiting. */
+struct rate_limit_cfg_view {
+	const char*                 server_name;     /* e.g. "Web Server", "FTP Server" */
+	uint*                       max_connects;    /* connect-rate limit; NULL = not supported */
+	uint*                       connect_period;
+	uint*                       max_requests;    /* request-rate limit; NULL = not supported */
+	uint*                       request_period;
+	struct rate_limit_settings* rl;              /* common subnet + auto-filter knobs */
+};
+
+enum rate_limit_cfg_action {
+	RLA_NONE,
+	RLA_CONNECTS,
+	RLA_REQUESTS,
+	RLA_PREFIX4,
+	RLA_PREFIX6,
+	RLA_FILTER_THRESHOLD,
+	RLA_FILTER_DURATION,
+	RLA_FILTER_SILENT,
+	RLA_SUBNET_THRESHOLD,
+};
+
+static void rate_limit_cfg(struct rate_limit_cfg_view* view)
+{
+	static int cur, bar;
+	char       title[64];
+	char       str[256];
+	char       tmp[128];
+	bool       changes = uifc.changes;
+	int        action[16];  /* parallel to opt[]: maps menu index -> RLA_* */
+
+	snprintf(title, sizeof title, "%s Rate Limiting", view->server_name);
+
+	while (1) {
+		int i = 0;
+		if (view->max_connects != NULL && view->connect_period != NULL) {
+			if (*view->max_connects < 1 || *view->connect_period < 1)
+				SAFECOPY(str, strDisabled);
+			else
+				snprintf(str, sizeof str, "%u per %s", *view->max_connects
+				         , duration_to_vstr(*view->connect_period, tmp, sizeof tmp));
+			action[i] = RLA_CONNECTS;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Connections", str);
+		}
+		if (view->max_requests != NULL && view->request_period != NULL) {
+			if (*view->max_requests < 1 || *view->request_period < 1)
+				SAFECOPY(str, strDisabled);
+			else
+				snprintf(str, sizeof str, "%u per %s", *view->max_requests
+				         , duration_to_vstr(*view->request_period, tmp, sizeof tmp));
+			action[i] = RLA_REQUESTS;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
+		}
+		/* Prefix + auto-filter knobs apply on top of an active rate limit; hide
+		 * them entirely when no rate limit is enabled, since there is nothing
+		 * for them to act on. */
+		bool connects_on = view->max_connects != NULL && view->connect_period != NULL
+		                   && *view->max_connects > 0 && *view->connect_period > 0;
+		bool requests_on = view->max_requests != NULL && view->request_period != NULL
+		                   && *view->max_requests > 0 && *view->request_period > 0;
+		bool any_rate_limit = connects_on || requests_on;
+		if (any_rate_limit) {
+			if (view->rl->prefix4 == 0)
+				SAFECOPY(str, "Per-host IP address");
+			else
+				snprintf(str, sizeof str, "/%u subnet", view->rl->prefix4);
+			action[i] = RLA_PREFIX4;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Count IPv4 Clients By", str);
+
+			if (view->rl->prefix6 == 0)
+				SAFECOPY(str, "Per-host IP address");
+			else
+				snprintf(str, sizeof str, "/%u subnet", view->rl->prefix6);
+			action[i] = RLA_PREFIX6;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Count IPv6 Clients By", str);
+
+			action[i] = RLA_FILTER_THRESHOLD;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Auto-Filter Threshold", threshold(view->rl->filter));
+		}
+		/* The remaining knobs only configure the auto-filter; hide them when
+		 * it is disabled (filter == 0) since they have no effect. */
+		bool autofilter_on = any_rate_limit && view->rl->filter > 0;
+		if (autofilter_on) {
+			action[i] = RLA_FILTER_DURATION;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Auto-Filter Duration"
+			         , vduration(view->rl->filter_duration, strInfinite));
+
+			action[i] = RLA_FILTER_SILENT;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Auto-Filter Silently"
+			         , view->rl->filter_silent ? "Yes" : "No");
+
+			action[i] = RLA_SUBNET_THRESHOLD;
+			snprintf(opt[i++], MAX_OPLN, "%-30s%u", "Subnet Filter Threshold"
+			         , view->rl->filter_subnet_threshold);
+		}
+		opt[i][0] = '\0';
+
+		uifc.helpbuf =
+			"`Rate Limiting Settings:`\n"
+			"\n"
+			"Limit the rate of incoming requests and/or connections from a client,\n"
+			"optionally counting all clients within a subnet together, and optionally\n"
+			"auto-filtering (blocking) abusers.\n"
+			"\n"
+			"`Limit Rate of Connections`: maximum connections allowed from a client in\n"
+			"the specified period (enforced at accept, before a thread or TLS\n"
+			"handshake is spawned - the cheapest point to reject a flood).\n"
+			"\n"
+			"`Limit Rate of Requests`: maximum requests allowed from a client in the\n"
+			"specified period (enforced after the request is parsed).\n"
+			"\n"
+			"`Count IPv4/IPv6 Clients By`: when set to a subnet prefix length (e.g.\n"
+			"`24` for IPv4 or `64` for IPv6), all clients within that subnet are\n"
+			"counted together against the limits above and filtered as a block (in\n"
+			"CIDR notation).  Use this to defeat distributed abuse spread thinly\n"
+			"across many addresses in a hosting provider's range.  `0` counts each\n"
+			"host IP address separately.  The IPv6 default is `64` because a typical\n"
+			"IPv6 subscriber gets a /64 (or larger) allocation -- counting per-host\n"
+			"would let a single attacker cycle freely through addresses they own.\n"
+			"The IPv4 default is `0` (per-host).\n"
+			"\n"
+			"`Auto-Filter Threshold`: number of times a client (or subnet) may exceed\n"
+			"a rate limit before being automatically added to the IP filter file.\n"
+			"Set to `0` to disable auto-filtering.\n"
+			"\n"
+			"`Auto-Filter Duration`: lifetime of an automatically-added filter entry.\n"
+			"Set to `0` to filter indefinitely.\n"
+			"\n"
+			"`Auto-Filter Silently`: if `Yes`, abusers are added to\n"
+			"`text/ip-silent.can` (dropped at accept, no log notice) instead of\n"
+			"`text/ip.can`.\n"
+			"\n"
+			"`Subnet Filter Threshold`: when subnet aggregation is enabled (above),\n"
+			"this is the minimum number of distinct host IPs within the subnet that\n"
+			"must trip the rate limit before the entire subnet is auto-filtered;\n"
+			"if fewer distinct hosts are responsible, only the offending host IP\n"
+			"is filtered, sparing innocent neighbors in the subnet.  Default `2`\n"
+			"(one neighbor required); set to `1` to filter the subnet on the first\n"
+			"abuser (no neighbor required); raise it for wider prefixes where\n"
+			"collateral risk is higher.  Has no effect when both subnet prefixes\n"
+			"are `0`.\n"
+		;
+		int sel = uifc.list(WIN_ACT | WIN_BOT | WIN_SAV, 0, 0, 0, &cur, &bar, title, opt);
+		if (sel < 0 || sel >= i) {
+			uifc.changes = changes;
+			return;
+		}
+		switch (action[sel]) {
+			case RLA_CONNECTS:
+				SAFECOPY(str, maximum(*view->max_connects));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Connections (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
+					*view->max_connects = atoi(str);
+				if (*view->max_connects < 1)
+					break;
+				duration_to_vstr(*view->connect_period, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Connection Rate Limit Period", str, 10, K_EDIT) > 0)
+					*view->connect_period = (uint)parse_duration(str);
+				break;
+			case RLA_REQUESTS:
+				SAFECOPY(str, maximum(*view->max_requests));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
+					*view->max_requests = atoi(str);
+				if (*view->max_requests < 1)
+					break;
+				duration_to_vstr(*view->request_period, str, sizeof str);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
+					*view->request_period = (uint)parse_duration(str);
+				break;
+			case RLA_PREFIX4:
+				SAFEPRINTF(str, "%u", view->rl->prefix4);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "IPv4 Subnet Prefix Bits (0=per-host-IP, e.g. 24)", str, 2, K_NUMBER | K_EDIT) > 0) {
+					view->rl->prefix4 = atoi(str);
+					if (view->rl->prefix4 > 32)
+						view->rl->prefix4 = 32;
+				}
+				break;
+			case RLA_PREFIX6:
+				SAFEPRINTF(str, "%u", view->rl->prefix6);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "IPv6 Subnet Prefix Bits (0=per-host-IP, e.g. 64)", str, 3, K_NUMBER | K_EDIT) > 0) {
+					view->rl->prefix6 = atoi(str);
+					if (view->rl->prefix6 > 128)
+						view->rl->prefix6 = 128;
+				}
+				break;
+			case RLA_FILTER_THRESHOLD:
+				SAFEPRINTF(str, "%u", view->rl->filter);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Threshold for Auto-Filtering of Rate-Limited Clients", str, 4, K_NUMBER | K_EDIT) > 0)
+					view->rl->filter = atoi(str);
+				break;
+			case RLA_FILTER_DURATION:
+				SAFECOPY(str, duration(view->rl->filter_duration, false, strInfinite));
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Lifetime of Auto-Filter of Clients", str, 10, K_EDIT) > 0)
+					view->rl->filter_duration = (uint)parse_duration(str);
+				break;
+			case RLA_FILTER_SILENT: {
+				int yn = view->rl->filter_silent ? 0 : 1;
+				yn = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &yn, 0
+				               , "Add Abuser IPs to ip-silent.can (instead of ip.can)", uifcYesNoOpts);
+				if (yn == 0)
+					view->rl->filter_silent = true;
+				else if (yn == 1)
+					view->rl->filter_silent = false;
+				break;
+			}
+			case RLA_SUBNET_THRESHOLD:
+				SAFEPRINTF(str, "%u", view->rl->filter_subnet_threshold);
+				if (uifc.input(WIN_MID | WIN_SAV, 0, 0
+				               , "Minimum Distinct Abusers in Subnet Before Filtering Whole Subnet"
+				               , str, 4, K_NUMBER | K_EDIT) > 0) {
+					view->rl->filter_subnet_threshold = atoi(str);
+					if (view->rl->filter_subnet_threshold < 1)
+						view->rl->filter_subnet_threshold = 1;
+				}
+				break;
+		}
+	}
+}
+
+static void web_rate_limit_cfg(web_startup_t* startup)
+{
+	struct rate_limit_cfg_view view = {
+		.server_name    = "Web Server",
+		.max_connects   = &startup->max_connects_per_period,
+		.connect_period = &startup->connect_rate_limit_period,
+		.max_requests   = &startup->max_requests_per_period,
+		.request_period = &startup->request_rate_limit_period,
+		.rl             = &startup->rate_limit,
+	};
+	rate_limit_cfg(&view);
+}
+
+static void ftp_rate_limit_cfg(ftp_startup_t* startup)
+{
+	struct rate_limit_cfg_view view = {
+		.server_name    = "FTP Server",
+		.max_requests   = &startup->max_requests_per_period,
+		.request_period = &startup->request_rate_limit_period,
+		.rl             = &startup->rate_limit,
+	};
+	rate_limit_cfg(&view);
+}
+
+static void mail_rate_limit_cfg(mail_startup_t* startup)
+{
+	struct rate_limit_cfg_view view = {
+		.server_name    = "Mail Server",
+		.max_requests   = &startup->max_requests_per_period,
+		.request_period = &startup->request_rate_limit_period,
+		.rl             = &startup->rate_limit,
+	};
+	rate_limit_cfg(&view);
+}
+
+static void services_rate_limit_cfg(services_startup_t* startup)
+{
+	struct rate_limit_cfg_view view = {
+		.server_name    = "Services",
+		.max_connects   = &startup->max_connects_per_period,
+		.connect_period = &startup->connect_rate_limit_period,
+		.rl             = &startup->rate_limit,
+	};
+	rate_limit_cfg(&view);
+}
+
 static void js_startup_cfg(js_startup_t* js)
 {
 	static int cur, bar;
@@ -148,9 +491,36 @@ static void js_startup_cfg(js_startup_t* js)
 		opt[i][0] = '\0';
 
 		uifc.helpbuf =
-			"`JavaScript Server Settings:`\n"
+			"`JavaScript Settings:`\n"
 			"\n"
-			"Settings that control the server-side JavaScript execution environment.\n"
+			"Limits and tuning knobs for the SpiderMonkey JavaScript runtime that\n"
+			"executes server-side scripts (logon/logoff, services, web SSJS, timed\n"
+			"events, external programs, etc.).  These values may be set globally\n"
+			"and overridden per-server; changes take effect after a server recycle.\n"
+			"\n"
+			"`Heap Size`: maximum bytes the JavaScript runtime may allocate for one\n"
+			"script invocation before a forced garbage collection.  Raise if\n"
+			"scripts run out of memory; lower if many concurrent scripts run\n"
+			"together and total memory matters more than per-script ceiling.\n"
+			"\n"
+			"`Time Limit`: maximum number of operation callbacks before a script\n"
+			"is forcibly terminated (infinite-loop guard).  Counts JavaScript\n"
+			"engine branch operations, NOT wall-clock time, so the actual run-time\n"
+			"depends on the script's workload.  `0` disables the limit -- required\n"
+			"for long-running service scripts.\n"
+			"\n"
+			"`GC Interval`: number of operation callbacks between periodic garbage-\n"
+			"collection attempts.  Lower = more frequent GC = lower peak memory\n"
+			"but more CPU overhead.  `0` disables periodic GC (heap-size forced\n"
+			"GC still runs).\n"
+			"\n"
+			"`Yield Interval`: number of operation callbacks between voluntary CPU\n"
+			"yields.  Lets other threads run while a long script executes.\n"
+			"`0` disables voluntary yielding.\n"
+			"\n"
+			"`Load Path`: comma-separated additional directories searched by JS\n"
+			"`load()` when a script imports a library (relative to `exec/` and\n"
+			"`mods/`).  The built-in `load` directory is always searched."
 		;
 		switch (uifc.list(WIN_ACT | WIN_BOT | WIN_SAV, 0, 0, 0, &cur, &bar
 		                  , "JavaScript Settings", opt)) {
@@ -632,9 +1002,7 @@ static void termsrvr_cfg(void)
 				startup.options ^= BBS_OPT_NO_DOS;
 				break;
 			case 9:
-				SAFECOPY(str, maximum(startup.max_concurrent_connections));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Concurrent (Unauthenticated) Connections", str, 10, K_EDIT) > 0)
-					startup.max_concurrent_connections = atoi(str);
+				max_concurrent_cfg(&startup.max_concurrent_connections, &startup.max_concurrent);
 				break;
 #define SOCKET_INACTIVITY_HELP  "\n" \
 		"An `Inactivity Alert` (by default, 3 BELLs) can be sent to the client\n" \
@@ -1031,11 +1399,20 @@ static void websrvr_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Clients", maximum(startup.max_clients));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Inactivity", vduration(startup.max_inactivity, strDefault));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Concurrent Connections", maximum(startup.max_concurrent_connections));
-		if (startup.max_requests_per_period < 1 || startup.request_rate_limit_period < 1)
+		str[0] = '\0';
+		if (startup.max_connects_per_period > 0 && startup.connect_rate_limit_period > 0)
+			SAFECOPY(str, "Connections");
+		if (startup.max_requests_per_period > 0 && startup.request_rate_limit_period > 0) {
+			if (str[0] != '\0')
+				SAFECAT(str, " + Requests");
+			else
+				SAFECOPY(str, "Requests");
+		}
+		if (str[0] == '\0')
 			SAFECOPY(str, strDisabled);
-		else
-			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period, duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
-		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
+		else if (startup.rate_limit.filter > 0)
+			SAFECAT(str, ", Auto-Filter");
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Rate Limiting...", str);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Authentication Methods", startup.default_auth_list);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%u ms", "Output Buffer Drain Timeout", startup.outbuf_drain_timeout);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Lookup Client Hostname", startup.options & BBS_OPT_NO_HOST_LOOKUP ? "No" : "Yes");
@@ -1140,14 +1517,7 @@ static void websrvr_cfg(void)
 					startup.max_concurrent_connections = atoi(str);
 				break;
 			case 14:
-				SAFECOPY(str, maximum(startup.max_requests_per_period));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
-					startup.max_requests_per_period = atoi(str);
-				if (startup.max_requests_per_period < 1)
-					break;
-				duration_to_vstr(startup.request_rate_limit_period, str, sizeof str);
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
-					startup.request_rate_limit_period = (uint)parse_duration(str);
+				web_rate_limit_cfg(&startup);
 				break;
 			case 15:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Authentication Methods"
@@ -1280,10 +1650,13 @@ static void ftpsrvr_cfg(void)
 		else
 			snprintf(str, sizeof str, "%s bytes", byte_count_to_str(startup.max_fsize, tmp, sizeof tmp));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Uploaded File Size", str);
-		if (startup.max_requests_per_period < 1 || startup.request_rate_limit_period < 1)
+		if (startup.max_requests_per_period > 0 && startup.request_rate_limit_period > 0) {
+			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period
+			         , duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
+			if (startup.rate_limit.filter > 0)
+				SAFECAT(str, ", Auto-Filter");
+		} else
 			SAFECOPY(str, strDisabled);
-		else
-			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period, duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Sysop File System Access", startup.options & FTP_OPT_NO_LOCAL_FSYS ? "No" : "Yes");
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Allow Bounce Transfers", startup.options & FTP_OPT_ALLOW_BOUNCE ? "Yes" : "No");
@@ -1395,14 +1768,7 @@ static void ftpsrvr_cfg(void)
 					startup.max_fsize = parse_byte_count(str, 1);
 				break;
 			case 14:
-				SAFECOPY(str, maximum(startup.max_requests_per_period));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
-					startup.max_requests_per_period = atoi(str);
-				if (startup.max_requests_per_period < 1)
-					break;
-				duration_to_vstr(startup.request_rate_limit_period, str, sizeof str);
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
-					startup.request_rate_limit_period = (uint)parse_duration(str);
+				ftp_rate_limit_cfg(&startup);
 				break;
 			case 15:
 				startup.options ^= FTP_OPT_NO_LOCAL_FSYS;
@@ -1483,6 +1849,9 @@ static void sendmail_cfg(mail_startup_t* startup)
 		bool applicable = (startup->options & (MAIL_OPT_RELAY_TX | MAIL_OPT_NO_SENDMAIL)) == MAIL_OPT_RELAY_TX;
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Delivery Method"
 		         , startup->options & MAIL_OPT_NO_SENDMAIL ? "N/A" : applicable ? "Relay" : "Direct");
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "DKIM Signing", startup->dkim_sign ? "Yes" : "No");
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "DKIM Domain", startup->dkim_domain);
+		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "DKIM Selector", startup->dkim_selector);
 		if (applicable) {
 			snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Relay Server Address", startup->relay_server);
 			snprintf(opt[i++], MAX_OPLN, "%-30s%u", "Relay Server TCP Port", startup->relay_port);
@@ -1505,8 +1874,66 @@ static void sendmail_cfg(mail_startup_t* startup)
 		uifc.helpbuf =
 			"`SendMail Support:`\n"
 			"\n"
-			"Set the operating parameters of the Synchronet Mail Server SendMail\n"
-			"Thread.\n"
+			"The SendMail thread of the Synchronet Mail Server delivers outgoing\n"
+			"mail to remote SMTP servers -- either directly (DNS MX lookup, one\n"
+			"connection per recipient domain) or via a relay (single upstream\n"
+			"smarthost handles final delivery).  Changes take effect after the\n"
+			"Mail Server is recycled.\n"
+			"\n"
+			"`Enabled`: run the SendMail thread.  Disable if outgoing delivery is\n"
+			"handled by an external MTA on this host, or if this Synchronet\n"
+			"instance should accept inbound mail only.\n"
+			"\n"
+			"`Rescan Interval`: how often the SendMail thread rescans the mail\n"
+			"base for queued outgoing messages.  A semaphore file from the SMTP\n"
+			"server normally triggers immediate rescans, so this is the backstop\n"
+			"poll interval for missed signals.\n"
+			"\n"
+			"`Connect Timeout`: maximum time to wait for a TCP connection to the\n"
+			"recipient (or relay) server.  Slow/unreachable destinations are\n"
+			"retried on the next pass.  `disabled` = no timeout (not recommended).\n"
+			"\n"
+			"`Auto-exempt Recipients`: when `Yes`, addresses you successfully send\n"
+			"mail to are auto-added to the local mail-filter exemption list so\n"
+			"their replies bypass spam checks.\n"
+			"\n"
+			"`Max Delivery Attempts`: number of times SendMail will retry before\n"
+			"giving up on a queued message and bouncing it back to the sender.\n"
+			"\n"
+			"`Delivery Method`: `Direct` = look up recipient MX records and contact\n"
+			"the destination SMTP server.  `Relay` = forward every outgoing message\n"
+			"through a single upstream smarthost (e.g. an ISP SMTP, a Sendmail or\n"
+			"Postfix on the same host, or a transactional-mail provider).  Relay\n"
+			"mode is required when your ISP blocks outbound port 25 or when you\n"
+			"want all mail to appear to come from a single MTA.\n"
+			"\n"
+			"`Relay Server Address`: hostname or IP of the upstream smarthost\n"
+			"(only used when Delivery Method is `Relay`).\n"
+			"\n"
+			"`Relay Server TCP Port`: port the smarthost listens on.  `25` for\n"
+			"classic SMTP, `587` for submission, `465` for implicit-TLS SMTPS.\n"
+			"\n"
+			"`Relay Server Authentication`: SMTP AUTH method for the smarthost.\n"
+			"`None`, `Plain`, `Login`, or `CRAM-MD5`.  Most modern smarthosts\n"
+			"require Plain or Login over TLS.\n"
+			"\n"
+			"`Relay Server Username` / `Password`: credentials used when an\n"
+			"Authentication method is selected.\n"
+			"\n"
+			"`DKIM Signing`: when `Yes`, sign outgoing mail with a DKIM-Signature\n"
+			"header so receivers can cryptographically verify it came from your\n"
+			"domain.  Requires a private key and a matching public key in DNS.\n"
+			"Available only when the mail server was built with OpenSSL support.\n"
+			"\n"
+			"`DKIM Domain`: the signing domain (the `d=` tag), e.g. `synchro.net`.\n"
+			"For the signature to satisfy DMARC alignment, this should share the\n"
+			"organizational domain of your `From:` address.  Subdomains align\n"
+			"under relaxed DMARC, so `d=synchro.net` covers `bbs.synchro.net`.\n"
+			"\n"
+			"`DKIM Selector`: names the key (the `s=` tag).  The public key must\n"
+			"be published as a TXT record at `<selector>._domainkey.<domain>`,\n"
+			"and the private key stored in `ctrl/dkim_<selector>.pem`.  Change\n"
+			"the selector to rotate keys without disrupting in-flight mail.\n"
 			"\n"
 			"For full documentation, see `http://wiki.synchro.net/server:mail`\n"
 		;
@@ -1547,14 +1974,23 @@ static void sendmail_cfg(mail_startup_t* startup)
 				startup->options ^= MAIL_OPT_RELAY_TX;
 				break;
 			case 6:
-				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Relay Server Address", startup->relay_server, sizeof(startup->relay_server) - 1, K_EDIT);
+				startup->dkim_sign = !startup->dkim_sign;
 				break;
 			case 7:
+				uifc.input(WIN_MID | WIN_SAV, 0, 0, "DKIM Signing Domain (d=)", startup->dkim_domain, sizeof(startup->dkim_domain) - 1, K_EDIT);
+				break;
+			case 8:
+				uifc.input(WIN_MID | WIN_SAV, 0, 0, "DKIM Selector (s=)", startup->dkim_selector, sizeof(startup->dkim_selector) - 1, K_EDIT);
+				break;
+			case 9:
+				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Relay Server Address", startup->relay_server, sizeof(startup->relay_server) - 1, K_EDIT);
+				break;
+			case 10:
 				SAFEPRINTF(str, "%u", startup->relay_port);
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Relay Server TCP Port", str, 5, K_NUMBER | K_EDIT) > 0)
 					startup->relay_port = atoi(str);
 				break;
-			case 8:
+			case 11:
 				i = 0;
 				strcpy(opt[i++], "Plain");
 				strcpy(opt[i++], "Login");
@@ -1584,10 +2020,10 @@ static void sendmail_cfg(mail_startup_t* startup)
 						break;
 				}
 				break;
-			case 9:
+			case 12:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Relay Server Username", startup->relay_user, sizeof(startup->relay_user) - 1, K_EDIT);
 				break;
-			case 10:
+			case 13:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Relay Server Password", startup->relay_pass, sizeof(startup->relay_pass) - 1, K_EDIT);
 				break;
 			default:
@@ -1775,10 +2211,13 @@ static void mailsrvr_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Recipients Per Message", maximum(startup.max_recipients));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Max Messages Waiting", maximum(startup.max_msgs_waiting));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s bytes", "Max Receive Message Size", byte_count_to_str(startup.max_msg_size, tmp, sizeof(tmp)));
-		if (startup.max_requests_per_period < 1 || startup.request_rate_limit_period < 1)
+		if (startup.max_requests_per_period > 0 && startup.request_rate_limit_period > 0) {
+			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period
+			         , duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
+			if (startup.rate_limit.filter > 0)
+				SAFECAT(str, ", Auto-Filter");
+		} else
 			SAFECOPY(str, strDisabled);
-		else
-			snprintf(str, sizeof str, "%u per %s", startup.max_requests_per_period, duration_to_vstr(startup.request_rate_limit_period, tmp, sizeof tmp));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Requests", str);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Post Recipient", startup.post_to);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Default Recipient", startup.default_user);
@@ -1899,14 +2338,7 @@ static void mailsrvr_cfg(void)
 					startup.max_msg_size = (uint32_t)parse_byte_count(str, 1);
 				break;
 			case 16:
-				SAFECOPY(str, maximum(startup.max_requests_per_period));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Requests (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
-					startup.max_requests_per_period = atoi(str);
-				if (startup.max_requests_per_period < 1)
-					break;
-				duration_to_vstr(startup.request_rate_limit_period, str, sizeof str);
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Request Rate Limit Period", str, 10, K_EDIT) > 0)
-					startup.request_rate_limit_period = (uint)parse_duration(str);
+				mail_rate_limit_cfg(&startup);
 				break;
 			case 17:
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Override Recipient of SMTP Posts"
@@ -2084,10 +2516,13 @@ static void services_cfg(void)
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Configuration File", startup.services_ini);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Requirements", startup.login_ars);
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Login Info Save", startup.login_info_save);
-		if (startup.max_connects_per_period < 1 || startup.connect_rate_limit_period < 1)
+		if (startup.max_connects_per_period > 0 && startup.connect_rate_limit_period > 0) {
+			snprintf(str, sizeof str, "%u per %s", startup.max_connects_per_period
+			         , duration_to_vstr(startup.connect_rate_limit_period, tmp, sizeof tmp));
+			if (startup.rate_limit.filter > 0)
+				SAFECAT(str, ", Auto-Filter");
+		} else
 			SAFECOPY(str, strDisabled);
-		else
-			snprintf(str, sizeof str, "%u per %s", startup.max_connects_per_period, duration_to_vstr(startup.connect_rate_limit_period, tmp, sizeof tmp));
 		snprintf(opt[i++], MAX_OPLN, "%-30s%s", "Limit Rate of Connections", str);
 		strcpy(opt[i++], "JavaScript Settings...");
 		strcpy(opt[i++], "Failed Login Attempts...");
@@ -2096,8 +2531,49 @@ static void services_cfg(void)
 		uifc.helpbuf =
 			"`Services Server Settings:`\n"
 			"\n"
+			"Initialization settings for the Synchronet Services Server, which hosts\n"
+			"plug-in services (NNTP, IRC, IMAP, Finger, Gopher, MSP, etc.) as defined\n"
+			"in the Services Configuration File.  Changes take effect after the\n"
+			"server is recycled.\n"
+			"\n"
+			"`Enabled`: start the Services Server when Synchronet launches.\n"
+			"\n"
+			"`Log Level`: minimum severity of events written to the log.  `Info` is the\n"
+			"normal default; raise to `Debug` for troubleshooting, lower (e.g. `Notice`)\n"
+			"to reduce log volume.\n"
+			"\n"
+			"`Network Interfaces`: comma-separated IPv4/IPv6 addresses the server\n"
+			"binds to (e.g. `0.0.0.0, ::` to listen on every interface).  Restrict to\n"
+			"specific addresses to limit exposure on multi-homed hosts.  Individual\n"
+			"services may further override their bindings in the Services\n"
+			"Configuration File.\n"
+			"\n"
+			"`Lookup Client Hostname`: perform a reverse DNS lookup on every\n"
+			"connecting client.  `Yes` adds the hostname to logs and makes it\n"
+			"available to scripts; `No` is faster and avoids DNS stalls.\n"
+			"\n"
+			"`Configuration File`: path (relative to `ctrl/`) of the INI file defining\n"
+			"the individual services to load.  Default: `services.ini`.\n"
+			"\n"
+			"`Login Requirements`: Access Requirements String (ARS) a user must\n"
+			"satisfy before any authenticated service will accept their login.\n"
+			"Blank = no extra restriction beyond per-service checks.\n"
+			"\n"
+			"`Login Info Save`: ARS controlling which successful logins are recorded\n"
+			"in the user record's last-on history.  Blank = save all.\n"
+			"\n"
+			"`Limit Rate of Connections`: cap connections-per-period per client IP\n"
+			"and optionally auto-filter abusers.  See the Rate Limiting sub-menu\n"
+			"for per-knob help.\n"
+			"\n"
+			"`JavaScript Settings...`: runtime tuning for JavaScript-based services\n"
+			"(heap, time limit, GC, yield, load path).  Overrides the global\n"
+			"JavaScript Settings for this server.\n"
+			"\n"
+			"`Failed Login Attempts...`: thresholds for temp-filtering or\n"
+			"disconnecting clients that fail authentication repeatedly.\n"
+			"\n"
 			"For full documentation, see `http://wiki.synchro.net/server:services`\n"
-
 		;
 		switch (uifc.list(WIN_ACT | WIN_ESC | WIN_RHT | WIN_SAV, 0, 0, 0, &cur, &bar
 		                  , "Services Server Settings", opt)) {
@@ -2129,14 +2605,7 @@ static void services_cfg(void)
 				getar("Services Login Info Saved", startup.login_info_save, /* helpbuf: */ NULL);
 				break;
 			case 7:
-				SAFECOPY(str, maximum(startup.max_connects_per_period));
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Maximum Connections (0=unlimited)", str, 10, K_EDIT | K_NUMBER) > 0)
-					startup.max_connects_per_period = atoi(str);
-				if (startup.max_connects_per_period < 1)
-					break;
-				duration_to_vstr(startup.connect_rate_limit_period, str, sizeof str);
-				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Connection Rate Limit Period", str, 10, K_EDIT) > 0)
-					startup.connect_rate_limit_period = (uint)parse_duration(str);
+				services_rate_limit_cfg(&startup);
 				break;
 			case 8:
 				js_startup_cfg(&startup.js);

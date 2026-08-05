@@ -521,6 +521,28 @@ var Game_Def = [
 	}
 ];
 
+function waitkey(max)
+{
+	var timeout = lastkey + idle_timeout;
+	var tl;
+	var now;
+
+	if (time_callback !== undefined) {
+		now = time();
+		// TODO: dk.console.getstr() doesn't support this stuff... (yet)
+		tl = (dk.user.seconds_remaining + dk.user.seconds_remaining_from - 30) - now;
+		if (tl < 1) {
+			time_callback('BBS_NO_TIME');
+			return 'BBS_NO_TIME';
+		}
+		if (now >= timeout) {
+			time_callback('IDLE');
+			return 'IDLE';
+		}
+	}
+	return dk.console.waitkey(max);
+}
+
 var lastkey = time();
 var time_callback;
 var idle_timeout = 60 * 5;	// Seconds
@@ -531,23 +553,11 @@ function getkeyw()
 	var now;
 	var ret;
 
-	do {
-		if (time_callback !== undefined) {
-			now = time();
-			// TODO: dk.console.getstr() doesn't support this stuff... (yet)
-			tl = (dk.user.seconds_remaining + dk.user.seconds_remaining_from - 30) - now;
-			if (tl < 1) {
-				time_callback('BBS_NO_TIME');
-				return 'BBS_NO_TIME';
-			}
-			if (now >= timeout) {
-				time_callback('IDLE');
-				return 'IDLE';
-			}
-		}
-	} while(!dk.console.waitkey(1000));
-	lastkey = time();
+	while(!waitkey(1000))
+		;
 	ret = dk.console.getkey();
+	if (ret !== undefined && ret !== null && ret.length >= 1)
+		lastkey = time();
 	if (ret === dk.console.key.CONNECTION_CLOSED) {
 		if (time_callback !== undefined) {
 			time_callback('DISCONNECTED');
@@ -1215,16 +1225,16 @@ var vars = {
 };
 var i;
 for (i = 0; i < 40; i++) {
-	vars[format('`v%02d', i+1)] = {type:'fn', get:eval('function() { return world.v['+i+'] }'), set:eval('function(val) { world.v['+i+'] = clamp_integer(val, "s32"); }')};
+	vars[format('`v%02d', i+1)] = {type:'fn', get:eval('(function() { return world.v['+i+'] })'), set:eval('(function(val) { world.v['+i+'] = clamp_integer(val, "s32"); })')};
 }
 for (i = 0; i < 10; i++) {
-	vars[format('`s%02d', i+1)] = {type:'fn', get:eval('function() { return world.s['+i+'] }'), set:eval('function(val) { world.s['+i+'] = val.substr(0, 80); }')};
+	vars[format('`s%02d', i+1)] = {type:'fn', get:eval('(function() { return world.s['+i+'] })'), set:eval('(function(val) { world.s['+i+'] = val.substr(0, 80); })')};
 }
 for (i = 0; i < 99; i++) {
-	vars[format('`p%02d', i+1)] = {type:'fn', get:eval('function() { return player.p['+i+'] }'), set:eval('function(val) { player.p['+i+'] = clamp_integer(val, "s32"); }')};
-	vars[format('`t%02d', i+1)] = {type:'fn', get:eval('function() { return player.t['+i+'] }'), set:eval('function(val) { player.t['+i+'] = clamp_integer(val, "8"); }')};
-	vars[format('`i%02d', i+1)] = {type:'fn', get:eval('function() { return player.i['+i+'] }'), set:eval('function(val) { player.i['+i+'] = clamp_integer(val, "s16"); }')};
-	vars[format('`+%02d', i+1)] = {type:'fn', get:eval('function() { return items['+i+'].name }'), set:eval('function(val) { throw new Error("Attempt to set item '+i+' name"); }')};
+	vars[format('`p%02d', i+1)] = {type:'fn', get:eval('(function() { return player.p['+i+'] })'), set:eval('(function(val) { player.p['+i+'] = clamp_integer(val, "s32"); })')};
+	vars[format('`t%02d', i+1)] = {type:'fn', get:eval('(function() { return player.t['+i+'] })'), set:eval('(function(val) { player.t['+i+'] = clamp_integer(val, "8"); })')};
+	vars[format('`i%02d', i+1)] = {type:'fn', get:eval('(function() { return player.i['+i+'] })'), set:eval('(function(val) { player.i['+i+'] = clamp_integer(val, "s16"); })')};
+	vars[format('`+%02d', i+1)] = {type:'fn', get:eval('(function() { return items['+i+'].name })'), set:eval('(function(val) { throw new Error("Attempt to set item '+i+' name"); })')};
 }
 
 function setvar(name, val) {

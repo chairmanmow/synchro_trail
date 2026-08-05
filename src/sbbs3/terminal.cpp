@@ -59,7 +59,7 @@ struct mouse_hotspot* Terminal::add_hotspot(struct mouse_hotspot* spot)
 #if 0 //def _DEBUG
 	char         dbg[128];
 	sbbs->lprintf(LOG_DEBUG, "Adding mouse hot spot %ld-%ld x %ld = '%s'"
-		, spot->minx, spot->maxx, spot->y, c_escape_str(spot->cmd, dbg, sizeof(dbg), /* Ctrl-only? */ true));
+		, spot->minx, spot->maxx, spot->y, c_escape_str(spot->cmd, dbg, sizeof(dbg) - 1, /* Ctrl-only? */ true));
 #endif
 	list_node_t* node = listInsertNodeData(mouse_hotspots, spot, sizeof(*spot));
 	if (node == nullptr)
@@ -138,6 +138,8 @@ struct mouse_hotspot* Terminal::add_hotspot(const char* cmd, bool hungry, unsign
 }
 
 void Terminal::inc_row(unsigned count) {
+	if (rows == 0)
+		return;
 	row += count;
 	if (row >= rows) {
 		scroll_hotspots((row - rows) + 1);
@@ -196,6 +198,8 @@ void Terminal::inc_row(unsigned count) {
 //       that (optionally) centres the door output in the current
 //       terminal.
 void Terminal::inc_column(unsigned count) {
+	if (cols == 0)
+		return;
 	column += count;
 	if (column >= cols)
 		lastcrcol = cols;
@@ -388,7 +392,7 @@ bool Terminal::utf8_increment(unsigned char ch)
 				codepoint |= (ch & 0x3f);
 				if (utf8_remain)
 					return true;
-				inc_column(unicode_width(static_cast<enum unicode_codepoint>(codepoint), 0));
+				inc_column(unicode_width(static_cast<enum unicode_codepoint>(codepoint), sbbs->unicode_zerowidth));
 				codepoint = 0;
 				return true;
 			}

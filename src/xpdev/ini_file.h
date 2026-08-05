@@ -27,11 +27,6 @@
 #endif
 #include "genwrap.h"
 #include "str_list.h"	/* strList_t */
-#ifdef WITH_CRYPTLIB
-#ifndef WITHOUT_CRYPTLIB
-	#include "cryptlib.h"
-#endif
-#endif
 
 #define INI_MAX_VALUE_LEN	1024		/* Maximum value length, includes '\0' */
 #define ROOT_SECTION		NULL
@@ -60,21 +55,6 @@ typedef struct fp_list_s ini_fp_list_t;
 #if defined(__cplusplus)
 extern "C" {
 #endif
-
-enum iniCryptAlgo {
-#if (defined(WITHOUT_CRYPTLIB) || !defined(WITH_CRYPTLIB))
-	INI_CRYPT_ALGO_NONE,
-#else	
-	INI_CRYPT_ALGO_NONE = CRYPT_ALGO_NONE,
-	INI_CRYPT_ALGO_3DES = CRYPT_ALGO_3DES,
-	INI_CRYPT_ALGO_IDEA = CRYPT_ALGO_IDEA,
-	INI_CRYPT_ALGO_CAST = CRYPT_ALGO_CAST,
-	INI_CRYPT_ALGO_RC2 = CRYPT_ALGO_RC2,
-	INI_CRYPT_ALGO_RC4 = CRYPT_ALGO_RC4,
-	INI_CRYPT_ALGO_AES = CRYPT_ALGO_AES,
-	INI_CRYPT_ALGO_CHACHA20 = CRYPT_ALGO_CHACHA20,
-#endif
-};
 
 /* Read all section names and return as an allocated string list */
 /* Optionally (if prefix!=NULL), returns a subset of section names */
@@ -157,6 +137,17 @@ DLLEXPORT named_string_t** iniFreeNamedStringList(named_string_t** list);
 
 
 /* File I/O Functions */
+
+/* Complete a configuration filename, preferring the most specific variation
+ * that exists, in this order:
+ *     <dir>/<name>.<host>.<domain><ext>
+ *     <dir>/<name>.<host><ext>
+ *     <dir>/<name>.<platform><ext>
+ *     <dir>/<name>.local<ext>
+ *     <dir>/<name><ext>
+ * `.local` names the installation rather than a machine or an OS. `dest`
+ * receives the plain name when no variation exists, so a caller that creates
+ * the file writes that one. */
 DLLEXPORT char* 		iniFileName(char* dest, size_t maxlen, const char* dir, const char* fname);
 DLLEXPORT FILE* 		iniOpenFile(const char* fname, bool for_modify);
 DLLEXPORT str_list_t 	iniReadFile(FILE*);
@@ -356,11 +347,10 @@ DLLEXPORT void iniFastParsedSectionListFree(ini_lv_string_t **list);
 DLLEXPORT void iniFreeFastParse(ini_fp_list_t *s);
 DLLEXPORT ini_lv_string_t *iniGetFastParsedSectionOrderedList(ini_fp_list_t *fp);
 
-/* Encryption Functions (can't do includes yet) */
-DLLEXPORT str_list_t iniReadEncryptedFile(FILE* fp, bool(*get_key)(void *cb_data, char *keybuf, size_t *sz), int KDFiterations, enum iniCryptAlgo *algoPtr, int *ks, char *saltBuf, size_t *saltsz, void *cbdata);
-DLLEXPORT bool iniWriteEncryptedFile(FILE* fp, const str_list_t list, enum iniCryptAlgo algo, int keySize, int KDFiterations, const char *key, char *salt);
-DLLEXPORT const char *iniCryptGetAlgoName(enum iniCryptAlgo a);
-DLLEXPORT enum iniCryptAlgo iniCryptGetAlgoFromName(const char *n);
+/* Encrypted INI file API moved to syncterm/ini_crypt.h — SyncTERM is
+ * the only consumer, and keeping the crypto-dependent code out of
+ * xpdev means libxpdev / libsbbs stay free of OpenSSL / Botan 3.
+ */
 
 /*
  * Too handy to leave internal

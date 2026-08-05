@@ -193,17 +193,6 @@ static size_t find_section_index(str_list_t list, const char* section)
 	return i;
 }
 
-static size_t section_start(str_list_t list, size_t index)
-{
-	char* p = list[index];
-	if (p != NULL) {
-		SKIP_WHITESPACE(p);
-		if (*p == INI_OPEN_SECTION_CHAR) // A new section starts immediately?
-			return strListCount(list);
-	}
-	return index;
-}
-
 static size_t find_section(str_list_t list, const char* section)
 {
 	size_t i;
@@ -214,7 +203,10 @@ static size_t find_section(str_list_t list, const char* section)
 	i = find_section_index(list, section);
 	if (list[i] != NULL)
 		i++;
-	return section_start(list, i);
+	/* When the section is empty, i now points at the next section's header (or
+	   the list terminator). That's the correct stop-point for read loops and the
+	   correct insertion point for new keys, so no special-casing is needed. */
+	return i;
 }
 
 static char* key_name(char* p, char** vp, bool literals_supported)
@@ -374,7 +366,10 @@ str_list_t iniGetSection(str_list_t list, const char *section)
 		return NULL;
 
 	i = find_section(list, section);
-	if (list[i] != NULL) {
+	p = list[i];
+	if (p != NULL)
+		SKIP_WHITESPACE(p);
+	if (p != NULL && *p != INI_OPEN_SECTION_CHAR) { /* Not the next section's header (i.e. this section isn't empty) */
 		strListPush(&retval, list[i]);
 		for (i++; list[i] != NULL; i++) {
 			p = list[i];
@@ -1684,7 +1679,7 @@ addParsedLine(named_str_list_t** lp, size_t sections, char *data, size_t *keys)
 named_str_list_t** iniParseSections(const str_list_t list)
 {
 	char               str[INI_MAX_LINE_LEN];
-	char*              p;
+	char*              p = NULL;
 	size_t             i;
 	size_t             sections = 0;
 	size_t             keys = 0;
@@ -2181,7 +2176,7 @@ int iniGetSocketOptions(str_list_t list, const char* section, SOCKET sock
 	int               i;
 	int               result;
 	char*             name;
-	char              err[128];
+	char              err[SOCKET_STRERROR_BUFLEN];
 	BYTE*             vp;
 	socklen_t         len;
 	int               option;
@@ -2336,6 +2331,13 @@ char* iniFileName(char* dest, size_t maxlen, const char* indir, const char* infn
 
 	safe_snprintf(dest, maxlen, "%s%s.%s%s", dir, fname, PLATFORM_DESC, ext);
 	if (fexistcase(dest))    /* path/file.platform.ini */
+		return dest;
+
+	/* Below the host and platform variants, which are more specific, and above
+	 * the plain name: this one says "this installation", not "this machine", so
+	 * a multi-host install's per-host file still wins where one exists. */
+	safe_snprintf(dest, maxlen, "%s%s.local%s", dir, fname, ext);
+	if (fexistcase(dest))    /* path/file.local.ini */
 		return dest;
 
 	safe_snprintf(dest, maxlen, "%s%s%s", dir, fname, ext);
@@ -3042,9 +3044,11 @@ bool iniHasInclude(const str_list_t list)
 
 	/* Look for !include directives */
 	size_t inc_len = strlen(INI_INCLUDE_DIRECTIVE) + 1;
-	for (i = 0; list[i] != NULL; i++) {
-		if (strnicmp(list[i], ";" INI_INCLUDE_DIRECTIVE, inc_len) == 0)
-			return true;
+	if (list != NULL) {
+		for (i = 0; list[i] != NULL; i++) {
+			if (strnicmp(list[i], ";" INI_INCLUDE_DIRECTIVE, inc_len) == 0)
+				return true;
+		}
 	}
 	return false;
 }
@@ -3480,473 +3484,74 @@ iniFastParsedSectionListFree(ini_lv_string_t **list)
 	free(list);
 }
 
-const char *encryptedHeaderPrefix = "; Encrypted INI File, Algorithm: ";
-
-#if (defined(WITH_CRYPTLIB) && !defined(WITHOUT_CRYPTLIB))
-const char *
-iniCryptGetAlgoName(enum iniCryptAlgo a)
-{
-	switch(a) {
-		case INI_CRYPT_ALGO_3DES:
-			return "3DES";
-		case INI_CRYPT_ALGO_AES:
-			return "AES";
-		case INI_CRYPT_ALGO_CAST:
-			return "CAST";
-		case INI_CRYPT_ALGO_CHACHA20:
-			return "ChaCha20";
-		case INI_CRYPT_ALGO_IDEA:
-			return "IDEA";
-		case INI_CRYPT_ALGO_NONE:
-			return "NONE";
-		case INI_CRYPT_ALGO_RC2:
-			return "RC2";
-		case INI_CRYPT_ALGO_RC4:
-			return "RC4";
-	}
-	return NULL;
-}
-
-enum iniCryptAlgo
-iniCryptGetAlgoFromName(const char *n)
-{
-	if (!strcmp(n, "3DES"))
-		return INI_CRYPT_ALGO_3DES;
-	if (!strcmp(n, "AES"))
-		return INI_CRYPT_ALGO_AES;
-	if (!strcmp(n, "CAST"))
-		return INI_CRYPT_ALGO_CAST;
-	if (!strcmp(n, "ChaCha20"))
-		return INI_CRYPT_ALGO_CHACHA20;
-	if (!strcmp(n, "IDEA"))
-		return INI_CRYPT_ALGO_IDEA;
-	if (!strcmp(n, "RC2"))
-		return INI_CRYPT_ALGO_RC2;
-	if (!strcmp(n, "RC4"))
-		return INI_CRYPT_ALGO_RC4;
-	return INI_CRYPT_ALGO_NONE;
-}
-
-/*
- * Reads an optionally encrypted INI file into a string list.
- * 
- * algo, ks, salt, and saltsz may all be NULL.
- * If they are not NULL, they will be fill with the envelope data
- * 
- * If salt is not NULL, The initial value of saltsz must be the number
- * of bytes that can be written to salt. salt will be NUL terminated if
- * there's room, but will not be terminated if there's not.
- * 
- * If the file is encrypted, get_key() will be called to request the key
- * material.
- */
-str_list_t
-iniReadEncryptedFile(FILE* fp, bool(*get_key)(void *cb_data, char *keybuf, size_t *sz), int KDFiterations, enum iniCryptAlgo *algoPtr, int *ks, char *saltBuf, size_t *saltsz, void *cbdata)
-{
-	char keyData[1024];
-	size_t keyDataSize;
-	char salt[CRYPT_MAX_HASHSIZE];
-	size_t saltLength = 0;
-	char str[INI_MAX_LINE_LEN + 1];
-	size_t strpos = 0;
-	char *buffer = NULL;
-	size_t bufferSize = 0;
-	size_t keySize = 0;
-	char *start;
-	char *space;
-	char *dash;
-	char *end;
-	enum iniCryptAlgo algo = INI_CRYPT_ALGO_NONE;
-	str_list_t ret = NULL;
-	CRYPT_CONTEXT ctx = -1;
-	int status;
-	int i;
-	bool streamCipher = false;
-
-	if (fp == NULL || get_key == NULL)
-		goto done;
-
-	if (fp != NULL)
-		rewind(fp);
-
-	if (fgets(str, sizeof(str), fp) == NULL) {
-		ret = strListInit();
-		goto done;
-	}
-
-	if (strncmp(str, encryptedHeaderPrefix, sizeof(encryptedHeaderPrefix) - 1)) {
-		ret = iniReadFile(fp);
-		goto done;
-	}
-	truncnl(str);
-
-	// Parse algo, sends with a space or a dash
-	start = str;
-	start += strlen(encryptedHeaderPrefix);
-	space = strchr(start, ' ');
-	dash = strchr(start, '-');
-	if (space == NULL)
-		goto done;
-	if (dash > space)
-		dash = NULL;
-	if (dash)
-		end = dash;
-	else
-		end = space;
-	*end = 0;
-	algo = iniCryptGetAlgoFromName(start);
-	if (algo == INI_CRYPT_ALGO_NONE)
-		goto done;
-	// Now check for key size
-	if (dash) {
-		// Read key size
-		start = end;
-		start++;
-		*space = 0;
-		long ll = strtol(start, NULL, 10);
-		if (ll <= 0 || ll == LONG_MAX)
-			goto done;
-		keySize = ll;
-	}
-
-	// The rest of the line is the salt
-	start = space;
-	start++;
-	truncsp(start);
-	saltLength = strlen(start);
-	if (saltLength > sizeof(salt)) {
-		saltLength = 0;
-		goto done;
-	}
-	memcpy(salt, start, saltLength);
-
-	// Create the context...
-	status = cryptCreateContext(&ctx, CRYPT_UNUSED, (CRYPT_ALGO_TYPE)algo);
-	if (cryptStatusError(status))
-		goto done;
-	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYSIZE, keySize / 8);
-	if (cryptStatusError(status))
-		goto done;
-	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ALGO, CRYPT_ALGO_HMAC_SHA2);
-	if (cryptStatusError(status))
-		goto done;
-	if (KDFiterations < 1)
-		KDFiterations = 50000;
-	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ITERATIONS, KDFiterations);
-	if (cryptStatusError(status))
-		goto done;
-	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_SALT, salt, saltLength);
-	if (cryptStatusError(status))
-		return false;
-	keyDataSize = sizeof(keyData);
-	if (!get_key(cbdata, keyData, &keyDataSize))
-		return false;
-	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_VALUE, keyData, keyDataSize);
-	if (cryptStatusError(status))
-		return false;
-	status = cryptGetAttribute(ctx, CRYPT_CTXINFO_BLOCKSIZE, &i);
-	if (status == CRYPT_ERROR_NOTAVAIL) {
-		bufferSize = INI_MAX_LINE_LEN - 1;
-		streamCipher = true;
-	}
-	else {
-		if (i == 0 || i == 1) {
-			bufferSize = INI_MAX_LINE_LEN - 1;
-			streamCipher = true;
-		}
-		else {
-			if (cryptStatusError(status))
-				goto done;
-			bufferSize = i;
-		}
-	}
-	status = cryptGetAttribute(ctx, CRYPT_CTXINFO_IVSIZE, &i);
-	if (!cryptStatusError(status)) {
-		char iv[CRYPT_MAX_IVSIZE];
-		uint16_t ivs;
-		if (fread(&ivs, 1, sizeof(ivs), fp) != sizeof(ivs))
-			goto done;
-		i = ntohs(ivs);
-		if (fread(iv, 1, i, fp) != i)
-			goto done;
-		status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_IV, iv, i);
-		if (cryptStatusError(status))
-			goto done;
-	}
-	buffer = malloc(bufferSize);
-	if (buffer == NULL)
-		goto done;
-	size_t lines = 0;
-	while(!feof(fp)) {
-		size_t rret = fread(buffer, 1, bufferSize, fp);
-		// Getting overly paranoid here...
-		if (rret > INT_MAX) {
-			strListFree(&ret);
-			ret = NULL;
-			goto done;
-		}
-		if ((streamCipher && rret > 0) || rret == bufferSize) {
-			size_t bufpos = 0;
-			status = cryptDecrypt(ctx, buffer, rret);
-			if (cryptStatusError(status))
-				goto done;
-			while (bufpos < rret) {
-				if (buffer[bufpos] == '\n' || strpos == sizeof(str) - 2) {
-					bufpos++;
-					while (strpos && (str[strpos - 1] == '\r' || str[strpos - 1] == '\n'))
-						strpos--;
-					str[strpos] = 0;
-					char *p = str;
-					SKIP_WHITESPACE(p);
-					// TODO: Handline includes
-					if (*p == INI_COMMENT_CHAR) {
-						strListFree(&ret);
-						ret = NULL;
-						goto done;
-					}
-					if (!strListAppend(&ret, str, lines++)) {
-						strListFree(&ret);
-						ret = NULL;
-						goto done;
-					}
-					strpos = 0;
-				}
-				else
-					str[strpos++] = buffer[bufpos++];
-			}
-		}
-		else {
-			if (!feof(fp)) {
-				strListFree(&ret);
-				ret = NULL;
-				goto done;
-			}
-		}
-	}
-	// Only possible with stream ciphers
-	if (strpos) {
-		if (!strListAppend(&ret, str, lines++)) {
-			strListFree(&ret);
-			ret = NULL;
-			goto done;
-		}
-	}
-	// Empty list on success
-	if (ret == NULL)
-		ret = strListInit();
-
-done:
-	free(buffer);
-	if (ctx != -1)
-		cryptDestroyContext(ctx);
-	if (algoPtr)
-		*algoPtr = algo;
-	if (ks)
-		*ks = keySize;
-	if (saltLength && saltBuf && saltsz && *saltsz) {
-		size_t cp = *saltsz;
-		if (cp > saltLength)
-			cp = saltLength;
-		if (cp)
-			memcpy(saltBuf, salt, cp);
-		if (cp < *saltsz)
-			saltBuf[cp] = 0;
-	}
-	if (saltsz)
-		*saltsz = saltLength;
-
-	return ret;
-}
-
-static bool
-addEncrpytedChar(CRYPT_CONTEXT ctx, bool *gotIV, const char ch, char *buffer, size_t blockSize, size_t *bufferPos, FILE *fp)
-{
-	char iv[CRYPT_MAX_IVSIZE];
-	int ivSize;
-
-	buffer[(*bufferPos)++] = ch;
-	if (*bufferPos == blockSize) {
-		int status = cryptEncrypt(ctx, buffer, blockSize);
-		if (cryptStatusError(status))
-			return false;
-		if (!(*gotIV)) {
-			int status = cryptGetAttributeString(ctx, CRYPT_CTXINFO_IV, iv, &ivSize);
-			if (cryptStatusOK(status)) {
-				uint16_t ivs = htons(ivSize);
-				if (fwrite(&ivs, 1, sizeof(ivs), fp) != sizeof(ivs))
-					return false;
-				if (fwrite(iv, 1, ivSize, fp) != ivSize)
-					return false;
-			}
-			else if (status != CRYPT_ERROR_NOTAVAIL)
-				return false;
-			*gotIV = true;
-		}
-		if (fwrite(buffer, 1, blockSize, fp) != blockSize)
-			return false;
-		*bufferPos = 0;
-	}
-	return true;
-}
-
-/*
- * Writes the INI file in list to fp encrypted with key.
- * 
- * If salt is specified, it must be between 8 and 64 NUL-terminated
- * non-whitespace characters that can appear in a single line of a
- * text file. (note 0xff is considered whitespace).
- * 
- * If salt is not specified (preferred), a random salt is generated.
- * 
- * If KDFiterations is less than 1, it is set to the default (50,000)
- */
-bool iniWriteEncryptedFile(FILE* fp, const str_list_t list, enum iniCryptAlgo algo, int keySize, int KDFiterations, const char *key, char *salt)
-{
-	char randomSalt[CRYPT_MAX_HASHSIZE + 1];
-	int status;
-	int ctx;
-	char *buffer = NULL;
-	size_t bufferSize;
-	size_t bufferPos = 0;
-	bool streamCipher = false;
-	size_t line = 0;
-	int i;
-	bool gotIV = false;
-
-	if (KDFiterations < 1)
-		KDFiterations = 50000;
-	if (fp == NULL)
-		return false;
-	if (algo == INI_CRYPT_ALGO_NONE)
-		return iniWriteFile(fp, list);
-	if (key == NULL)
-		return false;
-	if (salt == NULL) {
-		salt = randomSalt;
-		for (size_t i = 0; i < sizeof(randomSalt) - 1; i++) {
-			randomSalt[i] = '!' + xp_random(94);
-		}
-		randomSalt[sizeof(randomSalt) - 1] = 0;
-	}
-	size_t slen = strlen(salt);
-	if (slen < 8)
-		return false;
-	if (slen > CRYPT_MAX_HASHSIZE)
-		return false;
-
-	status = cryptCreateContext(&ctx, CRYPT_UNUSED, (CRYPT_ALGO_TYPE)algo);
-	if (cryptStatusError(status))
-		return false;
-	if (keySize) {
-		status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYSIZE, keySize / 8);
-		if (cryptStatusError(status))
-			return false;
-	}
-	else {
-		status = cryptGetAttribute(ctx, CRYPT_CTXINFO_KEYSIZE, &i);
-		if (cryptStatusError(status))
-			return false;
-		keySize = i * 8;
-	}
-	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ALGO, CRYPT_ALGO_HMAC_SHA2);
-	if (cryptStatusError(status))
-		goto done;
-	status = cryptSetAttribute(ctx, CRYPT_CTXINFO_KEYING_ITERATIONS, KDFiterations);
-	if (cryptStatusError(status))
-		goto done;
-	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_SALT, salt, strlen(salt));
-	if (cryptStatusError(status))
-		return false;
-	status = cryptSetAttributeString(ctx, CRYPT_CTXINFO_KEYING_VALUE, key, strlen(key));
-	if (cryptStatusError(status))
-		return false;
-	status = cryptGetAttribute(ctx, CRYPT_CTXINFO_BLOCKSIZE, &i);
-	if (status == CRYPT_ERROR_NOTAVAIL) {
-		bufferSize = INI_MAX_LINE_LEN - 1;
-		streamCipher = true;
-	}
-	else {
-		if (cryptStatusError(status))
-			goto done;
-		if (i == 1 || i == 0) {
-			bufferSize = INI_MAX_LINE_LEN - 1;
-			streamCipher = true;
-		}
-		else {
-			bufferSize = i;
-		}
-	}
-	buffer = malloc(bufferSize);
-	if (buffer == NULL)
-		return false;
-
-	rewind(fp);
-	fprintf(fp, "%s%s-%d %s\n", encryptedHeaderPrefix, iniCryptGetAlgoName(algo), keySize, salt);
-	if (list) {
-		for (; list[line]; line++) {
-			size_t strPos;
-			for (strPos = 0; list[line][strPos]; strPos++) {
-				if (!addEncrpytedChar(ctx, &gotIV, list[line][strPos], buffer, bufferSize, &bufferPos, fp))
-					goto done;
-			}
-			if (!addEncrpytedChar(ctx, &gotIV, '\n', buffer, bufferSize, &bufferPos, fp))
-				goto done;
-		}
-	}
-	if (bufferPos) {
-		if (streamCipher) {
-			int status = cryptEncrypt(ctx, buffer, bufferPos);
-			if (cryptStatusError(status))
-				goto done;
-			if (fwrite(buffer, 1, bufferPos, fp) != bufferPos)
-				goto done;
-		}
-		else {
-			while (bufferPos) {
-				if (!addEncrpytedChar(ctx, &gotIV, 0, buffer, bufferSize, &bufferPos, fp)) {
-					line--;
-					goto done;
-				}
-			}
-		}
-	}
-
-done:
-	free(buffer);
-	return line == strListCount(list);
-}
-#else // WITH_CRYPTLIB && !WITHOUT_CRYPTLIB
-const char *
-iniCryptGetAlgoName(enum iniCryptAlgo a)
-{
-	switch(a) {
-		case INI_CRYPT_ALGO_NONE:
-			return "NONE";
-	}
-	return NULL;
-}
-
-enum iniCryptAlgo
-iniCryptGetAlgoFromName(const char *n)
-{
-	return INI_CRYPT_ALGO_NONE;
-}
-
-str_list_t
-iniReadEncryptedFile(FILE* fp, bool(*get_key)(void *cb_data, char *keybuf, size_t *sz), int KDFiterations, enum iniCryptAlgo *algoPtr, int *ks, char *saltBuf, size_t *saltsz, void *cbdata)
-{
-	if (algoPtr)
-		*algoPtr = INI_CRYPT_ALGO_NONE;
-	return iniReadFile(fp);
-}
-
-bool iniWriteEncryptedFile(FILE* fp, const str_list_t list, enum iniCryptAlgo algo, int keySize, int KDFiterations, const char *key, char *salt)
-{
-	return iniWriteFile(fp, list);
-}
-#endif // WITH_CRYPTLIB && !WITHOUT_CRYPTLIB
-
 #ifdef INI_FILE_TEST
+
+static bool ini_check(const char* desc, bool ok, int* failures)
+{
+	printf("%s: %s\n", ok ? "PASS" : "FAIL", desc);
+	if (!ok)
+		(*failures)++;
+	return ok;
+}
+
+/* In-memory regression tests (no file I/O). Returns the number of failures. */
+static int ini_regression_test(void)
+{
+	int        failures = 0;
+	char       val[INI_MAX_VALUE_LEN];
+	str_list_t list;
+	str_list_t sec;
+
+	/* GitLab #1168: writing a key to a section whose header exists but is
+	   empty (followed by another section) must insert the key into that
+	   section, not misfile it under the last section of the file. */
+	list = strListInit();
+	iniSetString(&list, "input", "kpturn", "50", NULL);
+	iniSetString(&list, "video", "frames_in_flight", "4", NULL);
+	iniRemoveKey(&list, "input", "kpturn");             /* [input] now empty, header remains */
+	iniSetString(&list, "input", "mouse", "off", NULL); /* must land in [input], not [video] */
+
+	ini_check("#1168: key written to emptied section reads back"
+	          , strcmp(iniGetString(list, "input", "mouse", "", val), "off") == 0, &failures);
+	ini_check("#1168: unrelated section left intact"
+	          , strcmp(iniGetString(list, "video", "frames_in_flight", "", val), "4") == 0, &failures);
+
+	sec = iniGetSection(list, "input");
+	ini_check("#1168: iniGetSection returns only the section's own key"
+	          , strListCount(sec) == 1 && strstr(sec[0], "mouse") != NULL, &failures);
+	strListFree(&sec);
+	strListFree(&list);
+
+	/* Regression guard for the empty-section handling in find_section()/
+	   iniGetSection(): reading a section that remains empty must return no keys
+	   (must not bleed into the following section). */
+	list = strListInit();
+	iniSetString(&list, "input", "kpturn", "50", NULL);
+	iniSetString(&list, "video", "frames_in_flight", "4", NULL);
+	iniRemoveKey(&list, "input", "kpturn");             /* [input] stays empty */
+
+	sec = iniGetSection(list, "input");
+	ini_check("empty section: iniGetSection returns no keys", strListCount(sec) == 0, &failures);
+	strListFree(&sec);
+
+	sec = iniGetSection(list, "video");
+	ini_check("populated section: iniGetSection unaffected", strListCount(sec) == 1, &failures);
+	strListFree(&sec);
+	strListFree(&list);
+
+	/* iniGetSection(ROOT) on a file with no root-level keys (it begins with a
+	   named section) must return no keys, not the first section's contents. */
+	list = strListInit();
+	iniSetString(&list, "alpha", "k", "v", NULL);
+	sec = iniGetSection(list, ROOT_SECTION);
+	ini_check("empty root: iniGetSection(ROOT) returns no keys", strListCount(sec) == 0, &failures);
+	strListFree(&sec);
+	strListFree(&list);
+
+	printf("ini_regression_test: %d failure(s)\n", failures);
+	return failures;
+}
+
 void main(int argc, char** argv)
 {
 	int        i;
@@ -3954,6 +3559,9 @@ void main(int argc, char** argv)
 	char       str[128];
 	FILE*      fp;
 	str_list_t list;
+
+	if (argc < 2)
+		exit(ini_regression_test());
 
 	for (i = 1; i < argc; i++) {
 		if ((fp = iniOpenFile(argv[i], false)) == NULL) {

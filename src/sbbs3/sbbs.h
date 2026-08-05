@@ -379,6 +379,8 @@ struct js_listener_entry {
 	struct js_listener_entry *next;
 };
 
+#define JS_DISCONNECT_TERMINATE_COUNT 10  // operation-callbacks with client gone before a terminate_on_disconnect script is aborted
+
 typedef struct js_callback {
 	struct js_event_list	*events;
 	struct js_runq_entry    *rq_head;
@@ -395,6 +397,7 @@ typedef struct js_callback {
 	int32			next_eid;
 	JSBool			auto_terminate;
 	bool			auto_terminated;
+	JSBool			terminate_on_disconnect;  // abort the script when its client disconnects (peer of auto_terminate)
 	JSBool			keepGoing;
 	bool			bg;
 	bool			events_supported;
@@ -519,6 +522,7 @@ public:
 	RingBuf	inbuf{};
 	RingBuf	outbuf{};
 	bool	WaitForOutbufEmpty(int timeout) { return WaitForEvent(outbuf.empty_event, timeout) == WAIT_OBJECT_0; }
+	bool	WaitForOutbufDrained(int timeout);	// outbuf empty *and* output_thread's linear buffer transmitted
 	bool	flush_output(int timeout) { return online && WaitForOutbufEmpty(timeout); }
 	HANDLE	input_thread=nullptr;
 	pthread_mutex_t	input_thread_mutex;
@@ -565,6 +569,7 @@ public:
 	bool	is_event_thread = false;
 	std::atomic<bool> event_thread_running{false};
 	std::atomic<bool> output_thread_running{false};
+	std::atomic<bool> output_thread_busy{false};	// output_thread has data in its linear buffer not yet sent
 	std::atomic<bool> input_thread_running{false};
 	std::atomic<bool> terminate_output_thread{false};
 	char*	event_running_filename(char* str, size_t sz, int event) {
@@ -986,7 +991,7 @@ public:
 	double	last_progress = 0;
 	int		petscii_to_ansibbs(unsigned char);
 	size_t	print_utf8_as_cp437(const char*, size_t);
-	int		attr(int);				/* Change text color/attributes */
+	int		attr(uint);				/* Change text color/attributes */
 	void	ctrl_a(char);			/* Performs Ctrl-Ax attribute changes */
 	char*	auto_utf8(const char*, int& mode);
 	void	getdimensions();
@@ -1040,12 +1045,14 @@ public:
 	const char* socket_strerror(int errnum) { return ::socket_strerror(errnum, strerror_buf, sizeof strerror_buf); }
 
 	/* prntfile.cpp */
-	char*	fgetline(char* s, int size, int cols, FILE*, int mode);
+	char*	fgetline(char* s, size_t size, int cols, FILE*, int mode);
 	bool	printfile(const char* fname, int mode, int org_cols = 0, JSObject* obj = NULL);
 	bool	printtail(const char* fname, int lines, int mode, int org_cols = 0, JSObject* obj = NULL);
 	bool	menu(const char *code, int mode = 0, JSObject* obj = NULL);
 	bool	random_menu(const char *code, int mode = 0, JSObject* obj = NULL);
 	bool	menu_exists(const char *code, const char* ext=NULL, char* realpath=NULL);
+	bool	menu_exists_in(const char *code, const char* ext, const char* subdir, bool mods, char* realpath);
+	struct bool_expr* get_search_string(char* str, size_t maxlen, int kmode);
 
 	int		uselect(bool add, uint n, const char *title, const char *item, const uchar *ar);
 	struct uselect_item { std::string name; uint num; };
@@ -1059,8 +1066,8 @@ public:
 	/* atcodes.cpp */
 	int		show_atcode(const char *code, uint cols = 0, JSObject* obj = NULL);
 	const char*	atcode(const char* sp, char* str, size_t maxlen, int* pmode = NULL, bool centered = false, uint cols = 0, JSObject* obj = NULL);
-	const char* formatted_atcode(const char* sp, char* str, size_t maxlen);
-	char* expand_atcodes(const char* src, char* buf, size_t size, const smbmsg_t* msg = NULL);
+	const char* formatted_atcode(const char* sp, char* str, size_t maxlen, int* pmode = NULL);
+	char* expand_atcodes(const char* src, char* buf, size_t size, const smbmsg_t* msg = NULL, int* pmode = NULL);
 
 	/* getnode.cpp */
 	bool	getsmsg(int usernumber, bool clearline = false);
@@ -1129,6 +1136,9 @@ public:
 	void	guruchat(char* line, char* guru, int gurunum, char* last_answer);
 	bool	guruexp(char **ptrptr, char *line);
 	void	localguru(char *guru, int gurunum);
+	void	simulate_type(const char* str, bool with_typos = true, double speed_factor = 1.0);
+	bool	chat_llm_session(int gurunum);
+	bool	chat_llm_multinode_turn(int gurunum, const char* input);
 	bool	sysop_page(void);
 	bool	guru_page(void);
 	void	privchat(bool forced=false, int node_num=0);
@@ -1311,12 +1321,12 @@ public:
 
 	/* qwktomsg.cpp */
 	bool	qwk_new_msg(uint confnum, smbmsg_t* msg, char* hdrblk, int offset, str_list_t headers, bool parse_sender_hfields);
-	bool	qwk_import_msg(FILE *qwk_fp, char *hdrblk, uint blocks, char fromhub, smb_t*
+	bool	qwk_import_msg(FILE *qwk_fp, char *hdrblk, uint blocks, uint fromhub, smb_t*
 				,uint touser, smbmsg_t* msg, bool* dupe);
 
 	/* fido.cpp */
 	bool	netmail(const char *into, const char *subj = NULL, int mode = WM_NONE, smb_t* resmb = NULL, smbmsg_t* remsg = NULL, str_list_t cc = NULL);
-	void	qwktonetmail(FILE *rep, char *block, char *into, uchar fromhub = 0);
+	void	qwktonetmail(FILE *rep, char *block, char *into, uint fromhub = 0);
 	bool	lookup_netuser(char *into);
 
 	bool	inetmail(const char *into, const char *subj = NULL, int mode = WM_NONE, smb_t* resmb = NULL, smbmsg_t* remsg = NULL, str_list_t cc = NULL);
@@ -1324,8 +1334,8 @@ public:
 
 	/* useredit.cpp */
 	void	useredit(int usernumber);
-	int		searchup(char *search,int usernum);
-	int		searchdn(char *search,int usernum);
+	int		searchup(const struct bool_expr*, int usernum);
+	int		searchdn(const struct bool_expr*, int usernum);
 	void	user_config(user_t* user);
 	bool	purgeuser(int usernumber);
 
@@ -1386,11 +1396,12 @@ extern "C" {
 #ifdef SBBS
 	extern const char* nulstr;
 	extern const char* crlf;
-	extern int64_t uptime;
+	extern time_t uptime;
 #endif
 	DLLEXPORT int		sbbs_random(int);
 	DLLEXPORT void		sbbs_srand(void);
 	DLLEXPORT uint 		repeated_error(int line, const char* function);
+	DLLEXPORT in_addr_t resolve_ipv4(const char *addr);
 
 	/* postmsg.cpp */
 	DLLEXPORT int		savemsg(scfg_t*, smb_t*, smbmsg_t*, client_t*, const char* server, char* msgbuf, smbmsg_t* remsg);
@@ -1483,7 +1494,7 @@ extern "C" {
 													,scfg_t* cfg				/* common */
 													,scfg_t* node_cfg			/* node-specific */
 													,jsSyncMethodSpec* methods	/* global */
-													,int64_t uptime				/* system */
+													,time_t uptime				/* system */
 													,const char* host_name		/* system */
 													,const char* socklib_desc	/* system */
 													,js_callback_t*				/* js */
@@ -1539,7 +1550,7 @@ extern "C" {
 
 	/* js_system.c */
 	DLLEXPORT JSObject* js_CreateSystemObject(JSContext* cx, JSObject* parent
-													,scfg_t* cfg, int64_t uptime
+													,scfg_t* cfg, time_t uptime
 													,const char* host_name
 													,const char* socklib_desc
 													,struct mqtt*);
@@ -1609,6 +1620,9 @@ extern "C" {
 	DLLEXPORT JSObject* js_CreateFileClass(JSContext* cx, JSObject* parent);
 	DLLEXPORT JSObject* js_CreateFileObject(JSContext* cx, JSObject* parent, const char *name, int fd, const char* mode);
 
+	/* js_sqlite.cpp */
+	DLLEXPORT JSObject* js_CreateSQLiteClass(JSContext* cx, JSObject* parent);
+
 	/* js_archive.c */
 	DLLEXPORT JSObject* js_CreateArchiveClass(JSContext* cx, JSObject* parent, const str_list_t supported_formats);
 
@@ -1648,7 +1662,7 @@ extern "C" {
 
 #ifdef SBBS /* These aren't exported */
 
-	/* main.c */
+	/* main.cpp */
 	int 	lputs(int level, const char *);			/* log output */
 	int 	lprintf(int level, const char *fmt, ...)	/* log output */
 #if defined(__GNUC__)   // Catch printf-format errors
@@ -1659,7 +1673,6 @@ extern "C" {
 	SOCKET	open_socket(int domain, int type, const char* protocol);
 	SOCKET	accept_socket(SOCKET s, union xp_sockaddr* addr, socklen_t* addrlen);
 	int		close_socket(SOCKET);
-	in_addr_t resolve_ip(char *addr);
 
 	/* ver.cpp */
 	char*	socklib_version(char* str, size_t, const char* winsock_ver);

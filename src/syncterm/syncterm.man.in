@@ -1,9 +1,10 @@
-.TH SYNCTERM 1 2024-09-24
+.TH SYNCTERM 1 2026-05-05
 .SH NAME
 syncterm \- BBS terminal program
 .SH SYNOPSIS
-\fBsyncterm\fP [\-46chqrts] [\-b\fIlist\fP] [\-e\fIdelay\fP]
-[\-i\fIinterface\fP] [\-l\fIlines\fP] [\-n\fIconfig\fP] [\fIURL\fP]
+\fBsyncterm\fP [\-46chqrts] [\-b\fIlist\fP]
+[\-i\fIiface\fP] [\-l\fIlines\fP] [\-n\fIconfig\fP]
+[\-w\fIscript\fP] [\fIURL\fP]
 .PP
 \fBsyncterm\fP -T\fP
 .PP
@@ -20,15 +21,6 @@ Only resolve IPv6 addresses
 Specify an alternative BBS list path
 .IP \fB\-c\fP
 Hide the status line
-.IP \fB\-e\fIdelay\fR
-Specify the "escape delay" in milliseconds for curses(3) mode.
-Since curses uses the escape key for its own purposes, using the escape key for
-other control requires a timeout.
-If this timeout is too low, extended keystrokes such as arrow keys will be
-interpreted as an escape keypress followed by other characters.
-If this delay is too high, there will be a large delay after a single escape is
-pressed.
-If an escape delay of less than 10ms is specified, it is forced to 25ms.
 .IP \fB\-h\fP
 Specifies the default scheme for \fIURL\fP to be ssh://
 .IP \fB\-i\fIinterface\fR
@@ -37,7 +29,8 @@ Specify the interface to use.
 Depending on compile options and library availability, not all interfaces will
 be available for all installations.
 If \fI\-i\fP is not specified, SyncTERM will choose the "best" mode in the
-following order: X11, GDI, SDL, Win32 Console, curses, ANSI.
+following order: Quartz (macOS), Wayland, X11, GDI, SDL, Win32 Console,
+curses, ANSI.
 The SDL mode specifically can fail in ways that the automatic fallback can
 not properly detect (most notably with libGGI when it is enabled in SDL.)
 When this occurs, a specific mode will need to be forced.
@@ -72,15 +65,23 @@ This requires SDL support to have been compiled in, and the library
 ``libSDL.so'' to be in the library search path.
 .IP \fBW\fP
 Run in Windows Console mode.
-.IP \fBX\fP
+.IP \fBQ\fP[\fIF|W\fP]
+Require SyncTERM to run in Quartz mode. macOS only. Uses the native
+AppKit/Core Graphics framework. The default on macOS.
+.IP \fBX\fP[\fIF|W\fP]
 Require SyncTERM to run in X11 mode. This requires X11 support to have been
 compiled in, and the library ``libX11.so'' to be in the library search path.
+.IP \fBY\fP[\fIF|W\fP]
+Require SyncTERM to run in Wayland mode. This requires Wayland support to have
+been compiled in, and the library ``libwayland-client.so'' to be in the library
+search path.
 .RE
 .IP \fB\-l\fIlines\fR
 Sets the number of screen lines to \fIlines\fR.
 Only specific values are allowed for \fIlines\fR and they are:
-14, 21, 25, 28, 43, 50, and 60.
-If any other value is chosen, a value of 50 is used.
+14, 21, 25, 28, 30, 43, 50, and 60.
+If any other value is chosen, a value of 43 or 50 is used depending on
+the current font size.
 .IP \fB\-n\fIconfig\fR
 Specify an alternative INI file
 .IP \fB\-q\fP
@@ -97,11 +98,48 @@ Specifies the default scheme for \fIURL\fP to be telnet://
 When this is the ONLY argument, dumps terminfo entry to stdout and exits.
 .IP \fB\-v\fP
 When this is the ONLY argument, dumps version info to stdout and exits.
+.IP \fB\-w\fIscript\fR
+Load the named Wren script file in addition to the built-in and
+user auto-load scripts on every connect.
+The script is interpreted as its own filename-derived module after
+all other scripts have loaded, so its
+.BR import
+statements resolve against the full surface.
+Compile and runtime errors during the load are written to standard
+error.
+.SH URL FORMATS
+A \fIURL\fP given on the command line may use any of the following
+schemes.  When the scheme is omitted, the default is taken from
+\fI\-h\fP / \fI\-r\fP / \fI\-t\fP or, if none of those is specified,
+telnet://.
+.IP \fBrlogin://\fIuser\fP[\fI:password\fP]@\fIhost\fP[\fI:port\fP]
+RFC 1282 RLogin.
+.IP \fBssh://\fIuser\fP[\fI:password\fP]@\fIhost\fP[\fI:port\fP]
+SSH v2 (DeuceSSH backend).
+.IP \fBtelnet://\fP[\fIuser\fP[\fI:password\fP]@]\fIhost\fP[\fI:port\fP]
+RFC 854 telnet.
+.IP \fBraw://\fIhost\fP\fI:port\fP
+8-bit clean TCP, no negotiation.  A port is required.
+.IP \fBghost://\fIuser\fP@\fIhost\fP[\fI:port\fP]/\fIprogram\fP
+MajorBBS GHost.
+.IP \fBshell:\fIcommand\fP
+Run \fIcommand\fP in the terminal (UNIX only).
+.IP \fBmqtts://\fIuser\fP[\fI:password\fP]@\fIhost\fP[\fI:port\fP]
+SBBS MQTT spy.  TLS-PSK to a Synchronet internal broker on port 8883;
+the user portion of the URL is the PSK identity and the password
+portion is the PSK secret.  If the matching dialing-directory entry
+doesn't carry a system password, SyncTERM prompts for it before
+sending the MQTT CONNECT.  After authentication the BBSID is
+auto-discovered from a retained broker topic and a node picker pops
+up; pick the node to attach to.  Plain \fBmqtt://\fP is intentionally
+not accepted — the broker doesn't speak plaintext.
 .SH RUN-TIME LINKING
-For some features, such as SDL support, and X11 support,
+For some features, such as SDL, X11, and Wayland support,
 run-time linking is employed using dlopen().
 Using this, it is possible to build a version which will use SDL,
-and X11 if they are present, but not fail to run if they are not.
+X11, and Wayland if they are present, but not fail to run if they are not.
+The macOS Quartz backend links directly against AppKit/Core Graphics
+frameworks and does not use run-time linking.
 .SH TEXT MODE CAVAETS
 When running in one of the text modes such as curses or ANSI, many of the
 control functions are modified since there is no reliable way to use extra
@@ -112,13 +150,19 @@ major usability issues.
 The escape character (ASCII 27) is used in curses and ANSI modes to begin a
 control sequence. As such, there is a delay to detect if the next character
 continues the escape sequence or is a base escape. Because of this, there will
-be a perceptible delay when the escape key is used. This delay can be adjusted
-using the \fI\-e\fP parameter, but selecting the "correct" value is a dark art
-since any value is provably incorrect.
+be a perceptible delay when the escape key is used.
 .PP
 The curses and ANSI modes are not necessarily the correct number of lines for
 a traditional screen mode. As such, filler will be added around the terminal
 screen. For some display sizes, unpredictable results may occur.
+.SH DIRECTORY LISTING
+In the dialing directory, press \fB<\fP or \fB>\fP to cycle through
+named sort profiles.  Press \fBCtrl-S\fP to manage sort profiles
+(create, rename, delete, edit sort fields, reorder via cut/paste).
+.PP
+In edit submenus (Edit Directory Entry, Font Management, Sort Profiles),
+press \fB[\fP or \fB]\fP to navigate to the previous or next item
+without returning to the parent list.
 .SH FILES
 .IP \fI%%DESTDIR%%%%PREFIX%%/etc/syncterm.lst\fR
 The system wide dialing directory.

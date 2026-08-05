@@ -1,0 +1,86 @@
+#ifndef DSSH_PORTABLE_H
+#define DSSH_PORTABLE_H
+
+#include <assert.h>
+#include <stddef.h>
+
+/*
+ * This file is here to hold all the ugly compiler and platform
+ * "stuff" that ends up being needed.
+ */
+
+// C23
+#ifndef unreachable
+ #ifdef __GNUC__
+  #define unreachable() (__builtin_unreachable())
+ #elif defined _MSC_VER
+  #define unreachable() (__assume(false))
+ #endif
+#endif
+
+/*
+ * Symbol visibility for shared libraries.
+ *
+ * DSSH_PUBLIC  -- exported from the shared library (public API)
+ * DSSH_PRIVATE -- hidden, only visible within the library
+ *
+ * When building as a shared library, compile with -DDSSH_SHARED.
+ * When building as a static library or consuming the library, these
+ * are no-ops.
+ */
+#if defined(DSSH_SHARED)
+ #if defined(__GNUC__) || defined(__clang__)
+  #define DSSH_PUBLIC  __attribute__((visibility("default")))
+  #define DSSH_PRIVATE __attribute__((visibility("hidden")))
+ #elif defined(_MSC_VER)
+  #define DSSH_PUBLIC __declspec(dllexport)
+  #define DSSH_PRIVATE
+ #else
+  #define DSSH_PUBLIC
+  #define DSSH_PRIVATE
+ #endif
+#elif defined(DSSH_SHARED_IMPORT)
+
+	/* Consumer of the shared library on Windows */
+ #if defined(_MSC_VER)
+  #define DSSH_PUBLIC __declspec(dllimport)
+  #define DSSH_PRIVATE
+ #else
+  #define DSSH_PUBLIC
+  #define DSSH_PRIVATE
+ #endif
+#else   // if defined(DSSH_SHARED)
+
+	/* Static library -- no visibility annotations needed */
+ #define DSSH_PUBLIC
+ #define DSSH_PRIVATE
+#endif   // if defined(DSSH_SHARED)
+
+/*
+ * DSSH_TESTABLE: marks internal functions that need to be linkable
+ * from test code when compiled with -DDSSH_TESTING.
+ */
+#ifdef DSSH_TESTING
+ #define DSSH_TESTABLE
+#else
+ #define DSSH_TESTABLE static
+#endif
+
+/*
+ * dssh_secure_zero(p, n) — wipe that the compiler is not allowed to
+ * elide.  Used for key material, shared secrets, and other buffers
+ * whose contents outlive their stack frame only as leaked bits.
+ *
+ * explicit_bzero() / memset_s() / SecureZeroMemory() are
+ * platform-specific extensions, not C17.  The volatile-pointer loop
+ * has the same semantics on every conforming compiler.
+ */
+static inline void
+dssh_secure_zero(void *p, size_t n)
+{
+	volatile unsigned char *vp = (volatile unsigned char *)p;
+	while (n--)
+		*vp++ = 0;
+}
+
+#endif   // ifndef DSSH_PORTABLE_H

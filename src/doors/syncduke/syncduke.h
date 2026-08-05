@@ -1,0 +1,194 @@
+#ifndef SYNCDUKE_H_
+#define SYNCDUKE_H_
+
+/*
+ * syncduke.h -- cross-module declarations for the SyncDuke door shim.
+ *
+ * The vendored engine owns main(); our headless layer is split across
+ * syncduke_plat.c (the display.c replacement: framebuffer, palette, timer,
+ * input) and syncduke_io.c (terminal out-buffer + the sixel present path).
+ */
+
+#include <stddef.h>
+#include <stdint.h>
+#include "keymode.h"   /* termgfx: termgfx_keymode_t */
+
+/* SyncDuke v1 renders Build "classic" mode only. */
+#define SYNCDUKE_SCREEN_W 320
+#define SYNCDUKE_SCREEN_H 200
+
+/* --- provided by syncduke_plat.c --- */
+const uint8_t *syncduke_fb(void);             /* SYNCDUKE_SCREEN_W*H 8-bit palette indices */
+const uint8_t *syncduke_palette(void);        /* 256 * 3 bytes, 8-bit RGB            */
+int            syncduke_palette_take_dirty(void); /* 1 if palette changed since last call (clears) */
+
+/* --- provided by syncduke_io.c --- */
+void syncduke_out_put(const void *buf, size_t len);   /* stage bytes for the terminal */
+/* The player's real stdout: a duplicate taken BEFORE the engine's chatter was
+ * routed over fd 1. On a STDIO door this is the client; on a dev run it is the
+ * tty. Never write the terminal stream to a bare fd 1 -- see syncduke_config.c. */
+int  syncduke_stdout_fd(void);
+void syncduke_out_flush(void);                        /* push staged bytes to the sink */
+void syncduke_present(void);                           /* encode + emit one frame      */
+void syncduke_pace_ack(void);                          /* a per-frame DSR report came back (pacing) */
+int  syncduke_pace_ready(void);                        /* pipeline has room for another frame (render gate) */
+int  syncduke_pace_inflight(void);                     /* unacked frames in flight (frame-stall log) */
+int  syncduke_pace_curdepth(void);                     /* current effective pipeline depth (frame-stall log) */
+void syncduke_stats_toggle(void);                      /* Ctrl-S: toggle the live stats overlay */
+void syncduke_depth_cycle(void);                       /* Ctrl-T: cycle the pipeline depth */
+void syncduke_tier_cycle(void);                        /* F4: cycle the graphics tier (jxl/sixel) */
+int  syncduke_text_tier(void);                         /* 1 if the active tier is a text/block tier (engine skips image-only screens) */
+void syncduke_hangup(const char *why);                 /* client gone: log + exit (free the node) */
+const char *syncduke_active_tier_name(void);           /* name of the current render tier (e.g. "sixel", "jxl") */
+
+/* --- provided by syncduke_stubs.c --- */
+void sd_music_pending_retry(void);                     /* replay title music dropped before the audio tier was known */
+
+/* --- provided by syncduke_node.c (Synchronet who's-online / status / messages) --- */
+void syncduke_node_init(void);   /* resolve BBS context; install exit status-clear */
+void syncduke_node_tick(void);   /* per-frame: status broadcast (+ Ctrl-U build, nmsg poll) */
+uint32_t syncduke_node_overlay_sig(void);   /* banner change signature (0 = no banner) */
+void     syncduke_node_draw(int cols, int rows);  /* paint the who's-online/message banner */
+void     syncduke_node_userlist_request(void);    /* Ctrl-U: flag the next tick to build the who's-online banner */
+void     syncduke_node_page_request(void);        /* Ctrl-P: flag the next tick to open the page-compose overlay */
+int      syncduke_node_composing(void);           /* is the in-game page-compose overlay active? (input path gate) */
+void     syncduke_node_compose_key(int c);        /* feed one typed key to the compose overlay */
+
+/* --- provided by syncduke_events.c (events.jsonl activity log) --- */
+void syncduke_events_tick(void);   /* per-frame: emit start/level/death to -eventlog */
+
+/* --- provided by syncduke_input.c (terminal -> Build/Duke key state) ---
+ * Self-contained (no engine linkage): syncduke_map_key is a pure function; the queue
+ * holds raw Build scancode bytes (low 7 bits = scancode, 0x80 = key release) the
+ * way the engine's keyhandler()/_readlastkeyhit() expect. `now` is the engine's
+ * totalclock (a 120Hz tick), used only to time the synthetic key releases that a
+ * terminal (which has no key-up) can't send. */
+int  syncduke_map_key(const char *seq, int len, int gameplay);   /* terminal byte/seq -> scancode, or -1 */
+void syncduke_input_pump(int fd, int now, int gameplay);          /* read fd, enqueue key-down events */
+void syncduke_input_reset(void);                                  /* clear latches on game load (crouch, holds, turn) */
+void syncduke_input_expire(int now);                /* enqueue key-up for held-out keys */
+int  syncduke_input_has_raw(void);                  /* a queued raw scancode byte awaits? */
+int  syncduke_input_pop_raw(void);                  /* next raw scancode byte (0 if none) */
+int  syncduke_input_fd(void);                       /* the input fd (resolved client socket / stdin) */
+int  syncduke_is_syncterm(void);                    /* 1 if the client is SyncTERM (DA reply); cterm 2x sixel scaling */
+int  syncduke_kitty_active(void);                   /* 1 if the kitty keyboard protocol negotiated (true key-up) */
+/* The negotiated terminal key mode (../termgfx/keymode.h).  Owned by
+ * syncduke_input.c (it parses the CTDA / CSI?u replies); syncduke_io.c's
+ * terminal-restore path uses it to undo whatever was enabled. */
+termgfx_keymode_t *syncduke_keymode(void);
+/* Restore the BBS's terminal (key mode, mouse, cursor, autowrap, sixel scroll).
+ * Idempotent.  Registered with atexit() and also called from syncduke_hangup(). */
+void syncduke_term_restore(void);
+int  syncduke_evdev_active(void);                   /* 1 if SyncTERM physical key (evdev) reports negotiated */
+uint32_t syncduke_rtt(void);                        /* smoothed RTT (ms); drives native-vs-synthetic turn */
+int  syncduke_turn_native(void);                    /* 1 if turn keys use the native hold (low-latency true-key-up) */
+int  syncduke_jxl_supported(void);                  /* 1 if SyncTERM can decode JXL (CTQJS reply); -> JXL/APC tier */
+int  syncduke_img_blob_ok(void);                    /* 1 if CTerm >= 1.329: draw JXL inline (DrawJXLBlob, no cache) */
+int  syncduke_img_zoom_ok(void);                    /* 1 if CTerm >= 1.332: terminal-side integer upscale (APC ZX/ZY) */
+void syncduke_vscale_arm(void);                     /* arm the sixel vertical-scaling probe's CPR collector */
+int  syncduke_vscale_done(void);                    /* 1 once the probe has answered */
+int  syncduke_sixel_vscale(void);                   /* 1 if the terminal honors the sixel raster pan (vertical scale) */
+int  syncduke_status_type(void);                    /* pre-door DECSSDT status-line type captured for restore, -1 if none */
+int  syncduke_have_sixel(void);                     /* 1 if the terminal advertised sixel (DA1/CTDA cap 4 or SyncTERM) */
+int  syncduke_probe_replied(void);                  /* 1 once the terminal answered the DA capability probe */
+int  syncduke_term_px_w(void);                      /* terminal pixel-canvas width from probe, 0 if unknown */
+int  syncduke_term_px_h(void);                      /* terminal pixel-canvas height from probe, 0 if unknown */
+int  syncduke_term_cell_w(void);                    /* terminal cell width in px from ESC[16t, 0 if unknown */
+int  syncduke_term_cell_h(void);                    /* terminal cell height in px from ESC[16t, 0 if unknown */
+int  syncduke_term_rows(void);                      /* terminal text-row count (bottom stats-strip row); >=1 */
+int  syncduke_term_cols(void);                      /* terminal text-column count (text-tier grid width); >=1 */
+int  syncduke_gfx_w(void);                           /* advertised sixel graphics limit, 0 = unknown */
+int  syncduke_gfx_h(void);
+int  syncduke_canvas_w(void);                       /* graphics-canvas width: XTSMGRAPHICS or text-area px */
+int  syncduke_canvas_h(void);                       /* graphics-canvas height: XTSMGRAPHICS or text-area px */
+int  syncduke_jxl_scale_max(void);                  /* JXL fill cap (px), [video] scale_max; 0 = uncapped */
+int  syncduke_sixel_max_w(void);                    /* sixel width cap (px), [video] sixel_max_width */
+double syncduke_music_quality(void);                /* Ogg/Opus VBR quality (0..1), [audio] music_quality */
+int  syncduke_term_is_utf8(void);                   /* 1 = client charset is UTF-8 (terminal.ini/[video] charset) */
+uint32_t syncduke_clock_ms(void);                   /* the monotonic ms clock present()/pacing use (shared clock domain) */
+/* The displayed image's horizontal center column and half-width in cells, recorded by
+ * present() each frame (the placement depends on tier + terminal).  Used by the mouse
+ * steer to map a pointer column to a turn rate around the actual image. */
+void syncduke_hsteer(int *center_col, int *half_cols);
+int  syncduke_mouse_enabled(void);                  /* 1 if terminal mouse steering is on (io.c keeps SGR tracking in sync) */
+void syncduke_mouse_toggle(void);                   /* Ctrl-O: toggle terminal mouse steering on/off */
+int  syncduke_mouse_sens(void);                     /* steer sensitivity, 0..63 (Setup Controls slider) */
+void syncduke_mouse_sens_set(int v);                /* set steer sensitivity (clamped 0..63) */
+int  syncduke_kb_tap(void);                         /* KEY TAP slider 0..63 (fresh-press frames) */
+void syncduke_kb_tap_set(int v);
+int  syncduke_kb_hold(void);                        /* KEY HOLD slider 0..63 (repeat-byte frames) */
+void syncduke_kb_hold_set(int v);
+int  syncduke_kb_turn(void);                        /* TURN HOLD slider 0..63 (turn-key frames) */
+void syncduke_kb_turn_set(int v);
+int  syncduke_kb_fastturn(void);                    /* FAST TURN on/off (defeat Duke's turn-accel ramp) */
+void syncduke_kb_fastturn_set(int v);
+/* The steer/fire levels (syncduke_mouse_turn, syncduke_mouse_fire) are defined in
+ * syncduke_input.c and read directly by the engine's getinput() in Game/src/player.c. */
+
+/* --- provided by syncduke_door.c (DOOR32.SYS / -s<fd> door interface) ---
+ * A constructor captures argv before the engine's main() runs and resolves the
+ * BBS client socket (so the engine never has to know about door args). */
+int      syncduke_door_socket(void);          /* client comm socket fd, or -1 if none (local/dev) */
+uint32_t syncduke_door_time_limit_ms(void);   /* session time limit in ms, or 0 if none */
+
+/* --- idle-USER detection (../termgfx/idle.h) ------------------------------
+ * Fed from the REAL key/mouse dispatch ONLY -- never from rawq_push(), which
+ * syncduke_input_expire() also drives with synthesized key-ups.
+ *
+ * syncduke_idle_arm()      once, after the args and syncduke.ini are known.
+ * syncduke_idle_wake()     feed it; 1 => the input answered an on-screen
+ *                          countdown and the caller MUST consume it.
+ * syncduke_idle_check()    once per presented frame; 1 => threshold passed.
+ * The showing/clear/text trio lets the Ctrl-S strip carry the countdown on the
+ * bottom row instead of a second writer competing for it. */
+void        syncduke_idle_arm(void);
+int         syncduke_idle_wake(void);
+int         syncduke_idle_check(void);
+int         syncduke_idle_showing(void);
+int         syncduke_idle_clear_due(void);
+void        syncduke_idle_clear_done(void);
+const char *syncduke_idle_text(void);
+int         syncduke_all_digits(const char *s);
+
+/* syncduke.ini [idle], in SECONDS. Default 10 minutes -- UNSET IS NOT OFF;
+ * timeout = 0 disables. The only configuration path off a Synchronet BBS. */
+unsigned syncduke_config_idle_timeout(void);
+unsigned syncduke_config_idle_warn(void);
+const char *syncduke_door_alias(void);        /* user's alias/handle, or "" */
+
+/* --- provided by syncduke_config.c (command-line / syncduke.ini derived state) --- */
+const char *syncduke_eventlog_path(void);   /* -eventlog path ("" = off) */
+const char *syncduke_home(void);            /* -home value ("" = none) */
+
+/* --- provided by syncduke_game.c (engine-state queries; pulls in duke3d.h) --- */
+int syncduke_in_gameplay(void);   /* 1 when actually playing (not in a menu), so the WASD/Space action layer applies */
+int syncduke_player_dead(void);   /* 1 when the player is dead -- door drops the action layer so Space = Open (restart) */
+void syncduke_game_status(char *buf, size_t bufsz);   /* who's-online text: "playing SyncDuke" [+ ": <level>"] */
+void syncduke_map_name(int vol, int lev, char *buf, size_t sz);   /* level display name: CON's "RAW MEAT", a user map's basename, else "E#L#" */
+int syncduke_next_frag(int *victim);   /* dukematch: next not-yet-reported frag BY US -> *victim player #, else 0 */
+
+/* --- text-tier legible HUD overlay (game pop-up/status quotes as real chars) ---
+ * In a text/block tier the game's own quote font rasterises to unreadable blocks. When
+ * syncduke_text_hud is set (door: the active tier is a text tier), the engine's
+ * operatefta() (Game/src/game.c) CAPTURES the on-screen quote/chat strings here instead
+ * of drawing them, and the door's text-tier present redraws them as real terminal
+ * characters over the block frame.  In an image tier (sixel/JXL) the flag is 0, so the
+ * game renders its font normally.  Storage lives in syncduke_game.c. */
+#define SYNCDUKE_HUD_MAX 5      /* fta quote + up to MAXUSERQUOTES(4) chat lines */
+#define SYNCDUKE_HUD_LEN 160    /* >= user_quote[128] and fta_quotes[64]         */
+typedef struct {
+	char text[SYNCDUKE_HUD_LEN];  /* NUL-terminated message text                 */
+	int y;                        /* Duke 320x200 y of the row -> proportional terminal row */
+} syncduke_hud_line_t;
+extern int syncduke_text_hud;                             /* door sets 1 in a text tier */
+void syncduke_hud_begin(void);                            /* engine: reset the per-frame capture */
+void syncduke_hud_add(const char *text, int y);           /* engine: record a captured line */
+int  syncduke_hud_lines(const syncduke_hud_line_t **out); /* door: current lines; returns count */
+
+/* --- provided by syncduke_log.c (optional file debug log; disabled unless a path
+ * is set via env SYNCDUKE_LOG or syncduke.ini [debug] log) --- */
+void syncduke_log(const char *fmt, ...);        /* printf-style; no-op when disabled */
+void syncduke_log_set_path(const char *path);   /* configure the log file (from the ini) */
+void syncduke_log_init(void);                   /* install the crash handler + atexit marker */
+
+#endif /* SYNCDUKE_H_ */

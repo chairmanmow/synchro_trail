@@ -1,0 +1,24 @@
+N‚HS y n c RD O O MN CIN-GAME CONTROLS
+
+W‚HYArrowsN  ....... CMove / turn
+W‚HYW A S DN ....... CMove / stWrCafe
+W‚HYSpaceN‚....... CFire
+W‚HYEN†....... CUse / open door
+W‚HYRN†.......C Run (toggle)
+W‚HY1-7N„....... CSelect weapon
+W‚HYTabN„.......C Automap
+W‚HYTN†....... CTalk (message all players)
+W‚HYG I B RN ....... CWhisper to a player by color (3+ games)
+W‚HYEscN„....... CMenu
+W‚HYCtrl-SN  ....... CShow network / video statistics
+W‚HYCtrl-TN  ....... CCycle frame pacing (latency)
+
+W‚HTERMINALN HFEATURESN C(HYF4NC to cycle)
+W‚ú HYAudio NC(full sound effects and music): HSyncTERM 1.10+
+N‚ú HYNative keys NC(extended keys / events): HSyncTERM 1.10+ NCand HKittyNC-Hcompatible
+N‚ú HYJXL graphicsN C(fullW CcolorW,C top quality, small framesW, Cbest):W HCSyncTERM 1.4+
+N‚ú HYSixelN HYgraphicsN:HY CxtermN, HCfootN, HCWezTermN, HCmltermN, HCWindowsNC HTerminalN, HCiTerm2
+N‚ú HYANSI textN C(CP437 or UTF-8): color blocks, low-res, runs almost anywhere
+
+W‚CNo working function keys?W Use HYCtrl-AN..HYCtrl-F Nas F1..F6.
+Z

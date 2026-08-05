@@ -26,7 +26,10 @@
 #include <stdlib.h>     /* malloc() */
 
 #if defined(_WIN32)
-	#include <iphlpapi.h>   /* GetNetworkParams */
+	#include <iphlpapi.h>   /* GetAdaptersAddresses */
+	#ifndef GAA_FLAG_SKIP_FRIENDLY_NAME /* absent from the Borland C++ Builder SDK */
+		#define GAA_FLAG_SKIP_FRIENDLY_NAME 0x0020
+	#endif
 #endif
 
 str_list_t getNameServerList(void)
@@ -57,52 +60,96 @@ str_list_t getNameServerList(void)
 	return list;
 
 #elif defined(_WIN32)
-	FIXED_INFO*     FixedInfo = NULL;
-	ULONG           FixedInfoLen = 0;
-	IP_ADDR_STRING* ip;
-	str_list_t      list;
+	/* Windows assigns these well-known site-local addresses to any interface
+	 * that has no IPv6 name server of its own; they never answer queries. */
+	static const char* const unconfigured[] = {
+		"fec0:0:0:ffff::1",
+		"fec0:0:0:ffff::2",
+		"fec0:0:0:ffff::3",
+		NULL
+	};
+	const ULONG           flags = GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST
+	                            | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_FRIENDLY_NAME;
+	IP_ADAPTER_ADDRESSES* adapters = NULL;
+	IP_ADAPTER_ADDRESSES* adapter;
+	ULONG                 result = ERROR_BUFFER_OVERFLOW;
+	ULONG                 len = 15 * 1024;  /* size recommended by Microsoft */
+	int                   attempt;
+	str_list_t            list;
+	WSADATA               wsaData;
 
 	if ((list = strListInit()) == NULL)
 		return NULL;
-	if (GetNetworkParams(FixedInfo, &FixedInfoLen) == ERROR_BUFFER_OVERFLOW) {
-		FixedInfo = (FIXED_INFO*)malloc(FixedInfoLen);
-		if (FixedInfo != NULL && GetNetworkParams(FixedInfo, &FixedInfoLen) == ERROR_SUCCESS) {
-			ip = &FixedInfo->DnsServerList;
-			for (; ip != NULL; ip = ip->Next) {
-				if (ip->IpAddress.String[0] != '\0')
-					strListPush(&list, ip->IpAddress.String);
-			}
+	WSAStartup(MAKEWORD(2, 2), &wsaData);   /* req'd for getnameinfo() */
+	/* the adapter set can grow between the sizing call and the real one */
+	for (attempt = 0; attempt < 3 && result == ERROR_BUFFER_OVERFLOW; attempt++) {
+		if ((adapters = (IP_ADAPTER_ADDRESSES*)malloc(len)) == NULL)
+			break;
+		if ((result = GetAdaptersAddresses(AF_UNSPEC, flags, NULL, adapters, &len)) != ERROR_SUCCESS) {
+			free(adapters);
+			adapters = NULL;
 		}
-		if (FixedInfo != NULL)
-			free(FixedInfo);
 	}
+	for (adapter = adapters; adapter != NULL; adapter = adapter->Next) {
+		IP_ADAPTER_DNS_SERVER_ADDRESS* dns;
+
+		if (adapter->OperStatus != IfOperStatusUp)
+			continue;
+		if (adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+			continue;
+		for (dns = adapter->FirstDnsServerAddress; dns != NULL; dns = dns->Next) {
+			char   str[128];
+			int    i;
+			size_t addrlen;
+
+			if (getnameinfo(dns->Address.lpSockaddr, dns->Address.iSockaddrLength
+			                , str, sizeof str, NULL, 0, NI_NUMERICHOST) != 0)
+				continue;
+			for (i = 0; unconfigured[i] != NULL; i++) {
+				addrlen = strlen(unconfigured[i]);
+				/* the address may carry a "%<scope-id>" suffix */
+				if (strnicmp(str, unconfigured[i], addrlen) == 0
+				    && (str[addrlen] == '\0' || str[addrlen] == '%'))
+					break;
+			}
+			if (unconfigured[i] != NULL)
+				continue;
+			if (strListFind(list, str, /* case_sensitive: */ false) < 0)
+				strListPush(&list, str);
+		}
+	}
+	free(adapters);
+	WSACleanup();
 	return list;
 #else
 	#error "Need a get_nameserver() implementation for this platform"
 #endif
 }
 
-const char* getHostNameByAddr(const char* str)
+const char* getHostNameByAddr(const char* addr, char* buf, size_t size)
 {
-	HOSTENT* h;
-	uint32_t ip;
+	const char* result = NULL;
+	struct sockaddr_in  in = { AF_INET };
+	struct sockaddr_in6 in6 = { AF_INET6 };
 
 #ifdef _WIN32
 	WSADATA  wsaData;
 	WSAStartup(MAKEWORD(2, 2), &wsaData);
 #endif
-	if (str == NULL)
-		return NULL;
-	if ((ip = parseIPv4Address(str)) == INADDR_NONE)
-		return str;
-	if ((h = gethostbyaddr((char *)&ip, sizeof(ip), AF_INET)) == NULL)
-		return NULL;
-
+	if (addr != NULL) {
+		if (xp_inet_pton(AF_INET, addr, &in.sin_addr) == 1) {
+			if (getnameinfo((SOCKADDR*)&in, sizeof in, buf, size, NULL, 0, NI_NAMEREQD) == 0)
+				result = buf;
+		}
+		else if (xp_inet_pton(AF_INET6, addr, &in6.sin6_addr) == 1) {
+			if (getnameinfo((SOCKADDR*)&in6, sizeof in6, buf, size, NULL, 0, NI_NAMEREQD) == 0)
+				result = buf;
+		}
+	}
 #ifdef _WIN32
 	WSACleanup();
 #endif
-
-	return h->h_name;
+	return result;
 }
 
 /* In case we want to DLL-export getNameServerList in the future */
@@ -242,18 +289,25 @@ isValidHostnameString(const char *str)
 bool
 isValidAddressString(const char *str)
 {
-	struct sockaddr_in  in;
-	struct sockaddr_in6 in6;
+	bool result = false;
+	char   addr[32];
+#ifdef _WIN32
+	WSADATA  wsaData;
+	WSAStartup(MAKEWORD(2, 2), &wsaData);
+#endif
 
 	/*
 	 * Per RFC-1123, we need to check for valid IP address first
 	 */
-	if (xp_inet_pton(AF_INET, str, &in) != -1)
-		return true;
-	if (xp_inet_pton(AF_INET6, str, &in6) != -1)
-		return true;
+	if (xp_inet_pton(AF_INET, str, addr) == 1)
+		result = true;
+	else if (xp_inet_pton(AF_INET6, str, addr) == 1)
+		result = true;
 
-	return false;
+#ifdef _WIN32
+	WSACleanup();
+#endif
+	return result;
 }
 
 bool
@@ -299,6 +353,7 @@ int main(int argc, char** argv)
 {
 	size_t     i;
 	str_list_t list;
+	char buf[128];
 
 	if ((list = getNameServerList()) != NULL) {
 		for (i = 0; list[i] != NULL; i++)
@@ -306,8 +361,12 @@ int main(int argc, char** argv)
 		freeNameServerList(list);
 	}
 
-	if (argc > 1)
-		printf("%s\n", getHostNameByAddr(argv[1]));
+	if (argc > 1) {
+		printf("isValidAddressString(%s) = %d\n", argv[1], isValidAddressString(argv[1]));
+		printf("isValidHostname(%s) = %d\n", argv[1], isValidHostname(argv[1]));
+		const char* p = getHostNameByAddr(argv[1], buf, sizeof buf);
+		printf("%s\n", p == NULL ? "(null)" : p);
+	}
 
 	return 0;
 }

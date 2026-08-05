@@ -9,11 +9,15 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "xpdev_mt", "..\xpdev\xpdev_
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "conio_sdl", "..\conio\conio_sdl.vcxproj", "{8E3CE9E8-447A-452A-9306-2587FE3154A4}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "uifc", "..\uifc\uifc.vcxproj", "{7BFB9820-0E57-4BE4-9BE9-E0A687874E19}"
-EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "comio", "..\comio\comio.vcxproj", "{79CF784E-4438-4FCC-9B7A-10ACB716C948}"
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "sftp", "..\sftp\sftp.vcxproj", "{4C69A1D2-182A-45D3-AD33-54A8A91B387D}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "xfer_queue_test", "xfer_queue_test.vcxproj", "{406C997C-D462-4850-BE8A-E76A37F85694}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "xmodem_cancel_test", "xmodem_cancel_test.vcxproj", "{A4B1DE07-80C6-4C8F-9D2D-A1F5C8E47320}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "conn_buffer_test", "conn_buffer_test.vcxproj", "{87D39572-2949-4183-9789-1A30A43E9E76}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -33,10 +37,6 @@ Global
 		{8E3CE9E8-447A-452A-9306-2587FE3154A4}.Debug|Win32.Build.0 = Debug|Win32
 		{8E3CE9E8-447A-452A-9306-2587FE3154A4}.Release|Win32.ActiveCfg = Release|Win32
 		{8E3CE9E8-447A-452A-9306-2587FE3154A4}.Release|Win32.Build.0 = Release|Win32
-		{7BFB9820-0E57-4BE4-9BE9-E0A687874E19}.Debug|Win32.ActiveCfg = Debug|Win32
-		{7BFB9820-0E57-4BE4-9BE9-E0A687874E19}.Debug|Win32.Build.0 = Debug|Win32
-		{7BFB9820-0E57-4BE4-9BE9-E0A687874E19}.Release|Win32.ActiveCfg = Release|Win32
-		{7BFB9820-0E57-4BE4-9BE9-E0A687874E19}.Release|Win32.Build.0 = Release|Win32
 		{79CF784E-4438-4FCC-9B7A-10ACB716C948}.Debug|Win32.ActiveCfg = Debug|Win32
 		{79CF784E-4438-4FCC-9B7A-10ACB716C948}.Debug|Win32.Build.0 = Debug|Win32
 		{79CF784E-4438-4FCC-9B7A-10ACB716C948}.Release|Win32.ActiveCfg = Release|Win32
@@ -45,6 +45,18 @@ Global
 		{4C69A1D2-182A-45D3-AD33-54A8A91B387D}.Debug|Win32.Build.0 = Debug|Win32
 		{4C69A1D2-182A-45D3-AD33-54A8A91B387D}.Release|Win32.ActiveCfg = Release|Win32
 		{4C69A1D2-182A-45D3-AD33-54A8A91B387D}.Release|Win32.Build.0 = Release|Win32
+		{406C997C-D462-4850-BE8A-E76A37F85694}.Debug|Win32.ActiveCfg = Debug|Win32
+		{406C997C-D462-4850-BE8A-E76A37F85694}.Debug|Win32.Build.0 = Debug|Win32
+		{406C997C-D462-4850-BE8A-E76A37F85694}.Release|Win32.ActiveCfg = Release|Win32
+		{406C997C-D462-4850-BE8A-E76A37F85694}.Release|Win32.Build.0 = Release|Win32
+		{A4B1DE07-80C6-4C8F-9D2D-A1F5C8E47320}.Debug|Win32.ActiveCfg = Debug|Win32
+		{A4B1DE07-80C6-4C8F-9D2D-A1F5C8E47320}.Debug|Win32.Build.0 = Debug|Win32
+		{A4B1DE07-80C6-4C8F-9D2D-A1F5C8E47320}.Release|Win32.ActiveCfg = Release|Win32
+		{A4B1DE07-80C6-4C8F-9D2D-A1F5C8E47320}.Release|Win32.Build.0 = Release|Win32
+		{87D39572-2949-4183-9789-1A30A43E9E76}.Debug|Win32.ActiveCfg = Debug|Win32
+		{87D39572-2949-4183-9789-1A30A43E9E76}.Debug|Win32.Build.0 = Debug|Win32
+		{87D39572-2949-4183-9789-1A30A43E9E76}.Release|Win32.ActiveCfg = Release|Win32
+		{87D39572-2949-4183-9789-1A30A43E9E76}.Release|Win32.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

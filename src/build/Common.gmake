@@ -177,9 +177,25 @@ ifdef WALL
  CFLAGS += -Wall
 endif
 
+# Never let our own compiler/linker flags leak into a recursive make.
+# Every sub-project (xpdev, smblib, uifc, ciolib, ...) includes this file
+# and derives its own flags from it, so inheriting the parent's is at best
+# redundant and at worst wrong: if CFLAGS happens to exist in the calling
+# environment, make re-exports the *augmented* value to sub-makes, and
+# sbbs3's -DLINK_LIST_THREADSAFE ends up compiling xpdev's single-threaded
+# link_list.o, which then references sem_trywait_block() and
+# pthread_mutex_initializer_np() -- functions only libxpdev_mt.a provides.
+unexport CFLAGS CCFLAGS CXXFLAGS MT_CFLAGS LDFLAGS MT_LDFLAGS
+
 # Compiler-specific options
 CFLAGS	+=	-MMD -MP
 CC		?=	gcc
+
+# Host C compiler — used by build-time tools (e.g. syncterm's
+# wren_embed_gen) that need to RUN on the build host even when CC
+# cross-compiles for a different target.  Cross-builds should set
+# this explicitly: `gmake CC=x86_64-w64-mingw32-gcc BUILD_CC=cc`.
+BUILD_CC ?= cc
 CCPRE	?= ${shell if [ `echo __clang__ | $(CC) -E - | tail -n 1` != __clang__ ] ; then echo clang ; elif [ `echo __INTEL_COMPILER | $(CC) -E - | tail -n 1` != __INTEL_COMPILER ] ; then echo icc ; else echo gcc ; fi}
 ifeq ($(CCPRE),clang)
  ifeq ($(CC),cc)
@@ -263,6 +279,30 @@ ifeq ($(os),darwin)
   CFLAGS += -arch x86_64 -arch arm64
   LDFLAGS += -arch x86_64 -arch arm64
  endif
+ # MACOS_PORTABLE pins the per-slice microarch floor for redistributable
+ # builds: x86_64 → Skylake (the iMac 2017 / iMac Pro 2017 baseline,
+ # which is the oldest x86 macOS 13 supports), arm64 → apple-m1 (the
+ # only arm64 CPU macOS 13 boots on; M2/M3/M4 are supersets).  Pair
+ # with FAT for a universal binary; standalone for a single-arch
+ # redistribution.  Without this flag, clang picks its host-default
+ # microarch — fine for local development, wrong for nightly builds.
+ ifdef MACOS_PORTABLE
+  ifdef FAT
+   # -Xarch_<arch> applies the next compiler argument only to that
+   # slice of a fat compile, so each slice gets its own microarch
+   # floor without poisoning the other.
+   CFLAGS  += -Xarch_x86_64 -march=skylake -Xarch_arm64 -mcpu=apple-m1
+   LDFLAGS += -Xarch_x86_64 -march=skylake -Xarch_arm64 -mcpu=apple-m1
+  else
+   ifeq ($(machine_uname),x86_64)
+    CFLAGS  += -march=skylake
+    LDFLAGS += -march=skylake
+   else ifeq ($(machine_uname),arm64)
+    CFLAGS  += -mcpu=apple-m1
+    LDFLAGS += -mcpu=apple-m1
+   endif
+  endif
+ endif
  ifeq ("$(machine_uname)","")
   ifeq ($(shell sysctl hw.optional.x86_64),hw.optional.x86_64: 1)
    machine_uname := x86_64
@@ -329,6 +369,58 @@ MTOBJODIR :=	$(CCPRE).$(machine).obj.$(BUILDPATH)-mt
 EXEODIR :=	$(CCPRE).$(machine).exe.$(BUILDPATH)
 SRCODIR :=	$(CCPRE).$(machine).src.$(BUILDPATH)
 LDFLAGS	+=	-L$(LIBODIR)
+
+# Shared crypto-backend probe for xpdev, SyncTERM, and any other
+# consumer in the same build pipeline.
+#
+# xpdev's library must be byte-identical across every consumer of the
+# same source tree + build options — otherwise a cached libxpdev_mt.a
+# from one job silently mismatches the link line of the next.
+# Common.gmake is the only file every subproject already includes, so
+# making the decision here guarantees that `make -C xpdev`,
+# `make -C syncterm`, and any sbbs3 consumer arrive at the same
+# XP_CRYPTO_BACKEND / DEUCESSH_BACKEND / USE_VENDORED_BOTAN for a given
+# host + command-line override set.
+#
+# Decision order (first match wins; user can pre-set DEUCESSH_BACKEND
+# or USE_VENDORED_BOTAN on the command line to skip the probe).
+#   1. USE_VENDORED_BOTAN set, or Windows cross-build → Botan, vendored.
+#   2. System Botan 3.6+ available → Botan, system.
+#   3. System OpenSSL 3.0+ available → OpenSSL, system.
+#   4. Otherwise → Botan, vendored (from 3rdp/dist/Botan.tar.xz).
+#
+# USE_VENDORED_BOTAN is a pure boolean: defined = use vendored.  Never
+# assign it to "0" — leave it unset to mean "don't use vendored".
+#
+# DeuceSSH and xp_crypt share the backend by default.  WITHOUT_CRYPTO
+# only affects xp_crypt (which is DeuceSSH-independent); DeuceSSH itself
+# still needs its chosen crypto runtime even when xp_crypt is stubbed.
+ifndef DEUCESSH_BACKEND
+ ifdef win
+  DEUCESSH_BACKEND   := Botan
+  USE_VENDORED_BOTAN := 1
+ else ifdef USE_VENDORED_BOTAN
+  DEUCESSH_BACKEND   := Botan
+ else ifeq ($(shell pkg-config --atleast-version=3.6 botan-3 2>/dev/null && echo Y),Y)
+  DEUCESSH_BACKEND   := Botan
+ else ifeq ($(shell pkg-config --atleast-version=3.0 libcrypto 2>/dev/null && echo Y),Y)
+  DEUCESSH_BACKEND   := OpenSSL
+ else
+  DEUCESSH_BACKEND   := Botan
+  USE_VENDORED_BOTAN := 1
+ endif
+endif
+
+# xp_crypt follows DeuceSSH's backend unless WITHOUT_CRYPTO stubs it.
+ifdef WITHOUT_CRYPTO
+ XP_CRYPTO_BACKEND ?= none
+endif
+XP_CRYPTO_BACKEND ?= $(DEUCESSH_BACKEND)
+
+export XP_CRYPTO_BACKEND
+export DEUCESSH_BACKEND
+export USE_VENDORED_BOTAN
+export WITHOUT_CRYPTO
 
 ifeq ($(os),openbsd)
  DELETE :=	rm -f
@@ -493,12 +585,24 @@ HASH_SRC 	:=	$(SRC_ROOT)$(DIRSEP)hash
 3RDP_BUILD	:=	$(3RDP_ROOT)$(DIRSEP)build
 SFTP_SRC	:=	$(SRC_ROOT)$(DIRSEP)sftp
 
-# SDL ciolib enabled by default for the moment.
+# SDL ciolib enabled by default, except on macOS where the native
+# Quartz backend is preferred (and Core Audio replaces SDL audio).
 ifndef WITHOUT_SDL
- USE_SDL	:=	1
  ifeq ($(os),darwin)
-  USE_SDL_AUDIO := 1
-  STATIC_SDL := 1
+  ifndef WITHOUT_QUARTZ
+   WITHOUT_SDL := 1
+  else
+   USE_SDL	:=	1
+   USE_SDL_AUDIO := 1
+   STATIC_SDL := 1
+  endif
+ else
+  ifeq ($(os),haiku)
+   USE_SDL	:=	1
+   USE_SDL_AUDIO := 1
+  else
+   USE_SDL	:=	1
+  endif
  endif
 endif
 
@@ -541,6 +645,12 @@ CFLAGS += -fno-delete-null-pointer-checks
 -include targets.mk
 -include $(SRC_ROOT)/build/rules.mk
 -include objects.mk		# defines $(OBJS)
+
+# Shared vendored-Botan plumbing (`botan:` delegation target +
+# PKG_CONFIG_PATH prepend).  Included AFTER targets.mk so the
+# subproject's `all:` target stays the default goal — otherwise
+# declaring `botan:` here would hijack it.
+include $(SRC_ROOT)$(DIRSEP)build$(DIRSEP)botan.gmake
 
 # Implicit ASM Compile Rule
 $(OBJODIR)/%$(OFILE) : %.s $(BUILD_DEPENDS) | $(OBJODIR)

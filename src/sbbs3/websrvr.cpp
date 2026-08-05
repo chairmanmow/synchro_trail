@@ -72,6 +72,7 @@
 #include "xpmap.h"
 #include "xpprintf.h"
 #include "ratelimit.hpp"
+#include "ratelimit_filter.hpp"
 #include "filterfile.hpp"
 
 static const char*  server_name = "Synchronet Web Server";
@@ -121,13 +122,14 @@ static char               error_dir[MAX_PATH + 1];
 static char               cgi_dir[MAX_PATH + 1];
 static char               cgi_env_ini[MAX_PATH + 1];
 static char               default_auth_list[MAX_PATH + 1];
-static int64_t            uptime = 0;
+static time_t             uptime = 0;
 static volatile ulong     served = 0;
 static web_startup_t*     startup = NULL;
 static js_server_props_t  js_server_props;
 static str_list_t         recycle_semfiles;
 static str_list_t         shutdown_semfiles;
 static str_list_t         pause_semfiles;
+static str_list_t         clear_attempts_semfiles;
 static str_list_t         cgi_env;
 static struct mqtt        mqtt;
 static link_list_t        current_connections;
@@ -138,6 +140,7 @@ static named_string_t**   xjs_handlers;
 static named_string_t**   alias_list; // request path aliases
 
 static rateLimiter*       request_rate_limiter = nullptr;
+static rateLimiter*       connect_rate_limiter = nullptr;
 static trashCan           ip_can;
 static trashCan           ip_silent_can;
 static trashCan           host_can;
@@ -662,17 +665,34 @@ static bool session_check(http_session_t *session, bool *rd, bool *wr, unsigned 
 		if (wr)
 			*wr = 1;
 		if (rd || wr == NULL) {
-			if (session->tls_pending) {
+			// A decrypted byte is already buffered: readable, so connected.
+			if (session->peeked_valid) {
 				*rd_ptr = true;
 				return true;
 			}
 		}
+		// A bare FIN (peer closed with no close_notify) or a socket error
+		// makes socket_check() return false -> disconnected.
 		ret = socket_check(session->socket, rd_ptr, wr, timeout);
-		if (ret && *rd_ptr) {
-			session->tls_pending = true;
-			return true;
+		if (!ret)
+			return false;
+		if (*rd_ptr) {
+			// Raw socket has bytes: application data, or a TLS close_notify.
+			// cryptPopData() tells them apart (a raw MSG_PEEK can't); it's
+			// non-blocking here (NET_READTIMEOUT==0, set at session setup).
+			int len = 0;
+			int status = cryptPopData(session->tls_sess, &session->peeked, 1, &len);
+			if (cryptStatusOK(status) && len == 1) {
+				session->peeked_valid = true;   // cached; next sess_recv() returns it
+				session->tls_pending  = true;
+				return true;                    // application data -> connected
+			}
+			if (status == CRYPT_ERROR_TIMEOUT)
+				return true;                    // partial record, no app data yet
+			*rd_ptr = false;
+			return false;                       // CRYPT_ERROR_COMPLETE / error -> closed
 		}
-		return ret;
+		return true;                            // idle within timeout -> connected
 	}
 	return socket_check(session->socket, rd, wr, timeout);
 }
@@ -732,22 +752,23 @@ static int sess_sendbuf(http_session_t *session, const char *buf, size_t len, vo
 					else if (session->socket != INVALID_SOCKET)
 						lprintf(LOG_WARNING, "%04d %-5s [%s] !ERROR %d sending on socket", session->socket, session->client.protocol, session->host_ip, SOCKET_ERRNO);
 					*failed = true;
-					return sent;
+					return (int)sent;
 				}
 			}
 		}
 		else {
 			lprintf(LOG_WARNING, "%04d %-5s [%s] Timeout waiting for socket to become writable", session->socket, session->client.protocol, session->host_ip);
 			*failed = true;
-			return sent;
+			return (int)sent;
 		}
-		sent += result;
+		if (result > 0)
+			sent += result;
 	}
 	if (sent < len)
 		*failed = true;
 	if (session->is_tls)
 		HANDLE_CRYPT_CALL(cryptFlushData(session->tls_sess), session, "flushing data");
-	return sent;
+	return (int)sent;
 }
 
 #ifdef _WINSOCKAPI_
@@ -1066,18 +1087,39 @@ static int close_session_socket(http_session_t *session)
 		return -1;
 
 	if (session->is_tls) {
+		// Drain the output ringbuffer and wait for the output thread to finish
+		// transmitting, but not forever: a non-reading client (e.g. an abandoned
+		// scraper connection) never lets the send complete, which would wedge
+		// this thread in a SLEEP(1) spin and, at shutdown, block the entire web
+		// server from terminating.  On give-up, shutdown() the socket to wake
+		// the output thread out of its blocked send so it releases outbuf_write;
+		// then tear down the TLS session.  (Same teardown fix as the terminal
+		// server's shutdown()-instead-of-close() in commit 8101584de.)
+		time_t close_deadline = time(NULL) + startup->max_inactivity;
+		bool   kicked = false;
 		// First, wait for the ringbuffer to drain...
 		len = 1;
 		while (RingBufFull(&session->outbuf) && session->socket != INVALID_SOCKET) {
+			if (terminate_server || time(NULL) >= close_deadline)
+				break;
 			if (len) {
 				if (cryptPopData(session->tls_sess, buf, 1, &len) != CRYPT_OK)
 					len = 0;
 			}
 			SLEEP(1);
 		}
-		// Now wait for tranmission to complete
+		// Now wait for transmission to complete
 		len = 1;
 		while ((locked = pthread_mutex_trylock(&session->outbuf_write)) == EBUSY) {
+			if (!kicked && (terminate_server || time(NULL) >= close_deadline)) {
+				// The output thread is stuck in a send to a dead peer while
+				// holding outbuf_write; shutdown() forces that send to return so
+				// the thread releases the mutex.  Keep spinning until we acquire
+				// it, so we never destroy the TLS session out from under an
+				// in-flight send.
+				shutdown(session->socket, SHUT_RDWR);
+				kicked = true;
+			}
 			if (len) {
 				if (cryptPopData(session->tls_sess, buf, 1, &len) != CRYPT_OK)
 					len = 0;
@@ -1098,15 +1140,26 @@ static void drain_outbuf(http_session_t * session)
 		return;
 	/* Force the output thread to go NOW */
 	SetEvent(session->outbuf.highwater_event);
-	/* ToDo: This should probably timeout eventually... */
+	// Wait for the output thread to flush the buffer, but not forever: bail if the
+	// server is shutting down, or if a non-reading client stalls us past max_inactivity.
+	// Otherwise a dead client (e.g. an abandoned scraper connection) wedges this thread -
+	// and, at shutdown, blocks the entire web server from terminating.  Return (rather
+	// than break) on the give-up path: the output thread may be blocked in a send while
+	// holding outbuf_write, so falling through to lock it below would just re-hang here.
+	time_t drain_deadline = time(NULL) + startup->max_inactivity;
 	while (RingBufFull(&session->outbuf) && session->socket != INVALID_SOCKET) {
+		if (terminate_server || time(NULL) >= drain_deadline)
+			return;
 		SetEvent(session->outbuf.highwater_event);
 		SLEEP(1);
 	}
 	/* Lock the mutex to ensure data has been sent */
-	while (session->socket != INVALID_SOCKET && !session->outbuf_write_initialized)
+	while (session->socket != INVALID_SOCKET && !session->outbuf_write_initialized) {
+		if (terminate_server)
+			return;
 		SLEEP(1);
-	if (session->socket == INVALID_SOCKET)
+	}
+	if (session->socket == INVALID_SOCKET || terminate_server)
 		return;
 	pthread_mutex_lock(&session->outbuf_write);     /* Win32 Access violation here on Jan-11-2006 - shutting down webserver while in use */
 	pthread_mutex_unlock(&session->outbuf_write);
@@ -1200,7 +1253,7 @@ static void close_request(http_session_t * session)
 		if (session->req.cleanup_file[i] != NULL) {
 			if (i != CLEANUP_SSJS_TMP_FILE
 			    || !(startup->options & WEB_OPT_DEBUG_SSJS))
-				remove(session->req.cleanup_file[i]);
+				(void)remove(session->req.cleanup_file[i]); /* best-effort cleanup */
 			free(session->req.cleanup_file[i]);
 		}
 	}
@@ -1686,8 +1739,14 @@ static void send_error(http_session_t * session, unsigned line, const char* mess
 
 void http_logon(http_session_t * session, user_t *usr)
 {
-	if (usr == NULL)
-		getuserdat(&scfg, &session->user);
+	if (usr == NULL) {
+		if (session->user.number != 0
+		    && getuserdat(&scfg, &session->user) != USER_SUCCESS) {
+			lprintf(LOG_ERR, "%04d %-5s [%s] !ERROR reading user #%u data"
+			        , session->socket, session->client.protocol, session->host_ip, session->user.number);
+			session->user.number = 0;
+		}
+	}
 	else
 		session->user = *usr;
 
@@ -1717,7 +1776,7 @@ void http_logon(http_session_t * session, user_t *usr)
 
 	session->last_user_num = session->user.number;
 
-	lprintf(LOG_DEBUG, "%04d %-5s [%s] <%s> logged-in"
+	lprintf(session->user.number > 0 ? LOG_INFO : LOG_DEBUG, "%04d %-5s [%s] <%s> logged-in"
 	        , session->socket, session->client.protocol, session->host_ip, session->username);
 }
 
@@ -1726,7 +1785,7 @@ void http_logoff(http_session_t* session, SOCKET socket, int line)
 	if (session->last_user_num <= 0)
 		return;
 
-	lprintf(LOG_DEBUG, "%04d %-5s [%s] <%s> logged-out from line %d"
+	lprintf(LOG_INFO, "%04d %-5s [%s] <%s> logged-out from line %d"
 	        , socket, session->client.protocol, session->host_ip, session->user.alias, line);
 
 	SAFECOPY(session->username, unknown);
@@ -1755,25 +1814,14 @@ bool http_checkuser(http_session_t * session)
 		lprintf(LOG_DEBUG, "%04d %-5s [%s] JavaScript: Initializing User Objects"
 			, session->socket, session->client.protocol, session->host_ip);
 		JS_BEGINREQUEST(session->js_cx);
-		if (session->user.number > 0) {
-			if (!js_CreateUserObjects(session->js_cx, session->js_glob, &scfg, &session->user, &session->client
-			                          , startup->file_vpath_prefix, session->subscan /* subscan */, &mqtt)) {
-				JS_ENDREQUEST(session->js_cx);
-				errprintf(LOG_ERR, WHERE, "%04d %-5s [%s] !JavaScript ERROR creating user objects"
-					, session->socket, session->client.protocol, session->host_ip);
-				send_error(session, __LINE__, "500 Error initializing JavaScript User Objects");
-				return false;
-			}
-		}
-		else {
-			if (!js_CreateUserObjects(session->js_cx, session->js_glob, &scfg, /* user: */ NULL, &session->client
-			                          , startup->file_vpath_prefix, session->subscan /* subscan */, &mqtt)) {
-				JS_ENDREQUEST(session->js_cx);
-				errprintf(LOG_ERR, WHERE, "%04d %-5s [%s] !ERROR initializing JavaScript User Objects"
-					, session->socket, session->client.protocol, session->host_ip);
-				send_error(session, __LINE__, "500 Error initializing JavaScript User Objects");
-				return false;
-			}
+		if (!js_CreateUserObjects(session->js_cx, session->js_glob, &scfg, session->user.number > 0 ? (&session->user) : NULL
+			                        , &session->client
+			                        , startup->file_vpath_prefix, session->subscan /* subscan */, &mqtt)) {
+			JS_ENDREQUEST(session->js_cx);
+			errprintf(LOG_ERR, WHERE, "%04d %-5s [%s] !JavaScript ERROR creating user objects"
+				, session->socket, session->client.protocol, session->host_ip);
+			send_error(session, __LINE__, "500 Error initializing JavaScript User Objects");
+			return false;
 		}
 		JS_ENDREQUEST(session->js_cx);
 		session->last_js_user_num = session->user.number;
@@ -1962,6 +2010,9 @@ static bool digest_authentication(http_session_t* session, int auth_allowed, use
 	return true;
 }
 
+/* rate_limit_key() and rate_limit_filter() are shared with the other servers
+ * via ratelimit_filter.hpp (included near the top of this file). */
+
 static void badlogin(SOCKET sock, const char* user, const char* passwd, client_t* client, union xp_sockaddr* addr)
 {
 	char            tmp[128];
@@ -1971,6 +2022,7 @@ static void badlogin(SOCKET sock, const char* user, const char* passwd, client_t
 
 	SAFEPRINTF(reason, "%s LOGIN", client->protocol);
 	count = loginFailure(startup->login_attempt_list, addr, client->protocol, user, passwd, &attempt);
+	mqtt_pub_login_attempt(&mqtt, &attempt);
 	if (count > 1)
 		lprintf(LOG_NOTICE, "%04d %-5s [%s] !%lu " STR_FAILED_LOGIN_ATTEMPTS " in %s"
 		        , sock, client->protocol, client->addr, count, duration_estimate_to_vstr(attempt.time - attempt.first, tmp, sizeof tmp, 1, 1));
@@ -1985,8 +2037,10 @@ static void badlogin(SOCKET sock, const char* user, const char* passwd, client_t
 	if (startup->login_attempt.filter_threshold && count >= startup->login_attempt.filter_threshold) {
 		snprintf(reason, sizeof reason, "%lu " STR_FAILED_LOGIN_ATTEMPTS " in %s"
 		         , count, duration_estimate_to_str(attempt.time - attempt.first, tmp, sizeof tmp, 1, 1));
-		filter_ip(&scfg, client->protocol, reason
-		          , client->host, client->addr, user, /* fname: */ NULL, startup->login_attempt.filter_duration);
+		if (filter_ip(&scfg, client->protocol, reason
+		              , client->host, client->addr, user, /* fname: */ NULL, startup->login_attempt.filter_duration))
+			lprintf(LOG_NOTICE, "%04d %s !BLOCKING IP ADDRESS: %s in %s"
+			        , sock, client->protocol, client->addr, ip_can.fname);
 	}
 	if (count > 1)
 		mswait(startup->login_attempt.delay);
@@ -2022,7 +2076,9 @@ static bool check_ars(http_session_t * session)
 		if (session->req.ars[0]) {
 			/* There *IS* an ARS string  ie: Auth is required */
 			if (startup->options & WEB_OPT_DEBUG_RX)
-				lprintf(LOG_NOTICE, "%04d !No authentication information", session->socket);
+				lprintf(LOG_NOTICE, "%04d %-5s [%s] !No authentication information for request: %s (requires: %s)"
+				        , session->socket, session->client.protocol, session->host_ip
+				        , session->req.request_line, session->req.ars);
 			return false;
 		}
 		if (session->user.number == 0) {
@@ -2062,7 +2118,11 @@ static bool check_ars(http_session_t * session)
 		return false;
 	}
 	thisuser.number = i;
-	getuserdat(&scfg, &thisuser);
+	if (getuserdat(&scfg, &thisuser) != USER_SUCCESS) {
+		lprintf(LOG_ERR, "%04d !ERROR reading user #%u data for '%s'"
+		        , session->socket, i, session->req.auth.username);
+		return false;
+	}
 	switch (session->req.auth.type) {
 		case AUTHENTICATION_TLS_PSK:
 			if ((auth_allowed & (1 << AUTHENTICATION_TLS_PSK)) == 0)
@@ -2176,8 +2236,10 @@ static bool check_ars(http_session_t * session)
 		/* Should use real name if set to do so somewhere ToDo */
 		add_env(session, "REMOTE_USER", session->user.alias);
 
-		if (thisuser.pass[0])
+		if (thisuser.pass[0]) {
 			loginSuccess(startup->login_attempt_list, &session->addr);
+			mqtt_pub_login_attempt_clear(&mqtt, session->host_ip);
+		}
 
 		return true;
 	}
@@ -2387,7 +2449,21 @@ static int recvbufsocket(http_session_t *session, char *buf, long count)
 		return 0;
 	}
 
-	while (rd < count && session_check(session, NULL, NULL, startup->max_inactivity * 1000))  {
+	while (rd < count)  {
+		// When TLS application data is already buffered/decrypted (e.g. the request
+		// body arrived in the same record as the headers), read it directly: the raw
+		// socket won't show readable, so waiting on session_check() would block for
+		// the full max_inactivity timeout (#1169).  Whether the body lands buffered
+		// in the TLS layer vs. still readable on the socket depends on TLS
+		// record/segment timing, so this can bite on any platform (reported on
+		// Windows and Linux v3.22a).  Mirrors the guard sockreadline() uses.
+		if ((!session->is_tls) || (!session->tls_pending)) {
+			if (!session_check(session, NULL, NULL, startup->max_inactivity * 1000)) {
+				close_session_socket(session);
+				*buf = 0;
+				return 0;
+			}
+		}
 		i = sess_recv(session, buf + rd, count - rd, 0);
 		switch (i) {
 			case -1:
@@ -3539,11 +3615,20 @@ static bool get_req(http_session_t * session, char *request_line)
 				send_error(session, __LINE__, "400 Bad Request");
 				return false;
 			}
-			if (!host_exempt.listed(session->host_ip, session->host_name) && request_rate_limiter->allowRequest(session->host_ip) == false) {
-				lprintf(LOG_NOTICE, "%04d %-5s [%s] Too many requests per rate limit (%u over %us)"
-					, session->socket, session->client.protocol, session->host_ip, request_rate_limiter->maxRequests, request_rate_limiter->timeWindowSeconds);
-				send_error(session, __LINE__, error_429);
-				return false;
+			if (!host_exempt.listed(session->host_ip, session->host_name)) {
+				std::string rl_key = rate_limit_key(session->host_ip, &startup->rate_limit);
+				unsigned    denials = 0;
+				if (request_rate_limiter->allowRequest(rl_key, &denials
+				        , rl_key == session->host_ip ? std::string() : std::string(session->host_ip)) == false) {
+					lprintf(LOG_NOTICE, "%04d %-5s [%s] Too many requests per rate limit (%u over %us) for %s"
+						, session->socket, session->client.protocol, session->host_ip
+						, request_rate_limiter->maxRequests, request_rate_limiter->timeWindowSeconds, rl_key.c_str());
+					rate_limit_filter(session->socket, &scfg, session->client.protocol, session->host_ip
+						, session->host_name, rl_key, denials, request_rate_limiter
+						, &startup->rate_limit, lprintf);
+					send_error(session, __LINE__, error_429);
+					return false;
+				}
 			}
 			enum get_fullpath fullpath_valid = get_fullpath(session);
 			if (fullpath_valid != FULLPATH_VALID) {
@@ -6072,6 +6157,14 @@ js_OperationCallback(JSContext *cx)
 		return JS_FALSE;
 	}
 
+	if (session->js_callback.terminate_on_disconnect && !session_check(session, nullptr, nullptr, 0)
+	    && ++session->js_callback.offline_counter >= JS_DISCONNECT_TERMINATE_COUNT) {
+		JS_ReportWarning(cx, "Disconnected");
+		session->js_callback.counter = 0;
+		JS_SetOperationCallback(cx, js_OperationCallback);
+		return JS_FALSE;
+	}
+
 	ret = js_CommonOperationCallback(cx, &session->js_callback);
 	JS_SetOperationCallback(cx, js_OperationCallback);
 
@@ -6779,7 +6872,7 @@ void http_output_thread(void *arg)
 static int close_session_no_rb(http_session_t *session)
 {
 	if (session) {
-		if (session->is_tls)
+		if (session->is_tls && session->tls_sess != -1)
 			HANDLE_CRYPT_CALL(destroy_session(lprintf, session->tls_sess), session, "destroying session");
 		return close_socket(&session->socket);
 	}
@@ -6864,8 +6957,8 @@ void http_session_thread(void* arg)
 			thread_down();
 			return;
 		}
-		bool nodelay = true;
-		setsockopt(session.socket, IPPROTO_TCP, TCP_NODELAY, (char*)&nodelay, sizeof(nodelay));
+		int nodelay = TRUE;
+		(void)setsockopt(session.socket, IPPROTO_TCP, TCP_NODELAY, (char*)&nodelay, sizeof(nodelay)); /* best-effort latency hint */
 
 		if (looking_good)
 			looking_good = HANDLE_CRYPT_CALL(cryptSetAttribute(session.tls_sess, CRYPT_SESSINFO_TLS_OPTIONS, CRYPT_TLSOPTION_MINVER_TLS12), &session, "setting TLS minver to 1.2");
@@ -6990,6 +7083,10 @@ void http_session_thread(void* arg)
 	if (startup->max_clients && client_count > startup->max_clients) {
 		lprintf(LOG_WARNING, "%04d %-5s [%s] !MAXIMUM CLIENTS (%u) exceeded by %u, access denied"
 		        , socket, session.client.protocol, session.host_ip, startup->max_clients, client_count - startup->max_clients);
+		/* link_list helpers (loginAttempts, client_on, listCountMatches) acquire+release
+		 * their list mutex internally; nothing in this thread holds a list mutex when
+		 * send_error -> js_setup acquires jsrt_mutex. */
+		// coverity[ORDER_REVERSAL:SUPPRESS]
 		send_error(&session, __LINE__, error_503);
 		session.finished = true;
 	} else {
@@ -6998,6 +7095,8 @@ void http_session_thread(void* arg)
 		    && !host_exempt.listed(session.host_ip, nullptr)) {
 			lprintf(LOG_NOTICE, "%04d %-5s [%s] !Maximum concurrent connections (%u) exceeded"
 			        , socket, session.client.protocol, session.host_ip, startup->max_concurrent_connections);
+			/* See note above re: link_list helpers releasing their mutex internally. */
+			// coverity[ORDER_REVERSAL:SUPPRESS]
 			send_error(&session, __LINE__, error_429);
 			session.finished = true;
 		} else {
@@ -7179,6 +7278,7 @@ static void cleanup(int code)
 	semfile_list_free(&pause_semfiles);
 	semfile_list_free(&recycle_semfiles);
 	semfile_list_free(&shutdown_semfiles);
+	semfile_list_free(&clear_attempts_semfiles);
 
 	if (ws_set != NULL) {
 		xpms_destroy(ws_set, close_socket_cb, NULL);
@@ -7201,8 +7301,9 @@ static void cleanup(int code)
 
 	thread_down();
 	if (terminate_server || code) {
-		lprintf(LOG_INFO, "#### Web Server thread terminated (%lu clients served, %u concurrently, denied: %u due to rate limit, %u due to IP address, %u due to hostname)"
+		lprintf(LOG_INFO, "#### Web Server thread terminated (%lu clients served, %u concurrently, denied: %u due to connection rate limit, %u due to request rate limit, %u due to IP address, %u due to hostname)"
 		        , served, client_highwater
+				, connect_rate_limiter == nullptr ? 0 : connect_rate_limiter->disallowed.load()
 				, request_rate_limiter == nullptr ? 0 : request_rate_limiter->disallowed.load()
 				, ip_can.total_found.load() + ip_silent_can.total_found.load()
 				, host_can.total_found.load());
@@ -7454,6 +7555,7 @@ void web_server(void* arg)
 	startup->shutdown_now = false;
 	terminate_server = false;
 	protected_uint32_init(&thread_count, 0);
+	connect_rate_limiter = new rateLimiter(startup->max_connects_per_period, startup->connect_rate_limit_period);
 	request_rate_limiter = new rateLimiter(startup->max_requests_per_period, startup->request_rate_limit_period);
 
 	do {
@@ -7583,7 +7685,7 @@ void web_server(void* arg)
 		}
 
 		if (uptime == 0)
-			uptime = xp_fast_timer64();
+			uptime = time(NULL);
 
 		update_clients();
 
@@ -7610,6 +7712,8 @@ void web_server(void* arg)
 				xpms_add_list(ws_set, PF_UNSPEC, SOCK_STREAM, 0, startup->tls_interfaces, startup->tls_port, "Secure Web Server", &terminate_server, open_socket, startup->seteuid, (void*)"TLS");
 		}
 
+		connect_rate_limiter->maxRequests = startup->max_connects_per_period;
+		connect_rate_limiter->timeWindowSeconds = startup->connect_rate_limit_period;
 		request_rate_limiter->maxRequests = startup->max_requests_per_period;
 		request_rate_limiter->timeWindowSeconds = startup->request_rate_limit_period;
 
@@ -7632,6 +7736,7 @@ void web_server(void* arg)
 		shutdown_semfiles = semfile_list_init(scfg.ctrl_dir, "shutdown", server_abbrev);
 		pause_semfiles = semfile_list_init(scfg.ctrl_dir, "pause", server_abbrev);
 		recycle_semfiles = semfile_list_init(scfg.ctrl_dir, "recycle", server_abbrev);
+		clear_attempts_semfiles = semfile_list_init(scfg.ctrl_dir, "clear", server_abbrev);
 		semfile_list_add(&recycle_semfiles, startup->ini_fname);
 		SAFEPRINTF(path, "%swebsrvr.rec", scfg.ctrl_dir); /* legacy */
 		semfile_list_add(&recycle_semfiles, path);
@@ -7643,12 +7748,14 @@ void web_server(void* arg)
 			initialized = time(NULL);
 			semfile_list_check(&initialized, recycle_semfiles);
 			semfile_list_check(&initialized, shutdown_semfiles);
+			semfile_list_check(&initialized, clear_attempts_semfiles);
 		}
 
 		lprintf(LOG_INFO, "Web Server thread started");
 		mqtt_client_max(&mqtt, startup->max_clients);
 
 		char rate_limit_report[512]{};
+		char connect_rate_limit_report[512]{};
 		time_t last_rate_limit_report = time(NULL);
 		while (!terminate_server) {
 			YIELD();
@@ -7694,24 +7801,73 @@ void web_server(void* arg)
 				SLEEP(startup->sem_chk_freq * 1000);
 				continue;
 			}
-			if (startup->max_requests_per_period > 0 && startup->request_rate_limit_period > 0
-				&& time(NULL) - last_rate_limit_report >= startup->sem_chk_freq) {
+			{
+				char clear_ip[INET6_ADDRSTRLEN] = {0};
+				bool do_clear = false;
+				if ((p = semfile_list_check(&initialized, clear_attempts_semfiles)) != NULL) {
+					semfile_first_line(p, clear_ip, sizeof(clear_ip));
+					lprintf(LOG_INFO, "Clear Failed Login Attempts semaphore file (%s) detected%s%s"
+					        , p, clear_ip[0] ? " for IP " : "", clear_ip);
+					do_clear = true;
+				}
+				if (startup->clear_attempts_now) {
+					if (clear_ip[0] == '\0' && mqtt.clear_attempts_ip[0] != '\0')
+						SAFECOPY(clear_ip, mqtt.clear_attempts_ip);
+					lprintf(LOG_INFO, "Clear Failed Login Attempts signaled%s%s"
+					        , clear_ip[0] ? " for IP " : "", clear_ip);
+					startup->clear_attempts_now = false;
+					mqtt.clear_attempts_ip[0] = '\0';
+					do_clear = true;
+				}
+				if (do_clear) {
+					if (clear_ip[0] != '\0') {
+						long removed = loginAttemptListClearAddr(startup->login_attempt_list, clear_ip);
+						if (removed < 0)
+							lprintf(LOG_WARNING, "Failed to clear login attempts for IP %s (invalid address?)", clear_ip);
+						else
+							lprintf(removed == 0 ? LOG_DEBUG : LOG_INFO
+							        , "Cleared %ld login attempt(s) for IP %s", removed, clear_ip);
+						mqtt_pub_login_attempt_clear(&mqtt, clear_ip);
+					} else
+						mqtt_clear_login_attempt_list(&mqtt, startup->login_attempt_list);
+				}
+			}
+			if (time(NULL) - last_rate_limit_report >= startup->sem_chk_freq) {
 				last_rate_limit_report = time(NULL);
-				request_rate_limiter->cleanup();
-				size_t most_active_count = 0;
-				std::string most_active = request_rate_limiter->most_active(&most_active_count);
-				char str[sizeof rate_limit_report];
 				char tmp[128];
-				snprintf(str, sizeof str, "Rate limiting current: clients=%zu, requests=%zu, most-active=%s (%zu), highest: %s (%u) on %s, limited: %u, last: %s on %s (repeat: %u)"
-					, request_rate_limiter->client_count(), request_rate_limiter->total(), most_active.c_str(), most_active_count
-					, request_rate_limiter->currHighwater.client.c_str(), request_rate_limiter->currHighwater.count
-					, timestr(&scfg, (time32_t)request_rate_limiter->currHighwater.time, logstr)
-					, request_rate_limiter->disallowed.load()
-					, request_rate_limiter->lastLimited.client.c_str(), timestr(&scfg, (time32_t)request_rate_limiter->lastLimited.time, tmp)
-					, request_rate_limiter->repeat.load());
-				if (strcmp(str, rate_limit_report) != 0) {
-					SAFECOPY(rate_limit_report, str);
-					lprintf(LOG_DEBUG, "%s", rate_limit_report);
+				if (startup->max_connects_per_period > 0 && startup->connect_rate_limit_period > 0) {
+					connect_rate_limiter->cleanup();
+					size_t most_active_count = 0;
+					std::string most_active = connect_rate_limiter->most_active(&most_active_count);
+					char str[sizeof connect_rate_limit_report];
+					snprintf(str, sizeof str, "Connection rate limiting current: clients=%zu, connects=%zu, most-active=%s (%zu), highest: %s (%u) on %s, limited: %u, last: %s on %s (repeat: %u)"
+						, connect_rate_limiter->client_count(), connect_rate_limiter->total(), most_active.c_str(), most_active_count
+						, connect_rate_limiter->currHighwater.client.c_str(), connect_rate_limiter->currHighwater.count
+						, timestr(&scfg, (time32_t)connect_rate_limiter->currHighwater.time, logstr)
+						, connect_rate_limiter->disallowed.load()
+						, connect_rate_limiter->lastLimited.client.c_str(), timestr(&scfg, (time32_t)connect_rate_limiter->lastLimited.time, tmp)
+						, connect_rate_limiter->repeat.load());
+					if (strcmp(str, connect_rate_limit_report) != 0) {
+						SAFECOPY(connect_rate_limit_report, str);
+						lprintf(LOG_DEBUG, "%s", connect_rate_limit_report);
+					}
+				}
+				if (startup->max_requests_per_period > 0 && startup->request_rate_limit_period > 0) {
+					request_rate_limiter->cleanup();
+					size_t most_active_count = 0;
+					std::string most_active = request_rate_limiter->most_active(&most_active_count);
+					char str[sizeof rate_limit_report];
+					snprintf(str, sizeof str, "Request rate limiting current: clients=%zu, requests=%zu, most-active=%s (%zu), highest: %s (%u) on %s, limited: %u, last: %s on %s (repeat: %u)"
+						, request_rate_limiter->client_count(), request_rate_limiter->total(), most_active.c_str(), most_active_count
+						, request_rate_limiter->currHighwater.client.c_str(), request_rate_limiter->currHighwater.count
+						, timestr(&scfg, (time32_t)request_rate_limiter->currHighwater.time, logstr)
+						, request_rate_limiter->disallowed.load()
+						, request_rate_limiter->lastLimited.client.c_str(), timestr(&scfg, (time32_t)request_rate_limiter->lastLimited.time, tmp)
+						, request_rate_limiter->repeat.load());
+					if (strcmp(str, rate_limit_report) != 0) {
+						SAFECOPY(rate_limit_report, str);
+						lprintf(LOG_DEBUG, "%s", rate_limit_report);
+					}
 				}
 			}
 			/* signal caller that we've started up successfully */
@@ -7772,6 +7928,26 @@ void web_server(void* arg)
 					close_socket(&client_socket);
 					continue;
 				}
+
+				/* Connection rate limiting (subnet-aggregated), enforced before a
+				 * session thread or TLS handshake is spawned. Repeat offenders may
+				 * be auto-filtered (into ip-silent.can so they're dropped here). */
+				if (connect_rate_limiter->maxRequests > 0) {
+					std::string rl_key = rate_limit_key(host_ip, &startup->rate_limit);
+					unsigned    denials = 0;
+					if (connect_rate_limiter->allowRequest(rl_key, &denials
+					        , rl_key == host_ip ? std::string() : std::string(host_ip)) == false) {
+						const char* prot = session->is_tls ? "HTTPS" : "HTTP";
+						lprintf(LOG_NOTICE, "%04d %-5s [%s] !Connection rate limit exceeded (%u over %us) for %s"
+							, client_socket, prot, host_ip
+							, connect_rate_limiter->maxRequests, connect_rate_limiter->timeWindowSeconds, rl_key.c_str());
+						rate_limit_filter(client_socket, &scfg, prot, host_ip, /* host_name: */ NULL
+						    , rl_key, denials, connect_rate_limiter
+						    , &startup->rate_limit, lprintf);
+						close_socket(&client_socket);
+						continue;
+					}
+				}
 			}
 
 			uint32_t client_count = protected_uint32_value(active_clients);
@@ -7779,8 +7955,8 @@ void web_server(void* arg)
 			if (session->is_tls) // Successfully sending a 503 error over TLS requires a session_thread
 				threshold += 10; // so allow some extra clients/threads in that case
 			if (startup->max_clients && client_count >= threshold) {
-				lprintf(LOG_WARNING, "%04d [%s] !MAXIMUM CLIENTS (%u) %s (%u), access denied"
-				        , client_socket, host_ip, startup->max_clients, client_count > startup->max_clients ? "exceeded" : "reached", client_count);
+				lprintf(LOG_WARNING, "%04d %-5s [%s] !MAXIMUM CLIENTS (%u) %s (%u), access denied"
+				        , client_socket, session->is_tls ? "HTTPS" : "HTTP", host_ip, startup->max_clients, client_count > startup->max_clients ? "exceeded" : "reached", client_count);
 				if (!len_503)
 					len_503 = strlen(error_503);
 				if (session->is_tls == false && sendsocket(client_socket, error_503, len_503) != len_503)
@@ -7813,6 +7989,7 @@ void web_server(void* arg)
 			session->addr_len = client_addr_len;
 			session->socket = client_socket;
 			session->js_callback.auto_terminate = true;
+			session->js_callback.terminate_on_disconnect = true;  // HTTP: abort script when client disconnects (ead5ccf16)
 			session->js_callback.terminated = &terminate_js;
 			session->js_callback.limit = startup->js.time_limit;
 			session->js_callback.gc_interval = startup->js.gc_interval;
@@ -7877,4 +8054,5 @@ void web_server(void* arg)
 
 	protected_uint32_destroy(thread_count);
 	delete request_rate_limiter, request_rate_limiter = nullptr;
+	delete connect_rate_limiter, connect_rate_limiter = nullptr;
 }

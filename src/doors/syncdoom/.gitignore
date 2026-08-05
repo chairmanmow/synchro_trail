@@ -1,0 +1,10 @@
+# build output
+/build/
+/build-msvc/
+/syncdoom
+/syncdoom.map
+/syncdoom.gdb
+*.o
+# editor swap
+*.swp
+*.swo

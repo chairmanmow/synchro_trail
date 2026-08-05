@@ -15,9 +15,9 @@
 //################################# Begins Here #################################
 
 /* Adjustable settings */
-const LBShell_Attr=0x07;		/* light-grey on black */
-const MessageWindow_Attr=7;
-const MessageTimeout=50;		/* 100ths of a second */
+var LBShell_Attr=0x07;		/* light-grey on black */
+var MessageWindow_Attr=7;
+var MessageTimeout=50;		/* 100ths of a second */
 
 
 require("sbbsdefs.js", "SYS_CLOSED");
@@ -754,6 +754,10 @@ while(bbs.online) {
 					continue;
 				}
 				curr_xtrnsec=parseInt(x_sec);
+				if(isNaN(curr_xtrnsec) || xtrn_area.sec_list[curr_xtrnsec]===undefined) {
+					console.beep();
+					continue;
+				}
 				var this_xtrnsec=new Xtrnsec(curr_xtrnsec);
 				menus_displayed.push(this_xtrnsec);
 				while(bbs.online) {
@@ -781,14 +785,15 @@ while(bbs.online) {
 						handle_a_ctrlkey(x_prog);
 						continue;
 					}
-					if (xtrn_area.sec_list[curr_xtrnsec].prog_list[parseInt(x_prog)].number === undefined) {
+					var x_prog_obj = xtrn_area.sec_list[curr_xtrnsec].prog_list[parseInt(x_prog)];
+					if (x_prog_obj === undefined || x_prog_obj.number === undefined) {
 						console.beep();
 						continue;
 					}
 					stop_mouse();
 					clear_screen();
 
-					bbs.exec_xtrn(xtrn_area.sec_list[curr_xtrnsec].prog_list[parseInt(x_prog)].number);
+					bbs.exec_xtrn(x_prog_obj.number);
 					start_mouse();
 					draw_main(true);
 					xtrnsec.draw();
@@ -1385,7 +1390,7 @@ function show_filemenu()
 							break;
 						case 'U':
 							menu_opt(function() {
-								bbs.list_file_info(bbs.curdir,spec,FI_USERXFER);
+								bbs.list_file_info(bbs.curdir,FI_USERXFER);
 							});
 							break;
 						case KEY_RIGHT:

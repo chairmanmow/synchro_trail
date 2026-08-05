@@ -21,10 +21,29 @@
 #define _CTERM_H_
 
 #include <stdio.h>	/* FILE* */
+#include <stdint.h>
 #include <link_list.h>
 #include <semwrap.h>
 #include <stdbool.h>
+#include <xpbeep.h>	/* xp_audio_handle_t */
 #include "ciolib.h"
+
+/* Maximum CSI parameter count that the unified dispatch parser will
+ * record.  Beyond this, the sequence is flagged broken and discarded. */
+#define MAX_SEQ_PARAMS 64
+
+/* Phases of the ECMA-35/48 sequence parser state machine.  Full
+ * definition lives in cterm_internal.h; declared fully here because
+ * struct cterminal embeds it as a field (needs sizeof). */
+enum seq_phase {
+	SEQ_PHASE_IDLE,		/* Not in a sequence */
+	SEQ_PHASE_C1,		/* After ESC: expecting Fe/Fs/Fp/intermediate */
+	SEQ_PHASE_PARAMS,	/* CSI: accumulating parameter bytes 0x30-0x3F */
+	SEQ_PHASE_INTERM,	/* CSI: accumulating intermediate bytes 0x20-0x2F */
+	SEQ_PHASE_COMPLETE	/* Final byte received -- ready for dispatch */
+};
+
+struct seq_dispatch;	/* defined in cterm_internal.h */
 
 typedef enum {
 	 CTERM_MUSIC_NORMAL
@@ -57,6 +76,12 @@ typedef enum {
 #define CTERM_LOG_PAUSED	0x80
 
 #define CTERM_NO_SETFONT_REQUESTED	99
+#define CTERM_PK_MAX_EVDEV	1024
+
+enum cterm_key_result {
+	CTERM_KEY_UNHANDLED = 0,
+	CTERM_KEY_HANDLED = 1
+};
 
 enum prestel_prog_states {
 	PRESTEL_PROG_NONE = 0,
@@ -110,6 +135,7 @@ struct cterminal {
 #define CTERM_SAVEMODE_MOUSE_SGR		0x10000
 #define CTERM_SAVEMODE_MOUSE_ALTSCROLL		0x20000
 #define CTERM_SAVEMODE_MOUSE_URXVT		0x40000
+#define CTERM_SAVEMODE_MOUSE_SGR_PIXELS		0x200000
 #define CTERM_SAVEMODE_DECLRMM			0x80000
 #define CTERM_SAVEMODE_DECBKM                   0x100000
 	int32_t				saved_mode;
@@ -119,6 +145,7 @@ struct cterminal {
 	int					started;		// Indicates that conio functions are being called
 	bool					c64reversemode;	// Commodore 64 reverse mode state
 	bool negative;
+	bool lf_expand;
 	unsigned char		attr;			// Current attribute
 	uint32_t			fg_color;
 	uint32_t			bg_color;
@@ -159,10 +186,15 @@ struct cterminal {
 	int					notelen;
 	cterm_noteshape_t	noteshape;
 	int					musicfore;
-	int					playnote_thread_running;
-	link_list_t			notes;
-	sem_t				playnote_thread_terminated;
-	sem_t				note_completed_sem;
+	xp_audio_handle_t	music_stream;	/* ANSI music audio stream (-1 = none) */
+	xp_audio_handle_t	fx_stream;		/* Foreground SFX (RIP/OOII) stream (-1 = none) */
+	/* Callback for the CSI = 7 n ext-state query (audio channel / feature
+	 * query DSR).  cterm parses the sequence and hands the sub-parameters
+	 * to the callback; the callback is responsible for formatting and
+	 * emitting the response via cterm_respond*.  NULL = no-op.  Registered
+	 * by syncterm (audio_apc.c) during session init. */
+	void (*ext_state_7_cb)(struct cterminal *cterm, int nparams,
+	                       const uint64_t *params);
 	int					backpos; // Position where new lines will be added
 	int					backstart; // First line of scrollback
 	int					xpos;
@@ -175,11 +207,19 @@ struct cterminal {
 	int					font_size;		// Bytes
 	int					doorway_mode;
 	int					doorway_char;	// Indicates next char is a "doorway" mode char
+	bool				pk_mode;
+	bool				suppress_translated_keys;
+	uint8_t				pk_reported[CTERM_PK_MAX_EVDEV / 8];
 	int					cursor;			// Current cursor mode (Normal or None)
 	char				*fg_tc_str;
 	char				*bg_tc_str;
 	int					*tabs;
 	int					tab_count;
+	int					*vtabs;
+	int					vtab_count;
+	uint8_t decsace;	/* DECSACE: 0/2=rectangle, 1=stream */
+	int					decscs_speed;	/* Last DECSCS speed value (bps, 0=default) */
+	char				lastch;			/* Last printable char (for REP) */
 	uint32_t last_column_flag;
 #define CTERM_LCF_SET 1
 #define CTERM_LCF_ENABLED 2
@@ -193,11 +233,11 @@ struct cterminal {
 	int					sx_iv;			// Vertical size
 	int					sx_ih;			// Horizontal size
 	int					sx_trans;		// "Transparent" background
-	unsigned long		sx_repeat;		// Repeat count
-	unsigned			sx_left;		// Left margin (0-based pixel offset)
-	unsigned			sx_x, sx_y;		// Current position
+	int					sx_repeat;		// Repeat count
+	int					sx_left;		// Left margin (0-based pixel offset)
+	int					sx_x, sx_y;		// Current position
 	uint32_t			sx_fg, sx_bg;	// Current colour set
-	int					sx_pixels_sent;	/* If any pixels have been sent... 
+	int					sx_pixels_sent;	/* If any pixels have been sent...
 										   Raster Attributes are ignore if this is true. */
 	int					sx_first_pass;	// First pass through a line
 	int					sx_hold_update;	// hold_update value to restore on completion
@@ -205,18 +245,20 @@ struct cterminal {
 	int					sx_start_y;		// Starting Y position
 	int					sx_row_max_x;	// Max right size of this sixel line
 	struct ciolib_pixels *sx_pixels;
-	unsigned long		sx_width;		// Width from raster attributes
-	unsigned long		sx_height;		// REMAINING heigh from raster attributes
+	int					sx_width;		// Width from raster attributes
+	int					sx_height;		// REMAINING height from raster attributes
 	struct ciolib_mask	*sx_mask;
 	int					sx_orig_cursor;	// Original value of cterm->cursor
 
 	/* APC Handler */
-	void				(*apc_handler)(char *strbuf, size_t strlen, char *retbuf, size_t retsize, void *cbdata);
+	void				(*apc_handler)(char *strbuf, size_t strlen, void *cbdata);
 	void				*apc_handler_data;
 
 	/* Mouse state change callback */
 	void (*mouse_state_change)(int parameter, int enable, void *cbdata);
 	void *mouse_state_change_cbdata;
+	void (*key_event_mode_change)(int enable, void *cbdata);
+	void *key_event_mode_change_cbdata;
 	int (*mouse_state_query)(int parameter, void *cbdata);
 	void *mouse_state_query_cbdata;
 
@@ -241,10 +283,137 @@ struct cterminal {
 	int skypix;
 	uint8_t prestel_last_mosaic;
 
+	/* ATASCII inverse-video input mode, toggled by the backtick key.
+	 * Read by the status bar via cterm_atascii_inverse(). */
+	bool atascii_inverse;
+
+	/* Per-entry palette override (survives cterm_reset) */
+	bool				has_palette_override;
+	uint32_t			palette_override[16];	// 0x00RRGGBB
+
 	/* Prestel data */
 	char prestel_data[PRESTEL_MEM_SLOTS][PRESTEL_MEM_SLOT_SIZE];
 	enum prestel_prog_states prestel_prog_state;
 	uint8_t prestel_mem;
+
+	/* Response callback — sends terminal AUTO-responses (DSR, DECRQM,
+	 * STS, etc., emitted by the parser in response to host queries)
+	 * directly to the host.  If NULL, auto-responses are discarded.
+	 *
+	 * keystroke_cb is the separate channel for USER keystrokes that
+	 * cterm_encode_key encodes (e.g. arrow keys → ESC[A).  Splitting
+	 * it from response_cb lets a sysop spy connection (where the BBS
+	 * is already serving the real user via telnet/ssh and owns the
+	 * query/response handshake) mute auto-responses while still
+	 * delivering keystrokes the local user types into the spy.  If
+	 * NULL, encoded keystrokes are discarded.  When the same channel
+	 * carries both, set both fields to the same callback. */
+	void (*response_cb)(const char *buf, size_t len, void *cbdata);
+	void *response_cbdata;
+	void (*keystroke_cb)(const char *buf, size_t len, void *cbdata);
+	void *keystroke_cbdata;
+
+	/* Status display (DECSSDT/DECSASD) state.  On the main cterm,
+	 * status_display_type tracks the selected type (0=none, 1=indicator,
+	 * 2=host-writable) and status_display_active tracks which display
+	 * receives writes (0=main, 1=status).  status_sub points at a 1-row
+	 * sub-cterm when type==2 and is NULL otherwise; parent is NULL on
+	 * the main cterm and points at the owner on the sub.  Handlers for
+	 * status-display and terminal-global sequences bubble to the parent
+	 * so state lives on one instance. */
+	int                 status_display_type;
+	int                 status_display_active;
+	struct cterminal   *status_sub;
+	struct cterminal   *parent;
+	void              (*status_display_cb)(struct cterminal *cterm,
+	                                       int old_type, int new_type,
+	                                       void *cbdata);
+	void               *status_display_cbdata;
+
+	/* Fires when the terminal's visible dimensions change post-init
+	 * (e.g. DECSSDT toggling the status row).  text_cols/text_rows
+	 * are the new cell count; pixel_cols/pixel_rows are the pixel
+	 * dimensions read from vstat, or -1 when pixel support is
+	 * unavailable for the current mode. */
+	void              (*size_change_cb)(struct cterminal *cterm,
+	                                    int text_cols, int text_rows,
+	                                    int pixel_cols, int pixel_rows,
+	                                    void *cbdata);
+	void               *size_change_cbdata;
+
+	/* ECMA-48 selected area (SSA/ESA) for screen readback */
+	int					ssa_row;	// SSA position (1-based, screen coords), 0 = not set
+	int					ssa_col;
+	int					esa_row;	// ESA position (1-based, screen coords), 0 = not set
+	int					esa_col;
+
+	/* ECMA-48 transmission modes */
+	int					fetm;		// Format Effector Transfer Mode: 0=INSERT (default), 1=EXCLUDE
+	int					ttm;		// Transfer Termination Mode: 0=CURSOR (default), 1=ALL
+
+	/* -------- Unified dispatch pipeline (see cterm_internal.h) --------
+	 * These fields are populated by the seq_feed() parser or by the
+	 * bridge from parse_sequence() during the do_ansi() migration.
+	 * When migration is complete, they fully replace escbuf / sequence
+	 * / string / music / font_size / doorway_char state tracking. */
+	uint32_t			seq_key;		/* packed (introducer|priv|interm|final) */
+	enum seq_phase		seq_phase;
+	char				seq_params[256];	/* raw parameter bytes (incl. private, ';', ':') */
+	int					seq_param_len;		/* bytes written to seq_params */
+	uint64_t			seq_param_int[MAX_SEQ_PARAMS];
+	int					seq_param_count;	/* parsed ints in seq_param_int */
+	/* Per-parameter raw strings.  Populated by cterm_build_param_strs
+	 * at SEQ_COMPLETE; pointers alias into seq_params with ';' bytes
+	 * overwritten by NUL so each pointer dereferences as an independent
+	 * null-terminated string.  Used by SGR's extended-colour parsing
+	 * (CSI 38/48 with colon sub-params and DECRQSS readback). */
+	const char			*seq_param_strs[MAX_SEQ_PARAMS];
+	uint64_t			seq_cur_value;		/* accumulator for current param */
+	bool				seq_cur_has_digits;
+	bool				seq_cur_has_sub;	/* ':' seen in current param */
+	bool				seq_overflow;		/* buffer limit hit -> discard */
+
+	/* Cascade consumption tracking: handlers in a cascade chain mark the
+	 * parameters they claim here.  Downstream handlers in the chain skip
+	 * marked slots; the default-injection path (e.g. SGR 0 on empty input)
+	 * fires only when seq_param_count == 0 AND seq_consumed_any is false,
+	 * so an upstream consumer cannot accidentally trigger the default by
+	 * emptying the list. */
+	bool				seq_consumed[MAX_SEQ_PARAMS];
+	bool				seq_consumed_any;
+
+	/* Print-batch buffer for cterm_write: printable bytes are coalesced
+	 * here, then flushed via cterm_uctputs when the buffer nears full or
+	 * a non-print event (sequence start, doorway cell, music, etc.) needs
+	 * the current cursor position to be accurate.  Lives on the struct so
+	 * accumulator/dispatcher functions share the canonical
+	 *   bool fn(struct cterminal *, unsigned char, int *speed)
+	 * signature instead of passing buf/pos in every call. */
+	unsigned char		print_buf[2048];
+	unsigned char		*print_pos;
+
+	/* Trailing raw-byte accumulator (BEEB VDU 23/28, VT52 ESC Y/b/c) */
+	void				(*seq_trailing_handler)(struct cterminal *, int *);
+	uint8_t				seq_trailing_remain;
+
+	/* Per-emulation dispatch installed at init / mode change.
+	 * The byte loop consults cterm->accumulator first; if NULL, the
+	 * byte falls through to cterm->dispatch.  Mode-entry sites
+	 * (ESC arrival, DCS/OSC start, font load, etc.) install the
+	 * matching accumulator; mode-exit sites (sequence complete, ST,
+	 * terminator byte) clear it.  saved_accumulator gives a single
+	 * save/restore slot so an ESC mid-string can temporarily install
+	 * the sequence accumulator and fall back to the string accumulator
+	 * afterwards. */
+	void				(*dispatch)(struct cterminal *, unsigned char, int *);
+	bool				(*accumulator)(struct cterminal *, unsigned char, int *);
+	bool				(*saved_accumulator)(struct cterminal *, unsigned char, int *);
+	const struct seq_dispatch *dispatch_table;
+	size_t				dispatch_table_len;
+
+	/* PETSCII / ATASCII byte-table dispatch */
+	const uint8_t		*ctrl_bitmap;		/* 256-bit table, 32 bytes */
+	void				(*const *byte_handlers)(struct cterminal *);
 };
 
 #ifdef __cplusplus
@@ -252,16 +421,50 @@ extern "C" {
 #endif
 
 CIOLIBEXPORT struct cterminal* cterm_init(int height, int width, int xpos, int ypos, int backlines, int backcols, struct vmem_cell *scrollback, int emulation);
-CIOLIBEXPORT size_t cterm_write(struct cterminal *cterm, const void *buf, int buflen, char *retbuf, size_t retsize, int *speed);
+CIOLIBEXPORT size_t cterm_write(struct cterminal *cterm, const void *buf, int buflen, int *speed);
 CIOLIBEXPORT int cterm_openlog(struct cterminal *cterm, char *logfile, int logtype);
 CIOLIBEXPORT void cterm_closelog(struct cterminal *cterm);
 CIOLIBEXPORT void cterm_end(struct cterminal *cterm, int free_fonts);
 CIOLIBEXPORT void cterm_clearscreen(struct cterminal *cterm, char attr);
 CIOLIBEXPORT void cterm_start(struct cterminal *cterm);
+CIOLIBEXPORT int cterm_crpos(struct cterminal *cterm);
+CIOLIBEXPORT int cterm_encode_key(struct cterminal *cterm, int key);
+CIOLIBEXPORT enum cterm_key_result cterm_handle_key(struct cterminal *cterm, int key);
+CIOLIBEXPORT bool cterm_pk_events(struct cterminal *cterm, const struct ciolib_key_event *events, size_t count);
+CIOLIBEXPORT bool cterm_pk_synthesize(struct cterminal *cterm, uint16_t evdev, bool pressed);
+CIOLIBEXPORT bool cterm_pk_resync(struct cterminal *cterm, const uint16_t *held_keys, size_t count);
+CIOLIBEXPORT bool cterm_pk_enabled(const struct cterminal *cterm);
+CIOLIBEXPORT bool cterm_atascii_inverse(const struct cterminal *cterm);
+/* Emit a response back to the connected host via cterm's registered
+ * response callback (set by the terminal app).  Silently drops if no
+ * callback has been registered. */
+CIOLIBEXPORT void cterm_respond(struct cterminal *cterm, const char *data, size_t len);
+/* ================================================================
+ * Foreground SFX playback.
+ *
+ * Plays audio through a per-cterm lazy-persistent stream (cterm->fx_stream)
+ * that is distinct from the MF/MB ANSI-music stream. Because the handle is
+ * persistent, callers can adjust level/pan via xp_audio_set_volume() and
+ * concurrent SFX bursts share one mixer slot without auto-stopping music.
+ *
+ * cterm_play_fx      — native S16 stereo 44100 Hz PCM frames.
+ * cterm_play_fx_tone — synthesize and append a pure tone.
+ * cterm_play_fx_u8   — legacy U8 mono 22050 Hz buffer (upsampled internally).
+ *
+ * All three return false if the audio device can't be opened or the stream
+ * can't be acquired. Writes are non-blocking append; the stream drains in
+ * the background.
+ * ================================================================ */
+CIOLIBEXPORT bool cterm_play_fx(struct cterminal *cterm, const int16_t *frames, size_t nframes);
+CIOLIBEXPORT bool cterm_play_fx_tone(struct cterminal *cterm, double freq,
+                                     uint32_t duration_ms, uint32_t shape);
+CIOLIBEXPORT bool cterm_play_fx_u8(struct cterminal *cterm, const unsigned char *samp,
+                                   size_t size);
 void cterm_gotoxy(struct cterminal *cterm, int x, int y);
 void setwindow(struct cterminal *cterm);
 void cterm_clreol(struct cterminal *cterm);
 void cterm_scrollup(struct cterminal *cterm);
+CIOLIBEXPORT void cterm_resize_rows(struct cterminal *cterm, int new_rows);
 
 #ifdef __cplusplus
 }

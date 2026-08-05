@@ -1,5 +1,5 @@
 :experimental:
-= SyncTERM v1.8b Manual
+= SyncTERM v1.10a Manual
 Stephen Hurd <shurd@sasktel.net>
 :toc:
 
@@ -78,11 +78,13 @@ supported with good compression rather than the uncompressed PPM that is
 the only format otherwise.
 
 The biggest (usually) optional dependency is http://libsdl.org[SDL 2].
-SyncTERM can use SDL for both graphics and sound. X11 can also be used
-for graphics, and OSS, ALSA, or Portaudio can also provide sound. These
-use run-time linking, so at compile time, only the headers are needed.
-Static linking with SDL is also supported.  SDL2 is required for macOS
-and Haiku at the present time.
+SyncTERM can use SDL for both graphics and sound. X11 and Wayland can
+also be used for graphics, and PortAudio, SDL, PulseAudio, ALSA, or OSS
+can provide sound (tried in that order when more than one is enabled).
+These use run-time linking, so at compile time, only the headers are
+needed. Static linking with SDL is also supported.  SDL2 is required
+for Haiku at the present time. On macOS, the native Quartz backend and
+CoreAudio are used by default and SDL is not required.
 
 For SSH, a copy of Peter Gutmann's
 https://cryptlib.com/security-software/about-cryptlib[Cryptlib] is
@@ -131,12 +133,6 @@ Loads the user BBS list from the specified file instead of the default.
 -C::
 Changes the default to no status line.
 
--E##::
-Specifies the escape delay in ANSI on Curses modes. The escape delay
-is how long SyncTERM will wait after an escape key is received from the
-user to see if it's a control sequence or a bare kbd:[Escape] press. The units
-are millisecods, and the default is 25.
-
 -H::
 Use SSH mode when connecting.
 
@@ -172,19 +168,30 @@ on all platforms. Legal values are:
 	Windows console mode. Windows only mode which uses the system
 	console APIs for output.
 
+	Q[WF]:::
+	Quartz output mode. macOS only mode which uses the native
+	AppKit/Core Graphics framework for drawing. The default on
+	macOS. Additionally, a 'W' or 'F' can be specified to force
+	windowed or full-screen mode respectively.
+
 	X[WF]:::
 	X11 output mode. UNIX only mode which directly uses the X11
-	libraries for drawing. The default where supported. Additionally,
-	a 'W' or 'F' can be specified to force windowed or full-screen
-	mode respectively.
+	libraries for drawing. Additionally, a 'W' or 'F' can be
+	specified to force windowed or full-screen mode respectively.
+
+	Y[WF]:::
+	Wayland output mode. UNIX only mode which uses the native
+	Wayland protocol for drawing. The default where supported.
+	Additionally, a 'W' or 'F' can be specified to force windowed
+	or full-screen mode respectively.
 --
 +
 Refer to the <<_output_modes>> section for more details.
 
 -L##::
 Specifies the number of lines on the "screen". Supported values are:
-14, 21, 25 (default), 28, 43, 50, and 60. If an unsupported value
-is used, it will default use 50.
+14, 21, 25 (default), 28, 30, 43, 50, and 60. If an unsupported value
+is used, it will default to 43/50.
 
 -pns_*::
 Only "supported" on macOS.  Ignored.
@@ -213,9 +220,27 @@ audited, and should therefore not be trusted.
 This option is case sensitive and must the be only option passed to
 SyncTERM.  Causes syncterm to output the version on stdout then exit.
 
+-W/path/to/script.wren::
+Loads the named Wren script in addition to the built-in and user
+auto-load scripts on every connect.  The script is interpreted as
+its own filename-derived module after all other scripts have loaded,
+so its `import` statements resolve against the full surface.
+Compile and runtime errors during the load are written to standard
+error.
+
 After the options, a full URI, hostname, or dialing directory entry may be
 specified.  Supported URI schemes are:
-rlogin://, ssh://, telnet://, raw://, shell://, ghost://.
+rlogin://, ssh://, telnet://, raw://, shell://, ghost://, mqtts://.
+
+`mqtts://` connects to a Synchronet BBS's internal MQTT broker as a
+sysop-spy client.  It always uses TLS-PSK on port 8883 (no plaintext
+`mqtt://` form is accepted) — the user portion of the URL becomes the
+PSK identity, the password portion becomes the PSK secret, and a
+prompt for the system password appears at connect time if the matching
+dialing-directory entry doesn't carry one.  After authentication,
+SyncTERM auto-discovers the BBSID from a retained broker topic, lists
+the active nodes, and lets you pick which one to attach to.  See
+`SBBS MQTT Spy` under <<connection-types,Connection Types>>.
 
 If there is an entry matching the URI, hostname, or entry name, the
 settings will be loaded from the BBS list, then modified per the
@@ -242,6 +267,12 @@ Keyboard Controls::
 	kbd:[Alt+Home]:::
 	Centre window on the screen
 
+	kbd:[Alt]+drag:::
+	Hold kbd:[Alt] and drag the window with the left mouse button
+	to move it on the desktop. Available in the Wayland output
+	mode when the compositor does not provide server-side
+	decorations (i.e. there is no title bar to drag).
+
 In addition, you can directly enter characters either by their "codepage"
 value or their unicode value.  A "codepage" value is an 8-bit value that
 indicates a character in the current codepage (such as the default CP437).
@@ -260,12 +291,9 @@ kbd:[Alt] key, press the kbd:[0] key on the numeric keypad, then enter
 the decimal value on the numeric keypad. Once the value is entered,
 release the kbd:[Alt] key.
 
-== The User InterFaCe
+== The User Interface
 
-Menus in SyncTERM use a common user interface library named UIFC.  This
-library was originally developed for Synchronet.
-
-The following is the general behaviour of UIFC menus.
+The following is the general behaviour of SyncTERM menus.
 
 Mouse controls::
 
@@ -285,7 +313,7 @@ close the menu. If there is help for the menu, there is also a ? button
 to bring up the help.
 +
 If there are more options than fit in the window, there is a scrollbar
-on the left side.
+on the right side.
 
 	Left-Drag:::
 	Select and copy a region (the copy is made when the button is
@@ -370,6 +398,92 @@ Keyboard Controls::
 	Repeat last find
 
 
+=== The File Browser
+
+SyncTERM uses a shared file browser whenever a file or directory must
+be picked — for example when uploading a file (kbd:[Alt+U]), loading a
+font (kbd:[Alt+F]), or naming a capture file (kbd:[Alt+C]).
+
+The browser shows three rows of content inside its window:
+
+Directory and File panes::
+Two side-by-side lists.  The left pane contains subdirectories plus a
+`..` entry (except at the filesystem root), and the right pane contains
+files that match the current mask.  Directories are always listed
+regardless of the mask.
+
+Info pane::
+A two-line area below the lists.  The first line shows the full name of
+the item currently highlighted in whichever list has focus; the second
+line shows its size (or the word `directory`) and last-modified
+timestamp.  In the multi-file picker it also shows `[selected]` when
+the highlighted file is already tagged.
+
+Mask and Path fields::
+The mask filters the file list (for example `*.bin`).  The path field
+always shows the current location.  When the caller permits typing a
+path, e.g. Upload, it also lets you type a directory or filename
+directly.  Long paths are shown from the end so the deepest directory
+stays visible.
+
+The footer holds an `OK` (or `Select`) button and a `Cancel` button.
+In the multi-file picker there is also a `Review` button.
+
+Keyboard Controls::
+
+	kbd:[Tab] / kbd:[Shift+Tab]:::
+	Move focus forward or backward between the panes, Mask, the
+	editable Path field (when enabled), and the footer buttons.
+
+	kbd:[←] / kbd:[→]:::
+	Between the directory and file panes these move focus left or
+	right.  In the path and mask fields they move the edit cursor.
+	Between the footer buttons they move focus between buttons.
+
+	kbd:[↑] / kbd:[↓]:::
+	In the lists they move the highlight.  In the path and mask
+	fields they move focus to the previous or next field.
+
+	kbd:[Return]:::
+	In a list: open the directory, or commit the highlighted file
+	(or toggle its selection in multi-pick).  On a footer button:
+	activate that button.
+
+	kbd:[Space]:::
+	In the multi-file picker's file list, toggles the highlighted
+	file's selection.
+
+	kbd:[Ctrl+A]:::
+	Multi-file picker only — tags every file currently shown in
+	the file pane.  Does not descend into subdirectories.  Safe to
+	press repeatedly; files already tagged stay tagged.
+
+	kbd:[Ctrl+Return]:::
+	Activate `OK` / `Select` from anywhere in the dialog, regardless
+	of which field currently has focus.
+
+	kbd:[F2]:::
+	Multi-file picker only — opens the Review pop-up listing every
+	tagged file.  Inside the pop-up, kbd:[Delete] or kbd:[Return]
+	or a left click removes the highlighted or clicked item, and
+	kbd:[Escape] closes the pop-up.
+
+	kbd:[Escape]:::
+	Cancel the browser.
+
+Mouse Controls::
+Clicking a list item in the currently-focused pane commits it
+immediately (or toggles it in multi-pick).  Clicking a list item in an
+unfocused pane just moves focus and the highlight there — click again
+to commit.  Clicking in the mask or path field places the edit cursor
+at that position.  Clicking a footer button both focuses it and
+activates it.
+
+The multi-file picker's status line shows `F2 Review` while the dialog
+is open.  It returns the full path of every tagged file at once, so
+you can queue uploads from several directories in a single pass.
+
+
 == The Dialing Directory
 
 This is the default startup screen if no BBS is specified on the
@@ -415,7 +529,11 @@ kbd:[Ctrl+E]::
 Edit the selected entry (Alias for kbd:[F2])
 
 kbd:[Ctrl+S]::
-<<_modifying_the_sort_order,Modify the sort order>>
+<<_managing_sort_profiles,Manage sort profiles>>
+
+kbd:[<] / kbd:[>]::
+Cycle through sort profiles (previous / next).
+The current profile name is shown in the directory title bar.
 
 kbd:[Alt+B]::
 View the scrollback of the last session
@@ -492,6 +610,20 @@ TelnetS::
 Telnet over TLS.  All the drawbacks of the telnet protocol, but
 at least it's encrypted.
 
+SBBS MQTT Spy::
+A sysop-spy connection to a Synchronet BBS's internal MQTT broker.
+Subscribes to a node's published terminal output, and (optionally)
+publishes locally typed keystrokes back as injected node input.
+Authentication is TLS-PSK on port 8883 — the entry's User and
+Password are the PSK identity and secret, and the System Password is
+the broker's MQTT-level password.  When connecting, the BBSID is
+auto-discovered from the broker's retained `sbbs/{BBSID}` topic and
+the node number is chosen from a list of currently-active nodes.
+SyncTERM's terminal emulator does not auto-respond to host
+queries (DSR, DECRQM, etc.) on this connection type so the real
+client driving the node still owns the query/response handshake.
+Also reachable from the command line as `mqtts://user:pass@host`.
+
 Finally, you will be promted for the "address".  This is the DNS addres,
 IP address, serial port, or command to connect to.  If the connection will
 be made over the network, and the name is a valid hostname, it will be
@@ -510,6 +642,11 @@ most of the options are the same or silimar.
 
 kbd:[Ctrl+S]::
 Edit the Explicit Sort Value.
+
+kbd:[[] / kbd:[\]]::
+Navigate to the previous/next entry in the directory without returning
+to the directory listing.  This also works in Font Management and
+Sort Profile field editors.
 
 Name::
 The name of the entry.
@@ -530,7 +667,16 @@ port number value will be updated as well.
 
 Flow Control (Modem, Serial, and 3-wire)::
 The type of flow control
-to use. RTC/CTS, XON/XOFF, Both, or None
+to use. RTS/CTS, XON/XOFF, Both, or None
+
+Stop Bits (Modem, Serial, and 3-wire)::
+The number of stop bits to use.
+
+Data Bits (Modem, Serial, and 3-wire)::
+The number of data bits to use.
+
+Parity (Modem, Serial, and 3-wire)::
+The parity setting to use.  Options are None, Even, Odd, Mark, and Space.
 
 TCP Port:: The TCP port to connect to.
 
@@ -559,10 +705,17 @@ System Password::
 An additional password that can be sent after the
 first kbd:[Alt+L] using successive kbd:[Alt+L]s.
 
-Binmode Broken::
+Binmode Broken (Telnet and TelnetS)::
 Telnet binary mode is broken on the remote system, do not enable it when
 connecting.  This option is to work around a bug in CTRL-C checking in
 older Synchronet versions.
+
+Defer Negotiate (Telnet and TelnetS)::
+Some systems have a mailer or other program running on the initial
+connection, and will either disconnect or just ignore telnet negotiations
+at the start of the session.  When this option is enabled, SyncTERM will
+wait until it receives a telnet command from the remote before starting
+telnet negotiation.
 
 Screen Mode::
 Selects the format of the window when connected.
@@ -629,9 +782,13 @@ Append Log File::: If set you Yes, the log file retains old information
 	and will keep growing.  If set to No, the log file is emptied
 	for each new connection.
 
-Comm Rate::
-For networked modes, specifies the sharacter pacing speed.
-For serial and modem types, specifies the speed to open the port at.
+Comm Rate (Modem, Serial, and 3-wire)::
+Specifies the speed to open the serial port at.
+
+Fake Comm Rate (network connections)::
+Specifies the character pacing display speed for network connections.
+This controls the simulated baud rate shown in the status line and
+the character output pacing.
 
 ANSI Music::
 There are three options in this sub-menu.
@@ -715,20 +872,50 @@ repeated to fill all 16 palette slots. This allows for example, the use
 16 colour Amiga VT-52 mode.
 
 
-==== Modifying the Sort Order
+==== Managing Sort Profiles
 
-You can change the order that entries appear in the Directory via the
-kbd:[Ctrl+S] key.  This brings up a menu where you can add entries by either
-pressing Insert to add before the current item, or by pressing Return on
-the enpty line at the end.  This will bring up a list of fields that can
-be sorted on.
+SyncTERM supports named sort profiles that control the order entries
+appear in the Directory.  Press kbd:[<] or kbd:[>] in the directory
+listing to cycle through profiles.  The current profile name is shown
+in the title bar.
 
-Pressing enter on a field will toggle if it's reversed (highest to
-lowest) or not.
+Four default profiles are provided: Name, Last Connected, Most Called,
+and Date Added.  You can manage profiles by pressing kbd:[Ctrl+S] to
+open the Sort Profiles manager.
+
+In the Sort Profiles manager:
+
+kbd:[Enter]::
+Edit the sort fields for the selected profile.  In the sort field editor,
+press Insert to add a field, Delete to remove one, and Enter to toggle
+between normal and reversed order.
+
+kbd:[F2]::
+Rename the selected profile (max 19 characters, must be unique).
+
+kbd:[Insert]::
+Create a new profile.
+
+kbd:[Delete]::
+Delete the selected profile.  Deleting the last profile reloads the
+defaults.
+
+kbd:[F5] / kbd:[Ctrl+Insert]::
+Copy a profile to the clipboard.
+
+kbd:[Shift+Delete]::
+Cut a profile (remove and place on clipboard).
+
+kbd:[F6] / kbd:[Shift+Insert]::
+Paste the clipboard at the current position.  If the name already
+exists, you will be prompted for a new unique name.
+
+Sort profiles are stored in the `[SortProfiles]` section of the
+SyncTERM INI file.
 
 The Explicit Sort Value exists to manually control the position of entries
-in the list, and can be accessed using :[Ctrl+D]: in the Edit Directory Entry
-menu.
+in the list, and can be accessed using kbd:[Ctrl+S] in the Edit Directory
+Entry menu.
 
 
 ==== Viewing the Scrollback
@@ -796,6 +983,13 @@ Program Settings::
 Allows changing settings that are preserved across
 reboots.  Refer to the <<_program_settings>> section for details.
 
+Themes::
+Lists the built-in Classic Theme and `.ini` theme files from the user theme
+directory. Moving the highlight previews a valid theme. Enter selects and
+saves it; Escape restores the previously selected theme. Invalid files may be
+highlighted to display their error but cannot be selected. See `Themes.adoc`
+for the file format.
+
 File Locations::
 Shows the paths to the various files and directories
 that SyncTERM will access.
@@ -825,7 +1019,7 @@ see the <<_text_modes>> section of the ciolib chapter.
 The Font Management menu allows you to add and remove fonts.  Each font
 should have a unique name, and at least one file for 8x8, 8x14, or 8x16
 fonts.  The font format is the one used by "DOS fonts".  You can insert
-and delete items using normal UIFC commands.
+and delete items using the normal menu commands.
 
 
 ==== Program Settings
@@ -846,6 +1040,11 @@ Video Output Mode::
 The method of displaying SyncTERM output.  The options
 will vary by OS, compile-time options, and installed libraries.  See
 the -I option to SyncTERM for details on the various modes.
+
+Default Cursor Style::
+The cursor style used by default.  Options are "Default (set by video
+mode)", "Blinking Underline", "Solid Underline", "Blinking Block", and
+"Solid Block".  The remote system may override this using DECSCUSR.
 
 Audio Output Mode::
 Allows disabling different output methods.  SyncTERM attempts to
@@ -898,8 +1097,10 @@ This specifies the number of iterations to derive a key from a password.
 The higher this value, the more difficult brute forcing is, but the longer
 it takes to read the BBS list.
 
-UIFC Colours::
-Allows changing the colours for the User InterFaCe.
+Classic Theme Colours::
+Allows changing the six colours used by the built-in Classic Theme. These
+settings apply to the menu, file picker, and connected Wren interfaces while
+Classic Theme is selected. File themes do not inherit these colour settings.
 
 [[custom_screen_mode]]
 Custom Screen Mode::
@@ -911,6 +1112,39 @@ Aspect Ratio of the "Custom" screen mode.
 
 When you are connected to a system, there are a number of controls
 available that are not sent to the remote.
+
+=== Hyperlinks
+SyncTERM supports OSC 8 hyperlinks. When a BBS sends text with an
+embedded hyperlink, clicking on the linked text will open the URL
+in your default browser. When the BBS has mouse capture enabled,
+use kbd:[Ctrl+Click] instead. Hovering over a hyperlinked region
+displays the URL in the status bar.
+
+Even without OSC 8 markup, kbd:[Ctrl+Click] on plain-text URLs
+(starting with `http://`, `https://`, `ftp://`, `ftps://`, or
+`www.`) will detect and open the URL directly. This also works
+in the scrollback viewer.
+
+On platforms where opening a browser is not possible, the URL is
+copied to the clipboard instead.
+
+=== Selecting and Copying Text
+
+Left-drag across the terminal to select a region.  The copy is made
+when the button is released.  By default the selection is stream-
+shaped: it flows from the starting cell to the ending cell across
+line wraps, trailing spaces are trimmed on each row, and rows are
+separated by `\r\n` on Windows or `\n` on other platforms.
+
+Hold kbd:[Alt] when you press the left mouse button to select a
+rectangular region instead.  The kbd:[Alt] state is sampled once, at
+the start of the drag, and held for the duration of the drag;
+pressing or releasing kbd:[Alt] mid-drag does not change the
+selection shape.  Each row of the rectangle is copied as its own
+line, with trailing spaces trimmed.
+
+If the remote system has mouse capture enabled, use kbd:[Alt+O] to
+take the mouse back from the remote so that you can select text.
 
 For Curses and ANSI modes, only two controls are avilable, and they
 are not available in other modes.  This is because these two modes
@@ -972,7 +1206,13 @@ events, it can be difficult to select text to copy.  kbd:[Alt+O] allows
 taking the mouse away from the remote.
 
 kbd:[Alt+U]::
-Upload a file to the remote.
+Upload a file (or files) to the remote.  Prompts first for a
+protocol, then for the file(s) to send.  `ZMODEM` and `YMODEM`
+each offer a `Batch` variant that brings up the
+<<_the_file_browser,multi-file picker>> so you can queue files
+from several directories and transfer them in a single session.
+The other choices (`XMODEM-1K`, `XMODEM-128`, `ASCII`, `Raw`)
+transfer a single file.
 
 kbd:[Alt+X]::
 Disconnect and exit SyncTERM.  Does not return to the main
@@ -1148,5 +1388,6 @@ configurable in SyncTERM.
 GR: Set to GR (for "GRaphics", meaning ANSI-BBS support) or NG
 (for "No Graphics").  Always set to GR.  Not configurable in SyncTERM.
 
+include::Wren.adoc[leveloffset=+2]
 include::../conio/cterm.adoc[leveloffset=+2]
 include::../conio/ciolib.adoc[leveloffset=+2]

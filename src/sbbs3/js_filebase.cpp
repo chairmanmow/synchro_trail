@@ -81,9 +81,21 @@ js_open(JSContext *cx, uintN argc, jsval *arglist)
 	}
 
 	rc = JS_SUSPENDREQUEST(cx);
-	if (!dirnum_is_valid(scfg, p->smb.dirnum))
+	if (!dirnum_is_valid(scfg, p->smb.dirnum)) {
 		p->smb_result = smb_open(&(p->smb));
-	else
+		if (p->smb_result == SMB_SUCCESS && filelength(fileno(p->smb.shd_fp)) < 1) {
+			/* Fresh ad-hoc (is_path) file base: smb_open() did not initialize the SMB
+			 * header. Mirror smb_open_dir()'s first-time-init: mark the base as a
+			 * file directory so smb_idxreclen() returns sizeof(fileidxrec_t) (not the
+			 * smaller msg-style idxrec_t) and writes/reads to/from the .sid file are
+			 * the right size. Without this, smb_addfile() writes a corrupt index that
+			 * loadfilenames()/get_list()/get_names() can't read back. */
+			p->smb.status.attr = SMB_FILE_DIRECTORY;
+			p->smb_result = smb_create(&(p->smb));
+			if (p->smb_result != SMB_SUCCESS)
+				smb_close(&(p->smb));
+		}
+	} else
 		p->smb_result = smb_open_dir(scfg, &(p->smb), p->smb.dirnum);
 	if (p->smb_result != SMB_SUCCESS) {
 		JS_RESUMEREQUEST(cx, rc);
@@ -114,6 +126,57 @@ js_close(JSContext *cx, uintN argc, jsval *arglist)
 
 	return JS_TRUE;
 }
+
+static JSBool
+js_lock(JSContext *cx, uintN argc, jsval *arglist)
+{
+	JSObject*  obj = JS_THIS_OBJECT(cx, arglist);
+	private_t* p;
+	jsrefcount rc;
+
+	if ((p = (private_t*)js_GetClassPrivate(cx, obj, &js_filebase_class)) == NULL) {
+		return JS_FALSE;
+	}
+
+	JS_SET_RVAL(cx, arglist, JSVAL_FALSE);
+
+	rc = JS_SUSPENDREQUEST(cx);
+	p->smb_result = smb_lock(&(p->smb));
+	if (p->smb_result != SMB_SUCCESS) {
+		JS_RESUMEREQUEST(cx, rc);
+		return JS_TRUE;
+	}
+	JS_RESUMEREQUEST(cx, rc);
+	JS_SET_RVAL(cx, arglist, JSVAL_TRUE);
+
+	return JS_TRUE;
+}
+
+static JSBool
+js_unlock(JSContext *cx, uintN argc, jsval *arglist)
+{
+	JSObject*  obj = JS_THIS_OBJECT(cx, arglist);
+	private_t* p;
+	jsrefcount rc;
+
+	if ((p = (private_t*)js_GetClassPrivate(cx, obj, &js_filebase_class)) == NULL) {
+		return JS_FALSE;
+	}
+
+	JS_SET_RVAL(cx, arglist, JSVAL_FALSE);
+
+	rc = JS_SUSPENDREQUEST(cx);
+	p->smb_result = smb_unlock(&(p->smb));
+	if (p->smb_result != SMB_SUCCESS) {
+		JS_RESUMEREQUEST(cx, rc);
+		return JS_TRUE;
+	}
+	JS_RESUMEREQUEST(cx, rc);
+	JS_SET_RVAL(cx, arglist, JSVAL_TRUE);
+
+	return JS_TRUE;
+}
+
 
 static JSBool
 js_dump_file(JSContext *cx, uintN argc, jsval *arglist)
@@ -1668,9 +1731,17 @@ static jsSyncMethodSpec js_filebase_functions[] = {
 	 , JSDOCSTR("")
 	 , JSDOCSTR("Open file base")
 	 , 31900},
+	{"lock",            js_lock,           0, JSTYPE_BOOLEAN
+	 , JSDOCSTR("")
+	 , JSDOCSTR("Lock an open file base for maintenance (prevents subsequent/concurrent opens if locked successfully, i.e. returns <tt>true</tt>)")
+	 , 32105},
+	{"unlock",          js_unlock,         0, JSTYPE_BOOLEAN
+	 , JSDOCSTR("")
+	 , JSDOCSTR("Unlock a locked file base")
+	 , 32105},
 	{"close",           js_close,           0, JSTYPE_BOOLEAN
 	 , JSDOCSTR("")
-	 , JSDOCSTR("Close file base (if open)")
+	 , JSDOCSTR("Close file base (if open), unlocks the base if it was previously locked")
 	 , 31900},
 	{"get",             js_get_file,        2, JSTYPE_OBJECT
 	 , JSDOCSTR("<i>string</i> filename or <i>object</i> file-meta-object [,<i>number</i> detail=FileBase.DETAIL.NORM]")

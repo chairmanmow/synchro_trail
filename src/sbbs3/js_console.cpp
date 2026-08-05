@@ -21,6 +21,7 @@
 
 #include "sbbs.h"
 #include "js_request.h"
+#include "str_util.h"  /* utf8_to_cp437_inplace, for js_simulate_type */
 
 #ifdef JAVASCRIPT
 
@@ -2028,6 +2029,9 @@ js_gotoxy(JSContext *cx, uintN argc, jsval *arglist)
 	sbbs_t*    sbbs;
 	jsrefcount rc;
 
+	if (js_argcIsInsufficient(cx, argc, 1))
+		return JS_FALSE;
+
 	if ((sbbs = (sbbs_t*)js_GetClassPrivate(cx, JS_THIS_OBJECT(cx, arglist), &js_console_class)) == NULL)
 		return JS_FALSE;
 
@@ -2036,19 +2040,34 @@ js_gotoxy(JSContext *cx, uintN argc, jsval *arglist)
 	if (JSVAL_IS_OBJECT(argv[0])) {
 		JSObject* obj = JSVAL_TO_OBJECT(argv[0]);
 		if (obj == nullptr) {
-			JS_ReportError(cx, "invalid object argument in call to %s", __FUNCTION__);
+			JS_ReportError(cx, "console.gotoxy: invalid object argument");
 			return JS_FALSE;
 		}
-		if (!JS_GetProperty(cx, obj, "x", &val)
-		    || !JS_ValueToInt32(cx, val, &x))
+		if (!JS_GetProperty(cx, obj, "x", &val))
 			return JS_FALSE;
-		if (!JS_GetProperty(cx, obj, "y", &val)
-		    || !JS_ValueToInt32(cx, val, &y))
+		if (JSVAL_NULL_OR_VOID(val)) {
+			JS_ReportError(cx, "console.gotoxy: object argument 'x' property is an unexpected 'null' or 'undefined' value");
 			return JS_FALSE;
-	} else {
+		}
+		if (!JS_ValueToInt32(cx, val, &x))
+			return JS_FALSE;
+		if (!JS_GetProperty(cx, obj, "y", &val))
+			return JS_FALSE;
+		if (JSVAL_NULL_OR_VOID(val)) {
+			JS_ReportError(cx, "console.gotoxy: object argument 'y' property is an unexpected 'null' or 'undefined' value");
+			return JS_FALSE;
+		}
+		if (!JS_ValueToInt32(cx, val, &y))
+			return JS_FALSE;
+	} else if (JSVAL_IS_NUMBER(argv[0])) {
+		if (js_argcIsInsufficient(cx, argc, 2))
+			return JS_FALSE;
 		if ((!JS_ValueToInt32(cx, argv[0], &x)) ||
 		    (!JS_ValueToInt32(cx, argv[1], &y)))
 			return JS_FALSE;
+	} else {
+		JS_ReportError(cx, "console.gotoxy: invalid argument type (expected object or number-pair)");
+		return JS_FALSE;
 	}
 
 	rc = JS_SUSPENDREQUEST(cx);
@@ -2306,6 +2325,13 @@ js_getdims(JSContext *cx, uintN argc, jsval *arglist)
 	return JS_TRUE;
 }
 
+/* Asymmetric lock helper: callers (e.g., the JS console.lock_input(true|false)
+ * binding, hotkey handlers) take the mutex on one call and release it on a
+ * paired later call. The function intentionally leaves the mutex in either
+ * the locked or the unlocked state depending on its argument. Coverity's lock
+ * tracker can't model this contract, so it flags the lock=true path as
+ * "returning without unlocking" and propagates the same complaint to every
+ * indirect caller. */
 void
 js_do_lock_input(JSContext *cx, JSBool lock)
 {
@@ -2315,8 +2341,10 @@ js_do_lock_input(JSContext *cx, JSBool lock)
 		return;
 
 	if (lock) {
+		// coverity[LOCK:SUPPRESS]
 		pthread_mutex_lock(&sbbs->input_thread_mutex);
 	} else {
+		// coverity[LOCK:SUPPRESS]
 		pthread_mutex_unlock(&sbbs->input_thread_mutex);
 	}
 }
@@ -2413,6 +2441,62 @@ js_term_supports(JSContext *cx, uintN argc, jsval *arglist)
 		JS_SET_RVAL(cx, arglist, INT_TO_JSVAL(flags));
 	}
 
+	return JS_TRUE;
+}
+
+/* console.simulate_type(str [,with_typos=true] [,speed_factor=1.0])
+ *
+ * Output a string with per-character typing delays and optional
+ * fat-finger / transposition typo simulation. Delegates to
+ * sbbs_t::simulate_type (chat.cpp). Used by chat_llm.js's streaming
+ * mode to emit tokens as they arrive over SSE.
+ *
+ * UTF-8 -> CP437 conversion: if the caller's terminal doesn't support
+ * UTF-8, we transform the input string in place so smart-quotes, em
+ * dashes, etc. become their CP437 equivalents (or "?" for unmappable
+ * chars like emojis). Otherwise the bytes pass through unchanged.
+ * Same safety net the C++ chat_llm_session applies to non-streamed
+ * replies; without this, streaming bypasses the conversion and the
+ * caller sees garbage like "ΓÇÖ" for a curly apostrophe.
+ */
+static JSBool
+js_simulate_type(JSContext *cx, uintN argc, jsval *arglist)
+{
+	jsval*     argv = JS_ARGV(cx, arglist);
+	sbbs_t*    sbbs;
+	char*      cstr = NULL;
+	size_t     cstr_sz = 0;
+	JSBool     with_typos = JS_TRUE;
+	double     speed_factor = 1.0;
+	jsrefcount rc;
+
+	if ((sbbs = (sbbs_t*)js_GetClassPrivate(cx, JS_THIS_OBJECT(cx, arglist), &js_console_class)) == NULL)
+		return JS_FALSE;
+
+	JS_SET_RVAL(cx, arglist, JSVAL_VOID);
+
+	if (argc < 1)
+		return JS_TRUE;
+
+	JSVALUE_TO_RASTRING(cx, argv[0], cstr, &cstr_sz, NULL);
+	if (cstr == NULL)
+		return JS_FALSE;
+
+	if (argc >= 2)
+		JS_ValueToBoolean(cx, argv[1], &with_typos);
+	if (argc >= 3) {
+		double n;
+		if (JS_ValueToNumber(cx, argv[2], &n))
+			speed_factor = n;
+	}
+
+	rc = JS_SUSPENDREQUEST(cx);
+	if (!sbbs->term->supports(UTF8))
+		utf8_to_cp437_inplace(cstr);
+	sbbs->simulate_type(cstr, with_typos == JS_TRUE, speed_factor);
+	JS_RESUMEREQUEST(cx, rc);
+
+	free(cstr);
 	return JS_TRUE;
 }
 
@@ -2880,6 +2964,13 @@ static jsSyncMethodSpec js_console_functions[] = {
 		        "supports all the specified <i>terminal_flags</i>, or returns the current user/client's "
 		        "<i>terminal_flags</i> (numeric bit-field) if no <i>terminal_flags</i> were specified")
 	 , 314
+	},
+	{"simulate_type",   js_simulate_type,   1, JSTYPE_VOID,     JSDOCSTR("<i>string</i> text [,<i>bool</i> with_typos=true] [,<i>number</i> speed_factor=1.0]")
+	 , JSDOCSTR("Output <i>text</i> with per-character typing delays and optional fat-finger "
+		        "and transposition typo simulation. <i>speed_factor</i> multiplies the typing "
+		        "speed (1.0 = legacy guru speed, 2.0 = 2x faster, 0 = instant). Used by "
+		        "chat_llm.js for token-by-token streaming output of LLM responses.")
+	 , 32200
 	},
 	{"term_updated",    js_term_updated,    1, JSTYPE_BOOLEAN,  JSDOCSTR("")
 	 , JSDOCSTR("Update the node's <tt>terminal.ini</tt> file to match the current terminal settings")

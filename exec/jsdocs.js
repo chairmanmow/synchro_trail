@@ -3,9 +3,9 @@
 // This script generates HTML documentation of the Synchronet JavaScript object model
 // Requires a Debug build of the Synchronet executable(s)
 
-const table_tag = "<table border=1 width=100%>";
+var table_tag = "<table border=1 width=100%>";
 
-const li_tag =	"<li onclick = 'this.className = (this.className == \"showList\") ? \"defaultStyles\" : \"showList\";'\n" +
+var li_tag =	"<li onclick = 'this.className = (this.className == \"showList\") ? \"defaultStyles\" : \"showList\";'\n" +
 				"\tonselectstart = 'event.returnValue = false;'" +
 				">";
 
@@ -106,7 +106,7 @@ function document_methods(name,obj,type)
 			,func
 			,obj._method_list[method].args
 			));
-		if(obj._method_list[method].args.indexOf("tt>") >= 0)
+		if(obj._method_list[method].args && obj._method_list[method].args.indexOf("tt>") >= 0)
 			alert(obj._method_list[method].name + " args contains tt tag");
 		if(!min_ver && obj._method_list[method].ver)
 			docwriteln("<td>" + verstr(obj._method_list[method].ver));
@@ -346,6 +346,21 @@ if(js.global.ListeningSocket != undefined) {
 	if(sock != undefined)		document_object("ListeningSocket"	,sock, "class");
 }
 if(js.global.MQTT !== undefined) document_object("MQTT", new MQTT, "class");
+if(js.global.SQLite !== undefined) {
+	var sqdb = new SQLite(":memory:");
+	sqdb.exec("CREATE TABLE t (i INTEGER PRIMARY KEY, n TEXT DEFAULT 'x')");
+	sqdb.run("INSERT INTO t (i) VALUES (?)", [1]);
+	document_object("SQLite", sqdb, "class");
+	var sqstmt = sqdb.prepare("SELECT i FROM t");
+	document_object("SQLiteStatement", sqstmt, "class");
+	var sqrow = sqstmt.step();
+	document_object("SQLiteRow", sqrow, "class");
+	document_object("SQLiteValue", sqrow[0], "class");
+	sqstmt.close();
+	document_object("SQLiteTable", sqdb.table.t, "class");
+	document_object("SQLiteRecord", sqdb.table.t.row(1), "class");
+	sqdb.close();
+}
 if(js.global.COM != undefined) {
 	var com;
 	if(system.platform=="Win32")
@@ -364,8 +379,11 @@ if(js.global.CryptContext != undefined) {
 	if(cc != undefined)			document_object("CryptContext",cc, "class");
 }
 if(js.global.CryptKeyset != undefined) {
-	var cks = new CryptKeyset(system.temp_dir + "tmpkeyset", CryptKeyset.KEYOPT.CREATE);
-	if(cks != undefined)			document_object("CryptKeyset",cks, "class");
+	try {
+		var cks = new CryptKeyset(system.temp_dir + "tmpkeyset", CryptKeyset.KEYOPT.CREATE);
+		if(cks != undefined)			document_object("CryptKeyset",cks, "class");
+	}
+	catch(e) {}
 }
 if(js.global.CryptCert != undefined) {
 	var ccert = new CryptCert(CryptCert.TYPE.CERTIFICATE);

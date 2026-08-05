@@ -1,0 +1,534 @@
+// Self-tests for ui_popup.  Use a fake "app" that records modal
+// pushes and pops without running drainOnce_ — gives us synchronous
+// observation of popup state transitions without spinning the event
+// loop.
+
+import "ui_widget" for Rect, Container
+import "ui_popup"  for Alert, Confirm, Prompt, LinePrompt, Find, Popup,
+                       PopStatus
+import "ui_help" for Help
+import "menu_ui" for MenuUi, ModalPane, StandaloneChoice
+import "syncterm"  for KeyEvent, Key, Screen
+
+class FakeApp {
+  construct new() {
+    _stack = []
+    _theme = null
+  }
+  modalStack { _stack }
+  effectiveTheme { _theme }
+  markDirty() {}
+  pushModal(w) {
+    w.parent = this
+    _stack.add(w)
+    return w
+  }
+  popModal() {
+    if (_stack.count == 0) return null
+    var w = _stack.removeAt(-1)
+    w.parent = null
+    return w
+  }
+  // Synchronous "modal": push, let caller drive handle() directly,
+  // pop is widget-driven.  Returns the widget so tests can inspect it.
+  modal(w) {
+    pushModal(w)
+    return w
+  }
+}
+
+class EscapeFakeApp is FakeApp {
+  construct new() {
+    super()
+    _last = null
+  }
+
+  last { _last }
+
+  modal(w) {
+    _last = w
+    pushModal(w)
+    w.handle(KeyEvent.new(Key.escape))
+    return w
+  }
+}
+
+class CommandFakeApp is FakeApp {
+  construct new(key, selected) {
+    super()
+    _key = key
+    _selected = selected
+  }
+
+  modal(w) {
+    pushModal(w)
+    w.children[0].selected = _selected
+    var event = KeyEvent.new(_key)
+    w.handle(event)
+    return w
+  }
+}
+
+class UiPopupTest {
+  static run() {
+    __pass = 0
+    __fail = 0
+    System.print("=== ui_popup self-test starting ===")
+
+    testSemanticFrameKinds_()
+    testCenteredFramesAvoidMenuChrome_()
+    testAlertConstruction_()
+    testAlertTitledConstruction_()
+    testAlertTitledSizingAvoidsCloseButton_()
+    testAlertShowCarriesHelp_()
+    testAlertEscDismisses_()
+    testConfirmYes_()
+    testConfirmNo_()
+    testConfirmEnterIsYes_()
+    testConfirmEscIsNo_()
+    testConfirmShowCarriesHelp_()
+    testConfirmUnrecognizedKeyDoesNotDismiss_()
+    testPromptConstruction_()
+    testPromptLongInitialShowsEnd_()
+    testPromptSizesForInput_()
+    testPromptEnterReturnsValue_()
+    testPromptEscReturnsNull_()
+    testPromptForwardsTypingToInput_()
+    testPromptMovementPreservesInitial_()
+    testLinePromptLayout_()
+    testLinePromptEnterReturnsValue_()
+    testLinePromptEscReturnsNull_()
+    testFindReplacesPreviousQuery_()
+    testMenuChoiceEscReturnsNull_()
+    testMenuChoiceCarriesHelp_()
+    testMenuChoiceCarriesKeyHints_()
+    testMenuChoiceRunsCallbackBeforeDismiss_()
+    testMenuCommandChoiceReturnsCommandAndRow_()
+    testMenuCommandChoiceUsesCompactInsertDeleteHints_()
+    testMenuCommandChoicePreemptsTypeahead_()
+    testMenuCommandChoiceProtectsBlankRow_()
+    testMenuCommandChoiceCompatibilityAliases_()
+    testMenuPromptCarriesHelp_()
+    testMenuPromptAvoidsDuplicateTitle_()
+    testMenuPromptKeepsMinimumWidth_()
+    testMenuPromptUsesFieldLength_()
+    testStandaloneChoiceEscReturnsNull_()
+    testModalPaneEscDismisses_()
+
+    var total = __pass + __fail
+    System.print("=== ui_popup: %(total) tests, %(__pass) pass, %(__fail) fail ===")
+    return [__pass, __fail]
+  }
+
+  static check_(ok, label) {
+    if (ok) {
+      __pass = __pass + 1
+    } else {
+      __fail = __fail + 1
+      System.print("  FAIL %(label)")
+    }
+  }
+
+  // ----- Alert ----------------------------------------------------
+
+  static testSemanticFrameKinds_() {
+    var alert = Alert.new("hi")
+    var find = Find.new("Find", "")
+    var choice = StandaloneChoice.new("", ["One"])
+    var help = Help.new("Help", "Body")
+    var status = PopStatus.new("Working")
+    check_(alert.frameKind == "control" && find.frameKind == "control" &&
+           choice.frameKind == "control" && help.frameKind == "display" &&
+           status.frameKind == "display",
+           "Popup frame kinds follow control/display semantics")
+  }
+
+  static clearsMenuChrome_(bounds) {
+    var height = Screen.size[1]
+    return bounds.y >= 2 && bounds.bottom + 1 <= height - 2
+  }
+
+  static testCenteredFramesAvoidMenuChrome_() {
+    var status = PopStatus.centeredBounds_("Working")
+    var popup = Popup.centeredBounds_("Tall", Screen.size[1], 24)
+    var help = Help.centeredBounds_()
+    var line = LinePrompt.new("Name", "")
+    line.sizeForInput(20)
+    var find = Find.centeredBounds_("Find")
+
+    var app = FakeApp.new()
+    var rows = []
+    for (i in 0...Screen.size[1]) rows.add("Row %(i)")
+    MenuUi.commandChoice(app, "Tall Choice", rows, null, null, {})
+    var choice = app.modalStack[-1].bounds
+
+    check_(clearsMenuChrome_(status) && clearsMenuChrome_(popup) &&
+           clearsMenuChrome_(help) && clearsMenuChrome_(line.bounds) &&
+           clearsMenuChrome_(find) && clearsMenuChrome_(choice),
+           "Centered shadowed frames preserve title and footer rows")
+  }
+
+  static testAlertConstruction_() {
+    var a = Alert.new("hi")
+    check_(a.message == "hi" && a.title == "Alert" && a.result == null,
+           "Alert: message + title + null result on construct")
+  }
+
+  static testAlertTitledConstruction_() {
+    var a = Alert.new("Notice", "hi")
+    check_(a.message == "hi" && a.title == "Notice" && a.result == null,
+           "Alert: explicit title on construct")
+  }
+
+  static testAlertTitledSizingAvoidsCloseButton_() {
+    var app = FakeApp.new()
+    var title = "Travel and Sensor Scan"
+    Alert.show(app, title, "Ready")
+    var alert = app.modalStack[-1]
+    var start = ((alert.bounds.w - title.count - 4) / 2).floor
+    check_(alert.bounds.w >= title.count + 12 && start >= 4,
+           "Alert: explicit title remains clear of the close button")
+  }
+
+  static testAlertShowCarriesHelp_() {
+    var app = FakeApp.new()
+    Alert.show(app, "Notice", "hi", "# Notice Help")
+    check_(app.modalStack[-1].helpText == "# Notice Help",
+           "Alert: optional help reaches the popup")
+  }
+
+  static testAlertEscDismisses_() {
+    // Alert dismisses on Esc directly, or via Enter / Space / mouse
+    // click on the OK button (handled by Container's focus dispatch
+    // to the focused Button child).  Random printable keys fall
+    // through and don't dismiss — the OK button is meant to feel like
+    // an actual confirmation step, not a "press any key" trap.
+    var app = FakeApp.new()
+    var a   = Alert.new("hi")
+    a.bounds = Rect.new(1, 1, 20, 5)
+    app.modal(a)
+    check_(app.modalStack.count == 1, "Alert: pushed onto modal stack")
+    a.handle(KeyEvent.new(0x41))                // 'A' — falls through
+    check_(app.modalStack.count == 1,
+           "Alert: random key does not dismiss")
+    a.handle(KeyEvent.new(Key.escape))
+    check_(app.modalStack.count == 0,
+           "Alert: Esc pops the modal")
+  }
+
+  // ----- Confirm --------------------------------------------------
+
+  static testConfirmYes_() {
+    var app = FakeApp.new()
+    var c   = Confirm.new("Delete?")
+    c.bounds = Rect.new(1, 1, 20, 5)
+    app.modal(c)
+    c.handle(KeyEvent.new(0x59))   // 'Y'
+    check_(c.result == true && app.modalStack.count == 0,
+           "Confirm: Y → result true, dismissed")
+  }
+
+  static testConfirmNo_() {
+    var app = FakeApp.new()
+    var c   = Confirm.new("Delete?")
+    c.bounds = Rect.new(1, 1, 20, 5)
+    app.modal(c)
+    c.handle(KeyEvent.new(0x6E))   // 'n' lowercase
+    check_(c.result == false && app.modalStack.count == 0,
+           "Confirm: n → result false, dismissed")
+  }
+
+  static testConfirmEnterIsYes_() {
+    var app = FakeApp.new()
+    var c   = Confirm.new("Delete?")
+    c.bounds = Rect.new(1, 1, 20, 5)
+    app.modal(c)
+    c.handle(KeyEvent.new(Key.enter))
+    check_(c.result == true,
+           "Confirm: Enter → result true")
+  }
+
+  static testConfirmEscIsNo_() {
+    var app = FakeApp.new()
+    var c   = Confirm.new("Delete?")
+    c.bounds = Rect.new(1, 1, 20, 5)
+    app.modal(c)
+    c.handle(KeyEvent.new(Key.escape))
+    check_(c.result == false,
+           "Confirm: Esc → result false")
+  }
+
+  static testConfirmShowCarriesHelp_() {
+    var app = FakeApp.new()
+    Confirm.show(app, "Delete?", "# Delete Help")
+    check_(app.modalStack[-1].helpText == "# Delete Help",
+           "Confirm: optional help reaches the popup")
+  }
+
+  static testConfirmUnrecognizedKeyDoesNotDismiss_() {
+    var app = FakeApp.new()
+    var c   = Confirm.new("Delete?")
+    c.bounds = Rect.new(1, 1, 20, 5)
+    app.modal(c)
+    c.handle(KeyEvent.new(0x41))   // 'A'
+    check_(app.modalStack.count == 1 && c.result == null,
+           "Confirm: unrecognized key doesn't dismiss")
+  }
+
+  // ----- Prompt ---------------------------------------------------
+
+  static testPromptConstruction_() {
+    var p = Prompt.new("Name?", "default")
+    p.bounds = Rect.new(1, 1, 30, 6)
+    check_(p.message == "Name?" && p.title == "Prompt" &&
+           p.result == null && p.input.allSelected,
+           "Prompt: initial value starts selected")
+  }
+
+  static testPromptLongInitialShowsEnd_() {
+    var p = Prompt.new("URI", "https://example.com/a/long/web-list/path")
+    p.bounds = Rect.new(1, 1, 24, 7)
+    var input = p.input
+    var cursor = input.cursorPos
+    var expected = input.count - input.bounds.w + 1
+    check_(input.scrollOff == expected && cursor[0] == input.bounds.right,
+           "Prompt: long initial value shows its end and cursor")
+  }
+
+  static testPromptSizesForInput_() {
+    var p = Prompt.new("URI", "")
+    p.title = "Web List URI"
+    p.sizeForInput(1024, 34)
+    var size = Screen.size
+    check_(p.bounds.w == size[0] - 4 && p.bounds.right + 2 <= size[0] &&
+           p.input.bounds.w == p.bounds.w - 4,
+           "Prompt.sizeForInput: long fields use available screen width")
+  }
+
+  static testPromptEnterReturnsValue_() {
+    var app = FakeApp.new()
+    var p   = Prompt.new("Name?", "abc")
+    p.bounds = Rect.new(1, 1, 30, 6)
+    app.modal(p)
+    p.handle(KeyEvent.new(Key.enter))
+    check_(p.result == "abc" && app.modalStack.count == 0,
+           "Prompt: Enter → result is input.value, dismissed")
+  }
+
+  static testPromptEscReturnsNull_() {
+    var app = FakeApp.new()
+    var p   = Prompt.new("Name?", "abc")
+    p.bounds = Rect.new(1, 1, 30, 6)
+    app.modal(p)
+    p.handle(KeyEvent.new(Key.escape))
+    check_(p.result == null && app.modalStack.count == 0,
+           "Prompt: Esc → result null, dismissed")
+  }
+
+  static testPromptForwardsTypingToInput_() {
+    var app = FakeApp.new()
+    var p   = Prompt.new("Name?", "ab")
+    p.bounds = Rect.new(1, 1, 30, 6)
+    app.modal(p)
+    p.handle(KeyEvent.new(0x43))      // 'C'
+    p.handle(KeyEvent.new(Key.enter))
+    check_(p.result == "C",
+           "Prompt: typing replaces the selected initial value")
+  }
+
+  static testPromptMovementPreservesInitial_() {
+    var app = FakeApp.new()
+    var p = Prompt.new("Name?", "ab")
+    p.bounds = Rect.new(1, 1, 30, 6)
+    app.modal(p)
+    p.handle(KeyEvent.new(Key.left))
+    p.handle(KeyEvent.new(0x43))
+    p.handle(KeyEvent.new(Key.enter))
+    check_(p.result == "aCb",
+           "Prompt: cursor movement preserves initial value")
+  }
+
+  static testLinePromptLayout_() {
+    var p = LinePrompt.new("Name", "abc")
+    p.sizeForInput(20, 34)
+    check_(p.bounds.h == 3 && p.children.count == 1 &&
+           p.input.bounds.y == p.bounds.y + 1 &&
+           p.input.bounds.x == p.bounds.x + 8,
+           "LinePrompt: label and input share the only interior row")
+  }
+
+  static testLinePromptEnterReturnsValue_() {
+    var app = FakeApp.new()
+    var p = LinePrompt.new("Name", "abc")
+    p.sizeForInput(20)
+    app.modal(p)
+    p.handle(KeyEvent.new(Key.enter))
+    check_(p.result == "abc" && app.modalStack.count == 0,
+           "LinePrompt: Enter returns input.value")
+  }
+
+  static testLinePromptEscReturnsNull_() {
+    var app = FakeApp.new()
+    var p = LinePrompt.new("Name", "abc")
+    p.sizeForInput(20)
+    app.modal(p)
+    p.handle(KeyEvent.new(Key.escape))
+    check_(p.result == null && app.modalStack.count == 0,
+           "LinePrompt: Esc cancels")
+  }
+
+  static testFindReplacesPreviousQuery_() {
+    var app = FakeApp.new()
+    var p = Find.new("Find", "previous")
+    p.bounds = Rect.new(1, 1, 30, 3)
+    app.modal(p)
+    p.handle(KeyEvent.new(0x4E))
+    p.handle(KeyEvent.new(Key.enter))
+    check_(p.result == "N",
+           "Find: typing replaces the previous query")
+  }
+
+  static testMenuChoiceEscReturnsNull_() {
+    var app = EscapeFakeApp.new()
+    var result = MenuUi.choice(app, "Choice", ["One", "Two"], 0)
+    check_(result == null && app.modalStack.count == 0,
+           "MenuUi.choice: Esc returns null and dismisses")
+  }
+
+  static testMenuChoiceCarriesHelp_() {
+    var app = EscapeFakeApp.new()
+    MenuUi.choice(app, "Choice", ["One", "Two"], 0, "# Choice Help")
+    check_(app.last.helpText == "# Choice Help",
+           "MenuUi.choice: optional help reaches the modal pane")
+  }
+
+  static testMenuChoiceCarriesKeyHints_() {
+    var app = EscapeFakeApp.new()
+    MenuUi.choice(app, "Choice", ["One", "Two"], 0, "# Choice Help")
+    var hints = app.last.keyHints
+    check_(hints.count == 3 && hints[0][0] == "F1" &&
+           hints[1][0] == "Enter" && hints[2][0] == "Esc",
+           "MenuUi.choice: modal pane describes its direct commands")
+  }
+
+  static testMenuChoiceRunsCallbackBeforeDismiss_() {
+    var app = CommandFakeApp.new(Key.enter, 1)
+    var resident = false
+    var result = MenuUi.choice(app, "Choice", ["One", "Two"], 0, null,
+        Fn.new {|picked|
+      var child = ModalPane.new(Fn.new {})
+      app.pushModal(child)
+      resident = picked == 1 && app.modalStack.count == 2
+      app.popModal()
+    })
+    check_(resident && result == 1 && app.modalStack.count == 0,
+           "MenuUi.choice: callback runs while parent remains modal")
+  }
+
+  static testMenuCommandChoiceReturnsCommandAndRow_() {
+    var app = CommandFakeApp.new(Key.insert, 1)
+    var commands = {}
+    commands[Key.insert] = ["insert", true]
+    var result = MenuUi.commandChoice(app, "Choice",
+        [[10, "One"], [20, "Two"], [-1, ""]], 10, null,
+        commands)
+    check_(result[0] == "insert" && result[1] == 20,
+           "MenuUi.commandChoice: returns command and mapped row")
+  }
+
+  static testMenuCommandChoiceUsesCompactInsertDeleteHints_() {
+    var app = EscapeFakeApp.new()
+    var commands = {}
+    commands[Key.insert] = ["insert", true]
+    commands[Key.delete] = ["delete", false]
+    MenuUi.commandChoice(app, "Choice", ["One", "Two"], 0, null,
+        commands)
+    var hints = app.last.keyHints
+    check_(hints.count == 4 && hints[1][0] == "INS" &&
+           hints[1][1] == "Add" && hints[2][0] == "DEL" &&
+           hints[2][1] == "Delete",
+           "MenuUi.commandChoice: Insert/Delete use compact hints")
+  }
+
+  static testMenuCommandChoicePreemptsTypeahead_() {
+    var app = CommandFakeApp.new(0x5B, 0)
+    var commands = {}
+    commands[0x5B] = ["previous", true]
+    var result = MenuUi.commandChoice(app, "Choice",
+        ["One", "Two"], 0, null, commands)
+    check_(result[0] == "previous" && result[1] == 0,
+           "MenuUi.commandChoice: printable command preempts typeahead")
+  }
+
+  static testMenuCommandChoiceProtectsBlankRow_() {
+    var app = CommandFakeApp.new(Key.delete, 2)
+    var commands = {}
+    commands[Key.delete] = ["delete", false]
+    var result = MenuUi.commandChoice(app, "Choice",
+        [[10, "One"], [20, "Two"], [-1, ""]], 10, null,
+        commands)
+    check_(result == null && app.modalStack.count == 1,
+           "MenuUi.commandChoice: disallowed command leaves blank row open")
+    app.popModal()
+  }
+
+  static testMenuCommandChoiceCompatibilityAliases_() {
+    var app = CommandFakeApp.new(0x2B, 1)
+    var commands = {}
+    commands[Key.insert] = ["insert", true]
+    var result = MenuUi.commandChoice(app, "Choice",
+        ["One", "Two"], 0, null, commands)
+    check_(result[0] == "insert" && result[1] == 1,
+           "MenuUi.commandChoice: + aliases Insert")
+  }
+
+  static testMenuPromptCarriesHelp_() {
+    var app = EscapeFakeApp.new()
+    MenuUi.prompt(app, "Name", "Name", "", 20, false, "# Name Help")
+    check_(app.last.helpText == "# Name Help",
+           "MenuUi.prompt: optional help reaches the prompt")
+  }
+
+  static testMenuPromptAvoidsDuplicateTitle_() {
+    var app = EscapeFakeApp.new()
+    MenuUi.prompt(app, "Name", "Name", "", 20, false)
+    check_(app.last is LinePrompt && app.last.title == null,
+           "MenuUi.prompt: repeated field label is not drawn as a title")
+  }
+
+  static testMenuPromptKeepsMinimumWidth_() {
+    var app = EscapeFakeApp.new()
+    MenuUi.prompt(app, "Name", "Name", "", 20, false)
+    var expected = 34.min((Screen.size[0] - 4).max(1))
+    check_(app.last.bounds.w == expected,
+           "MenuUi.prompt: short fields retain the standard minimum width")
+  }
+
+  static testMenuPromptUsesFieldLength_() {
+    var app = EscapeFakeApp.new()
+    MenuUi.prompt(app, "Web List URI", "URI", "", 1024, false)
+    check_(app.last.bounds.w == Screen.size[0] - 4,
+           "MenuUi.prompt: maxLen determines the available field width")
+  }
+
+  static testStandaloneChoiceEscReturnsNull_() {
+    var app = FakeApp.new()
+    var popup = StandaloneChoice.new("", ["One", "Two"])
+    popup.bounds = Rect.new(1, 1, 24, 7)
+    app.pushModal(popup)
+    var consumed = popup.handle(KeyEvent.new(Key.escape))
+    check_(consumed && popup.result == null && app.modalStack.count == 0,
+           "StandaloneChoice: Esc returns null and dismisses")
+  }
+
+  static testModalPaneEscDismisses_() {
+    var app = FakeApp.new()
+    var pane = ModalPane.new(Fn.new { app.popModal() })
+    pane.bounds = Rect.new(1, 1, 24, 7)
+    app.pushModal(pane)
+    var consumed = pane.handle(KeyEvent.new(Key.escape))
+    check_(pane.shadow && consumed && app.modalStack.count == 0,
+           "ModalPane: casts a shadow and Esc invokes dismissal callback")
+  }
+
+}

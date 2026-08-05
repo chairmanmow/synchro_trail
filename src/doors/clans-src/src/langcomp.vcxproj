@@ -3,10 +3,18 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{665EC4C1-9676-4C46-99AA-0CFD2008BEAD}</ProjectGuid>
   </PropertyGroup>
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+  </PropertyGroup>
   <Import Project="clans.props" />
-  <Import Project="clanslib.props" />
+  <!-- langcomp generates mstrings.h, which clanslib's own sources include, so
+       it cannot link clanslib: it compiles the handful of sources it needs.
+       Same set as LANGCOMP_OBJS in GNUmakefile, and for the same reason. -->
   <ItemGroup>
     <ClCompile Include="langcomp.c" />
+    <ClCompile Include="platform.c" />
+    <ClCompile Include="serialize.c" />
+    <ClCompile Include="u8cp437.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="defines.h" />
@@ -20,14 +28,14 @@
     <ClInclude Include="win_wrappers.h" />
   </ItemGroup>
   <ItemGroup>
-    <UpToDateCheckInput Include="..\data\strings.txt" />
+    <UpToDateCheckInput Include="..\data\strings.u8.txt" />
     <UpToDateCheckOutput Include="mstrings.h" />
     <UpToDateCheckOutput Include="..\data\strings.xl" />
   </ItemGroup>
   <Target Name="GenerateMstrings" AfterTargets="Build"
-          Inputs="$(TargetPath);..\data\strings.txt"
+          Inputs="$(TargetPath);..\data\strings.u8.txt"
           Outputs="mstrings.h;..\data\strings.xl">
-    <Message Text="Generating mstrings.h from strings.txt" Importance="High" />
-    <Exec Command="&quot;$(TargetPath)&quot; &quot;..\data\strings.txt&quot; &quot;..\data\strings.xl&quot; mstrings.h" />
+    <Message Text="Generating mstrings.h from strings.u8.txt" Importance="High" />
+    <Exec Command="&quot;$(TargetPath)&quot; &quot;..\data\strings.u8.txt&quot; &quot;..\data\strings.xl&quot; mstrings.h" />
   </Target>
 </Project>

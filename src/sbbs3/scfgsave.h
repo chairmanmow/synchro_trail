@@ -35,6 +35,8 @@ DLLEXPORT bool      write_file_cfg(scfg_t*);
 DLLEXPORT bool      write_chat_cfg(scfg_t*);
 DLLEXPORT bool      write_xtrn_cfg(scfg_t*);
 DLLEXPORT void      refresh_cfg(scfg_t*);
+str_list_t sub_ini_section(scfg_t*, sub_t*, const char* name);
+str_list_t dir_ini_section(scfg_t*, dir_t*, const char* name);
 
 #ifdef __cplusplus
 }

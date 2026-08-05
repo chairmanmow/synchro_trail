@@ -2,10 +2,6 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
-#ifndef WITHOUT_CRYPTLIB
-#include <cryptlib.h>
-#endif
-
 #include "bbslist.h"
 #include "conn.h"
 #include "datewrap.h"
@@ -14,9 +10,12 @@
 #include "stdio.h"
 #include "syncterm.h"
 #include "webget.h"
+#ifndef WITHOUT_CRYPTO
+#include "xp_tls.h"
+#endif
 #include "xpprintf.h"
 
-#define MAX_LIST_SIZE (16 * 1024 * 1024)
+#define MAX_WEBGET_SIZE (16 * 1024 * 1024)
 
 struct http_cache_info {
 	char *etag;
@@ -40,8 +39,8 @@ struct http_session {
 	struct bbslist hacky_list_entry;
 	struct http_cache_info cache;
 	SOCKET sock;
-#ifndef WITHOUT_CRYPTLIB
-	CRYPT_SESSION tls;
+#ifndef WITHOUT_CRYPTO
+	xp_tls_t tls;
 #endif
 	bool is_tls;
 	bool is_chunked;
@@ -150,28 +149,35 @@ set_msgf(struct webget_request *req, const char *newmsgf, ...)
 static ssize_t
 recv_nbytes(struct http_session *sess, uint8_t *buf, const size_t chunk_size, bool *eof)
 {
-	ssize_t received = 0;
+	/* `received` is always non-negative and bounded by chunk_size, so
+	 * it's naturally size_t. The function's ssize_t return type exists
+	 * only for the separate `return -1` at the error_return label
+	 * below — errors never flow through `received` itself. */
+	size_t received = 0;
 
 	// coverity[tainted_data_argument:SUPPRESS]
 	while (received < chunk_size) {
 		ssize_t rc;
+#ifndef WITHOUT_CRYPTO
 		if (sess->is_tls) {
-#ifdef WITHOUT_CRYPTLIB
-			goto error_return;
-#else
-			int copied = 0;
-			int status = cryptPopData(sess->tls, &buf[received], chunk_size - received, &copied);
-			if (status == CRYPT_ERROR_COMPLETE) {
-				// We're done here...
-			}
-			else if (cryptStatusError(status)) {
-				set_msgf(sess->req, "Error %d Popping Data", status);
+			size_t copied = 0;
+			int status = xp_tls_pop(sess->tls, &buf[received], chunk_size - received, &copied);
+			if (status == XP_TLS_ERR) {
+				set_msgf(sess->req, "TLS read error: %s", xp_tls_errstr(sess->tls));
 				goto error_return;
 			}
-			rc = copied;
-#endif
+			if (status == XP_TLS_TIMEOUT && copied == 0) {
+				/* No data this pass; loop without hitting the rc==0
+				   EOF branch below. */
+				continue;
+			}
+			/* XP_TLS_OK, XP_TLS_TIMEOUT with partial, or XP_TLS_ERR_CLOSED
+			   → let rc==0 mean EOF per the non-TLS path semantics. */
+			rc = (ssize_t)copied;
 		}
-		else {
+		else
+#endif
+		{
 			if (!socket_readable(sess->sock, 5000)) {
 				set_msg(sess->req, "Socket Unreadable");
 				goto error_return;
@@ -197,7 +203,7 @@ recv_nbytes(struct http_session *sess, uint8_t *buf, const size_t chunk_size, bo
 		assert_pthread_mutex_unlock(&sess->req->mtx);
 	}
 
-	return received;
+	return (ssize_t)received;
 error_return:
 	if (eof)
 		*eof = false;
@@ -216,11 +222,10 @@ close_socket(struct http_session *sess)
 static void
 free_session(struct http_session *sess)
 {
-#ifndef WITHOUT_CRYPTLIB
-	if (sess->is_tls && sess->tls != -1) {
-		cryptSetAttribute(sess->tls, CRYPT_SESSINFO_ACTIVE, 0);
-		cryptDestroySession(sess->tls);
-		sess->tls = -1;
+#ifndef WITHOUT_CRYPTO
+	if (sess->is_tls && sess->tls != NULL) {
+		xp_tls_close(sess->tls, /*close_socket=*/false);
+		sess->tls = NULL;
 	}
 #endif
 	close_socket(sess);
@@ -241,6 +246,8 @@ gen_inm_header(struct http_session *sess)
 		return NULL;
 	char *ret;
 	int len = asprintf(&ret, "If-None-Match: \"%s\"\r\n", sess->cache.etag);
+	if (len == -1)
+		ret = NULL;
 	if (len < 1) {
 		free(ret);
 		return NULL;
@@ -263,6 +270,8 @@ gen_ims_header(struct http_session *sess)
 	char *ret;
 	int len = asprintf(&ret, "If-Modified-Since: %s, %02d %s %04d %02d:%02d:%02d GMT\r\n",
 	    days[tm.tm_wday], tm.tm_mday, months[tm.tm_mon], tm.tm_year + 1900, tm.tm_hour, tm.tm_min, tm.tm_sec);
+	if (len == -1)
+		ret = NULL;
 	if (len < 1) {
 		free(ret);
 		return NULL;
@@ -284,6 +293,8 @@ send_request(struct http_session *sess)
 	    "User-Agent: %s\r\n"
 	    "Connection: close\r\n"
 	    "\r\n", sess->path, sess->hostname, inm ? inm : "", ims ? ims : "", syncterm_version);
+	if (len == -1)
+		reqstr = NULL;
 	free(inm);
 	free(ims);
 	if (len == -1) {
@@ -293,24 +304,20 @@ send_request(struct http_session *sess)
 	}
 	sess->cache.request_time = time(NULL);
 	ssize_t sent;
+#ifndef WITHOUT_CRYPTO
 	if (sess->is_tls) {
-#ifdef WITHOUT_CRYPTLIB
-		return false;
-#else
-		int copied;
-		int ret = cryptPushData(sess->tls, reqstr, len, &copied);
-		if (cryptStatusError(ret)) {
+		size_t copied;
+		int ret = xp_tls_push(sess->tls, reqstr, len, &copied);
+		if (ret < 0)
 			sent = -1;
-		}
 		else
-			sent = copied;
-		ret = cryptFlushData(sess->tls);
-		if (cryptStatusError(ret)) {
+			sent = (ssize_t)copied;
+		if (xp_tls_flush(sess->tls) < 0)
 			sent = -1;
-		}
-#endif
 	}
-	else {
+	else
+#endif
+	{
 		sent = send(sess->sock, reqstr, len, 0);
 		shutdown(sess->sock, SHUT_WR);
 	}
@@ -589,8 +596,12 @@ parse_cache_control(struct http_session *sess, const char *val)
 		// The sep check is for Coverity...
 		if (sz == 7 && strnicmp(val, "max-age=", 8) == 0 && sep) {
 			long long ll;
+			/* HTTP max-age is delta-seconds (integer). Stored as double
+			 * because the cache-freshness math below uses difftime().
+			 * Explicit cast documents the narrowing; realistic values
+			 * fit double's 53-bit mantissa. */
 			if (paranoid_strtoll(&sep[0], NULL, 10, &ll))
-				sess->cache.max_age = ll;
+				sess->cache.max_age = (double)ll;
 		}
 		if (sz == 8 && sep == NULL && strnicmp(val, "no-cache", 8) == 0) {
 			sess->cache.no_cache = true;
@@ -681,8 +692,9 @@ parse_headers(struct http_session *sess)
 		else if(strnicmp(line, "age:", 4) == 0) {
 			if (sess->cache.age == 0) {
 				long long ll;
+				/* See max_age: stored as double for difftime math. */
 				if (paranoid_strtoll(&line[4], NULL, 10, &ll))
-					sess->cache.age = ll;
+					sess->cache.age = (double)ll;
 			}
 		}
 		else if(strnicmp(line, "cache-control:", 14) == 0) {
@@ -692,13 +704,15 @@ parse_headers(struct http_session *sess)
 		else if(strnicmp(line, "content-length:", 15) == 0) {
 			long long ll;
 			if (paranoid_strtoll(&line[15], NULL, 10, &ll)) {
-				if (ll > MAX_LIST_SIZE) {
+				if (ll > MAX_WEBGET_SIZE) {
 					set_msgf(sess->req, "Content Too Large (%lld)", ll);
 					goto error_return;
 				}
 				sess->got_size = true;
 				assert_pthread_mutex_lock(&sess->req->mtx);
-				sess->req->remote_size = ll;
+				/* Clamped above to <= MAX_WEBGET_SIZE (16 MB) which fits
+				 * size_t on every supported platform. */
+				sess->req->remote_size = (size_t)ll;
 				assert_pthread_mutex_unlock(&sess->req->mtx);
 			}
 		}
@@ -747,7 +761,11 @@ parse_uri(struct http_session *sess)
 		goto error_return;
 	}
 	if (sess->req->uri[4] == 's') {
-#ifndef WITHOUT_CRYPTLIB
+#ifdef WITHOUT_CRYPTO
+		set_msg_locked(sess->req, "https:// requires crypto support (built without)");
+		assert_pthread_mutex_unlock(&sess->req->mtx);
+		goto error_return;
+#else
 		p = &sess->req->uri[5];
 		sess->is_tls = true;
 		sess->hacky_list_entry.port = 443;
@@ -757,11 +775,7 @@ parse_uri(struct http_session *sess)
 		p = &sess->req->uri[4];
 	}
 	if (memcmp(p, "://", 3)) {
-#ifdef WITHOUT_CRYPTLIB
-		set_msg_locked(sess->req, "URI is not http://");
-#else
 		set_msg_locked(sess->req, "URI is not http[s]://");
-#endif
 		assert_pthread_mutex_unlock(&sess->req->mtx);
 		goto error_return;
 	}
@@ -772,8 +786,7 @@ parse_uri(struct http_session *sess)
 		assert_pthread_mutex_unlock(&sess->req->mtx);
 		goto error_return;
 	}
-	size_t copied = strlcpy(sess->hacky_list_entry.name, sess->req->name, sizeof(sess->hacky_list_entry.name));
-	assert(copied <= LIST_NAME_MAX);
+	strlcpy(sess->hacky_list_entry.name, sess->req->name, sizeof(sess->hacky_list_entry.name));
 	assert_pthread_mutex_unlock(&sess->req->mtx);
 	char *slash = strchr(sess->hostname, '/');
 	if (slash == NULL) {
@@ -786,7 +799,7 @@ parse_uri(struct http_session *sess)
 		set_msg_locked(sess->req, "Hostname Too Long");
 		goto error_return;
 	}
-	copied = strlcpy(sess->hacky_list_entry.addr, sess->hostname, sizeof(sess->hacky_list_entry.addr));
+	size_t copied = strlcpy(sess->hacky_list_entry.addr, sess->hostname, sizeof(sess->hacky_list_entry.addr));
 	assert(copied <= LIST_ADDR_MAX);
 	return true;
 
@@ -799,7 +812,9 @@ open_cacheinfo(struct http_session *sess)
 {
 	char *path = NULL;
 
-	int len = asprintf(&path, "%s/%s.cacheinfo", sess->req->cache_root, sess->req->name);
+	int len = asprintf(&path, "%s/%s.cacheinfo", sess->req->cache_root, sess->req->cache_key);
+	if (len == -1)
+		path = NULL;
 	if (len < 0) {
 		set_msg(sess->req, "asprintf() failure");
 		goto error_return;
@@ -947,7 +962,7 @@ read_chunked(struct http_session *sess, FILE *out)
 		if (chunk_size == 0)
 			break;
 		total += chunk_size;
-		if (total > MAX_LIST_SIZE)  {
+		if (total > MAX_WEBGET_SIZE)  {
 			set_msg(sess->req, "Total Size Too Large");
 			goto error_return;
 		}
@@ -1024,7 +1039,7 @@ read_body(struct http_session *sess, FILE *out)
 			if (eof)
 				break;
 			received += rb;
-			if (received >= MAX_LIST_SIZE) {
+			if (received >= MAX_WEBGET_SIZE) {
 				set_msg(sess->req, "Total Size Too Large");
 				goto error_return;
 			}
@@ -1039,44 +1054,26 @@ error_return:
 	return false;
 }
 
+#ifndef WITHOUT_CRYPTO
 static bool
 tls_setup(struct http_session *sess)
 {
-#ifndef WITHOUT_CRYPTLIB
-	int status;
-	status = cryptCreateSession(&sess->tls, CRYPT_UNUSED, CRYPT_SESSION_SSL);
-	if (cryptStatusError(status)) {
-		set_msgf(sess->req, "Unable To Create Session (%d)", status);
-		goto error_return;
-	}
 	int off = 1;
 	if (setsockopt(sess->sock, IPPROTO_TCP, TCP_NODELAY, (char *)&off, sizeof(off)) == -1) {
 		set_msgf(sess->req, "setsockopt() failed (%d)", SOCKET_ERRNO);
-		goto error_return;
+		return false;
 	}
-	status = cryptSetAttribute(sess->tls, CRYPT_SESSINFO_NETWORKSOCKET, sess->sock);
-	if (cryptStatusError(status)) {
-		set_msgf(sess->req, "Unable To Set Socket (%d)", status);
-		goto error_return;
-	}
-	cryptSetAttribute(sess->tls, CRYPT_OPTION_NET_READTIMEOUT, 5);
-	cryptSetAttributeString(sess->tls, CRYPT_SESSINFO_SERVER_NAME, sess->hostname, strlen(sess->hostname));
-	status = cryptSetAttribute(sess->tls, CRYPT_SESSINFO_ACTIVE, 1);
-	if (cryptStatusError(status)) {
-		set_msgf(sess->req, "Unable To Activate Session (%d)", status);
-		goto error_return;
-	}
-	status = cryptSetAttribute(sess->tls, CRYPT_PROPERTY_OWNER, CRYPT_UNUSED);
-	if (cryptStatusError(status)) {
-		set_msgf(sess->req, "Unable Clear Ownership (%d)", status);
-		goto error_return;
+	/* 5-second read timeout matches the Cryptlib-era behaviour; the
+	   consumer's recv loop treats timeout as "try again" (per
+	   XP_TLS_TIMEOUT). */
+	sess->tls = xp_tls_client_open(sess->sock, sess->hostname, 5);
+	if (sess->tls == NULL) {
+		set_msgf(sess->req, "Unable to open TLS session: %s", xp_tls_last_err());
+		return false;
 	}
 	return true;
-
-error_return:
-#endif
-	return false;
 }
+#endif
 
 static bool
 do_request(struct http_session *sess)
@@ -1095,11 +1092,13 @@ do_request(struct http_session *sess)
 		set_msg(sess->req, "Connection Failed");
 		goto error_return;
 	}
+#ifndef WITHOUT_CRYPTO
 	if (sess->is_tls) {
 		set_state(sess->req, "TLS Setup");
 		if (!tls_setup(sess))
 			goto error_return;
 	}
+#endif
 	set_state(sess->req, "Requesting");
 	if (!send_request(sess))
 		goto error_return;
@@ -1109,7 +1108,9 @@ do_request(struct http_session *sess)
 	if (sess->not_modified)
 		goto success_return;
 
-	int len = asprintf(&npath, "%s/%s.new", sess->req->cache_root, sess->req->name);
+	int len = asprintf(&npath, "%s/%s.new", sess->req->cache_root, sess->req->cache_key);
+	if (len == -1)
+		npath = NULL;
 	if (len < 1) {
 		set_msg(sess->req, "asprintf(&npath, ...) error");
 		goto error_return;
@@ -1120,12 +1121,14 @@ do_request(struct http_session *sess)
 		goto error_return;
 	}
 	if (!sess->not_modified) {
-		len = asprintf(&path, "%s/%s.lst", sess->req->cache_root, sess->req->name);
+		len = asprintf(&path, "%s/%s", sess->req->cache_root, sess->req->output_name);
+		if (len == -1)
+			path = NULL;
 		if (len < 1) {
 			set_msg(sess->req, "asprintf(&path, ...) error");
 			goto error_return;
 		}
-		set_state(sess->req, "Reading list");
+		set_state(sess->req, "Reading response");
 		if (sess->is_chunked)
 			ret = read_chunked(sess, newfile);
 		else
@@ -1187,7 +1190,11 @@ is_fresh(struct http_session *sess)
 	else
 		freshness_lifetime = 60 * 60 * 24; // One day
 
-	double apparent_age = dmax(0, sess->cache.response_time - date_value);
+	/* difftime() is the portable time_t-to-seconds-as-double conversion;
+	 * direct subtraction would promote to double implicitly but MSVC flags
+	 * the time_t→double narrowing. Use difftime() consistently with the
+	 * other time-math below. */
+	double apparent_age = dmax(0, difftime(sess->cache.response_time, date_value));
 	double response_delay = difftime(sess->cache.response_time, sess->cache.request_time);
 	double corrected_age_value = sess->cache.age + response_delay;
 	double corrected_initial_age = dmax(apparent_age, corrected_age_value);
@@ -1199,7 +1206,9 @@ is_fresh(struct http_session *sess)
 	if (sess->cache.must_revalidate) {
 		// Delete stale file
 		char *path;
-		int len = asprintf(&path, "%s/%s.lst", sess->req->cache_root, sess->req->name);
+		int len = asprintf(&path, "%s/%s", sess->req->cache_root, sess->req->output_name);
+		if (len == -1)
+			path = NULL;
 		if (len > 0) {
 			if (remove(path))
 				fprintf(stderr, "Failed to remove %s from cache\n", path);
@@ -1209,15 +1218,16 @@ is_fresh(struct http_session *sess)
 	return false;
 }
 
-// TODO: Cache
 bool
-iniReadHttp(struct webget_request *req)
+webget_fetch(struct webget_request *req, bool force)
 {
+	if (req == NULL || !req->initialized)
+		return false;
 	struct http_session sess = {
 		.sock = INVALID_SOCKET,
 		.req = req,
-#ifndef WITHOUT_CRYPTLIB
-		.tls = -1,
+#ifndef WITHOUT_CRYPTO
+		.tls = NULL,
 #endif
 		.hacky_list_entry = {
 			.hidepopups = true,
@@ -1226,15 +1236,18 @@ iniReadHttp(struct webget_request *req)
 		},
 	};
 
-	if (req == NULL)
-		goto error_return;
 	set_state(req, "Opening Cache Info");
 	if (!open_cacheinfo(&sess))
 		goto error_return;
 	set_state(req, "Reading Cache Info");
 	if (!parse_cacheinfo(&sess))
 		goto error_return;
-	if (!is_fresh(&sess)) {
+	if (force) {
+		free(sess.cache.etag);
+		sess.cache.etag = NULL;
+		sess.cache.last_modified = 0;
+	}
+	if (force || !is_fresh(&sess)) {
 		if (!do_request(&sess))
 			goto error_return;
 	}
@@ -1250,8 +1263,27 @@ error_return:
 }
 
 bool
-init_webget_req(struct webget_request *req, const char *cache_root, const char *name, const char *uri)
+iniReadHttp(struct webget_request *req)
 {
+	return webget_fetch(req, false);
+}
+
+static bool
+valid_cache_component(const char *value)
+{
+	if (value == NULL || value[0] == 0 || strcmp(value, ".") == 0 || strcmp(value, "..") == 0)
+		return false;
+	return strchr(value, '/') == NULL && strchr(value, '\\') == NULL;
+}
+
+bool
+init_webget_file_req(struct webget_request *req, const char *cache_root, const char *name, const char *uri,
+    const char *cache_key, const char *output_name)
+{
+	if (req == NULL || cache_root == NULL || name == NULL || uri == NULL
+	    || !valid_cache_component(cache_key) || !valid_cache_component(output_name))
+		return false;
+	memset(req, 0, sizeof(*req));
 	if (pthread_mutex_init(&req->mtx, NULL) != 0)
 		return false;
 	req->name = strdup(name);
@@ -1275,43 +1307,65 @@ init_webget_req(struct webget_request *req, const char *cache_root, const char *
 		pthread_mutex_destroy(&req->mtx);
 		return false;
 	}
+	req->cache_key = strdup(cache_key);
+	if (req->cache_key == NULL)
+		goto allocation_failure;
+	req->output_name = strdup(output_name);
+	if (req->output_name == NULL)
+		goto allocation_failure;
 	req->state = NULL;
 	req->msg = NULL;
 	req->remote_size = 0;
 	req->received_size = 0;
+	req->initialized = true;
 	return true;
+
+allocation_failure:
+	free((void *)req->cache_key);
+	req->cache_key = NULL;
+	free((void *)req->cache_root);
+	req->cache_root = NULL;
+	free((void *)req->uri);
+	req->uri = NULL;
+	free((void *)req->name);
+	req->name = NULL;
+	pthread_mutex_destroy(&req->mtx);
+	return false;
+}
+
+bool
+init_webget_req(struct webget_request *req, const char *cache_root, const char *name, const char *uri)
+{
+	char *output_name = NULL;
+	int len = asprintf(&output_name, "%s.lst", name);
+	if (len < 1) {
+		free(output_name);
+		return false;
+	}
+	bool ret = init_webget_file_req(req, cache_root, name, uri, name, output_name);
+	free(output_name);
+	return ret;
 }
 
 void
 destroy_webget_req(struct webget_request *req)
 {
+	if (req == NULL || !req->initialized)
+		return;
 	free((void *)req->name);
 	req->name = NULL;
 	free((void *)req->uri);
 	req->uri = NULL;
+	free((void *)req->cache_root);
+	req->cache_root = NULL;
+	free((void *)req->cache_key);
+	req->cache_key = NULL;
+	free((void *)req->output_name);
+	req->output_name = NULL;
 	free((void *)req->msg);
 	req->msg = NULL;
 	free((void *)req->state);
 	req->state = NULL;
 	pthread_mutex_destroy(&req->mtx);
+	req->initialized = false;
 }
-
-#if 0
-#include "uifcinit.h"
-
-int
-main(int argc, char **argv)
-{
-	struct webget_request req;
-	uifc.size = sizeof(uifc);
-	init_uifc(true, true);
-	if (init_webget_req(&req, "/tmp", "Synchronet BBS List", "http://synchro.net/syncterm.lst")) {
-		if (iniReadHttp(&req))
-			puts("Success!");
-		else
-			printf("Failure: '%s'\n", req.msg);
-		destroy_webget_req(&req);
-	}
-	return 0;
-}
-#endif

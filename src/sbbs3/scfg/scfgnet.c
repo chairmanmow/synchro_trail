@@ -164,27 +164,33 @@ void mqtt_cfg()
 	while (1) {
 		int i = 0;
 		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Enabled", cfg.mqtt.enabled ? "Yes" : "No");
-		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Broker Address", cfg.mqtt.broker_addr);
-		snprintf(opt[i++], MAX_OPLN, "%-20s%u", "Broker Port", cfg.mqtt.broker_port);
-		snprintf(opt[i++], MAX_OPLN, "%-20s%u seconds", "Keep-alive", cfg.mqtt.keepalive);
-		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Publish Verbosity", cfg.mqtt.verbose ? "High" : "Low");
-		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Publish QOS", mqttQOS[cfg.mqtt.publish_qos]);
-		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Subscribe QOS", mqttQOS[cfg.mqtt.subscribe_qos]);
-		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Log Level", logLevelStringList[cfg.mqtt.log_level]);
-		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "TLS (encryption)", mqttTlsMode[cfg.mqtt.tls.mode]);
-		if (cfg.mqtt.tls.mode != MQTT_TLS_SBBS) {
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Username", cfg.mqtt.username);
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Password", cfg.mqtt.password);
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Protocol Version", mqttVersion[cfg.mqtt.protocol_version - 3]);
-		}
-		if (cfg.mqtt.tls.mode == MQTT_TLS_CERT) {
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "CA Cert", cfg.mqtt.tls.cafile);
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Client Cert", cfg.mqtt.tls.certfile);
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Key File", cfg.mqtt.tls.keyfile);
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Key File Password", cfg.mqtt.tls.keypass);
-		} else if (cfg.mqtt.tls.mode == MQTT_TLS_PSK) {
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Key", cfg.mqtt.tls.psk);
-			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Identity", cfg.mqtt.tls.identity);
+		snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Internal Broker", cfg.mqtt.internal_broker ? "Yes" : "No");
+		if (cfg.mqtt.internal_broker) {
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Broker Address", cfg.mqtt.broker_addr);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%u", "Broker Port", cfg.mqtt.broker_port);
+		} else {
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Broker Address", cfg.mqtt.broker_addr);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%u", "Broker Port", cfg.mqtt.broker_port);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%u seconds", "Keep-alive", cfg.mqtt.keepalive);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Publish Verbosity", cfg.mqtt.verbose ? "High" : "Low");
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Publish QOS", mqttQOS[cfg.mqtt.publish_qos]);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Subscribe QOS", mqttQOS[cfg.mqtt.subscribe_qos]);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Log Level", logLevelStringList[cfg.mqtt.log_level]);
+			snprintf(opt[i++], MAX_OPLN, "%-20s%s", "TLS (encryption)", mqttTlsMode[cfg.mqtt.tls.mode]);
+			if (cfg.mqtt.tls.mode != MQTT_TLS_SBBS) {
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Username", cfg.mqtt.username);
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Password", cfg.mqtt.password);
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Protocol Version", mqttVersion[cfg.mqtt.protocol_version - 3]);
+			}
+			if (cfg.mqtt.tls.mode == MQTT_TLS_CERT) {
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "CA Cert", cfg.mqtt.tls.cafile);
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Client Cert", cfg.mqtt.tls.certfile);
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Key File", cfg.mqtt.tls.keyfile);
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Key File Password", cfg.mqtt.tls.keypass);
+			} else if (cfg.mqtt.tls.mode == MQTT_TLS_PSK) {
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Key", cfg.mqtt.tls.psk);
+				snprintf(opt[i++], MAX_OPLN, "%-20s%s", "Identity", cfg.mqtt.tls.identity);
+			}
 		}
 		opt[i][0] = 0;
 		uifc.helpbuf =
@@ -218,6 +224,54 @@ void mqtt_cfg()
 				cfg.mqtt.enabled = !cfg.mqtt.enabled;
 				break;
 			case 1:
+				cfg.mqtt.internal_broker = !cfg.mqtt.internal_broker;
+				if (cfg.mqtt.internal_broker) {
+					if (cfg.mqtt.broker_addr[0] == '\0')
+						SAFECOPY(cfg.mqtt.broker_addr, "localhost");
+					if (cfg.mqtt.broker_port == IPPORT_MQTT)
+						cfg.mqtt.broker_port = 8883;
+					cfg.mqtt.tls.mode = MQTT_TLS_SBBS;
+					cfg.mqtt.protocol_version = 5;
+				}
+				break;
+		}
+		if (cfg.mqtt.internal_broker) {
+			switch (i) {
+				case 2:
+					uifc.helpbuf =
+						"~ Broker Hostname or IP Address ~\n"
+						"\n"
+						"Enter the hostname or IP address of the MQTT Broker.\n"
+						"\n"
+						"When this matches the local hostname, Synchronet starts the\n"
+						"internal broker and connects in-process. Otherwise, it connects\n"
+						"to the remote broker as a TCP client.\n"
+						"\n"
+						"`localhost` and `127.0.0.1` are always treated as local.\n"
+					;
+					uifc.input(WIN_MID | WIN_SAV, 0, 0, "Broker Hostname or IP Address"
+					           , cfg.mqtt.broker_addr, sizeof(cfg.mqtt.broker_addr) - 1, K_EDIT);
+					break;
+				case 3: {
+					char str[16];
+					SAFEPRINTF(str, "%hu", cfg.mqtt.broker_port);
+					uifc.helpbuf =
+						"~ Broker TCP Port Number ~\n"
+						"\n"
+						"TCP port the internal broker listens on for external MQTT clients.\n"
+						"\n"
+						"Default: `8883`"
+					;
+					if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Broker TCP Port Number"
+					               , str, 5, K_EDIT | K_NUMBER) > 0)
+						cfg.mqtt.broker_port = atoi(str);
+					break;
+				}
+			}
+			continue;
+		}
+		switch (i) {
+			case 2:
 				uifc.helpbuf =
 					"~ Broker Hostname or IP Address ~\n"
 					"\n"
@@ -226,7 +280,7 @@ void mqtt_cfg()
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Broker Hostname or IP Address"
 				           , cfg.mqtt.broker_addr, sizeof(cfg.mqtt.broker_addr) - 1, K_EDIT);
 				break;
-			case 2:
+			case 3:
 				uifc.helpbuf =
 					"~ Broker TCP Port Number ~\n"
 					"\n"
@@ -239,26 +293,26 @@ void mqtt_cfg()
 				               , str, 5, K_EDIT | K_NUMBER) > 0)
 					cfg.mqtt.broker_port = atoi(str);
 				break;
-			case 3:
+			case 4:
 				SAFEPRINTF(str, "%u", cfg.mqtt.keepalive);
 				if (uifc.input(WIN_MID | WIN_SAV, 0, 0, "Seconds to keep inactive connection alive"
 				               , str, 5, K_EDIT | K_NUMBER) > 0 && atoi(str) >= 5)
 					cfg.mqtt.keepalive = atoi(str);
 				break;
-			case 4:
+			case 5:
 				cfg.mqtt.verbose = !cfg.mqtt.verbose;
 				break;
-			case 5:
+			case 6:
 				i = cfg.mqtt.publish_qos;
 				if ((i = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, 0, "Quality of Service for Publishing", mqttQOS)) >= 0)
 					cfg.mqtt.publish_qos = i;
 				break;
-			case 6:
+			case 7:
 				i = cfg.mqtt.subscribe_qos;
 				if ((i = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, 0, "Quality of Service for Subscriptions", mqttQOS)) >= 0)
 					cfg.mqtt.subscribe_qos = i;
 				break;
-			case 7:
+			case 8:
 				uifc.helpbuf =
 					"~ MQTT Log Level ~\n"
 					"\n"
@@ -271,7 +325,7 @@ void mqtt_cfg()
 				if (i >= 0 && i <= LOG_DEBUG)
 					cfg.mqtt.log_level = i;
 				break;
-			case 8:
+			case 9:
 				uifc.helpbuf =
 					"~ Encryption via TLS ~\n"
 					"\n"
@@ -285,10 +339,16 @@ void mqtt_cfg()
 				;
 				i = cfg.mqtt.tls.mode;
 				i = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, 0, "Encryption via TLS", mqttTlsMode);
-				if (i >= 0)
+				if (i >= 0) {
 					cfg.mqtt.tls.mode = i;
+					if (i == MQTT_TLS_SBBS) {
+						if (cfg.mqtt.broker_port == IPPORT_MQTT)
+							cfg.mqtt.broker_port = 8883;
+						cfg.mqtt.protocol_version = 5;
+					}
+				}
 				break;
-			case 9:
+			case 10:
 				uifc.helpbuf =
 					"~ User name ~\n"
 					"\n"
@@ -297,7 +357,7 @@ void mqtt_cfg()
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "User name for authentication"
 				           , cfg.mqtt.username, sizeof(cfg.mqtt.username) - 1, K_EDIT);
 				break;
-			case 10:
+			case 11:
 				uifc.helpbuf =
 					"~ Password ~\n"
 					"\n"
@@ -306,12 +366,12 @@ void mqtt_cfg()
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Password for authentication"
 				           , cfg.mqtt.password, sizeof(cfg.mqtt.password) - 1, K_EDIT);
 				break;
-			case 11:
+			case 12:
 				i = cfg.mqtt.protocol_version - 3;
 				if ((i = uifc.list(WIN_MID | WIN_SAV, 0, 0, 0, &i, 0, "Protocol Version", mqttVersion)) >= 0)
 					cfg.mqtt.protocol_version = 3 + i;
 				break;
-			case 12:
+			case 13:
 				if (cfg.mqtt.tls.mode == MQTT_TLS_CERT) {
 					uifc.helpbuf =
 						"~ CA Certificate File ~\n"
@@ -331,7 +391,7 @@ void mqtt_cfg()
 					           , cfg.mqtt.tls.psk, sizeof(cfg.mqtt.tls.psk) - 1, K_EDIT);
 				}
 				break;
-			case 13:
+			case 14:
 				if (cfg.mqtt.tls.mode == MQTT_TLS_CERT) {
 					uifc.helpbuf =
 						"~ Client Certificate File ~\n"
@@ -355,7 +415,7 @@ void mqtt_cfg()
 					           , cfg.mqtt.tls.identity, sizeof(cfg.mqtt.tls.identity) - 1, K_EDIT);
 				}
 				break;
-			case 14:
+			case 15:
 				uifc.helpbuf =
 					"~ Private Key File ~\n"
 					"\n"
@@ -367,7 +427,7 @@ void mqtt_cfg()
 				uifc.input(WIN_MID | WIN_SAV, 0, 0, "Private Key File"
 				           , cfg.mqtt.tls.keyfile, sizeof(cfg.mqtt.tls.keyfile) - 1, K_EDIT);
 				break;
-			case 15:
+			case 16:
 				uifc.helpbuf =
 					"~ Private Key File Password ~\n"
 					"\n"
@@ -401,7 +461,28 @@ void net_cfg()
 		uifc.helpbuf =
 			"`Network Configuration:`\n"
 			"\n"
-			"Select the type of network technology that you want to configure.\n"
+			"User-facing policy and connectivity settings for each external\n"
+			"messaging / telemetry network Synchronet integrates with.  Each entry\n"
+			"opens a sub-menu with the specific knobs for that network technology.\n"
+			"\n"
+			"`Internet E-mail`: who may send Internet (SMTP) mail, what they may\n"
+			"attach, what name they appear as, system address, and credits charged.\n"
+			"Server-side delivery configuration lives separately under\n"
+			"`Servers > Mail Server`.\n"
+			"\n"
+			"`QWK Packet Networks`: configure this BBS as a QWK network node --\n"
+			"the list of upstream hubs you call to exchange QWK packets, and the\n"
+			"default outgoing tagline.  See also the message-base side knobs under\n"
+			"`Message Areas`.\n"
+			"\n"
+			"`FidoNet EchoMail and NetMail`: addresses, semaphores, NetMail\n"
+			"directory, and user-facing posting policy for FidoNet-style\n"
+			"networking.  The bundled `BinkIT` mailer and `SBBSecho` tosser handle\n"
+			"actual packet exchange.\n"
+			"\n"
+			"`MQTT`: publish Synchronet status and log messages to an MQTT broker\n"
+			"(and subscribe to control topics) for external monitoring and remote\n"
+			"control by other systems.\n"
 		;
 		i = uifc.list(WIN_ORG | WIN_ACT | WIN_CHE, 0, 0, 0, &net_dflt, 0, "Network Configuration", opt);
 		if (i < 0) // ESC
@@ -581,9 +662,58 @@ void net_cfg()
 				uifc.helpbuf =
 					"`FidoNet EchoMail and NetMail:`\n"
 					"\n"
-					"This menu contains configuration options that pertain specifically to\n"
-					"networking E-mail (NetMail) and sub-boards (EchoMail) through networks\n"
-					"using FidoNet technology.\n"
+					"System-wide settings for FidoNet-style networking: NetMail (private\n"
+					"messages between users on different systems) and EchoMail (sub-board\n"
+					"posts replicated across systems).  Synchronet handles the message-base\n"
+					"side; the bundled `BinkIT` mailer and `SBBSecho` tosser ferry packets\n"
+					"to and from neighbor systems.  Per-sub-board EchoMail settings live\n"
+					"under `Message Areas`.\n"
+					"\n"
+					"`System Addresses`: FidoNet 3D/4D addresses (Zone:Net/Node[.Point]) this\n"
+					"system answers to.  The first is the `Main` address (also the default\n"
+					"origin of EchoMail); additional addresses are AKAs.\n"
+					"\n"
+					"`Default Origin Line`: text appended as the \"* Origin:\" line to outgoing\n"
+					"EchoMail posts.  Overridable per sub-board under that sub's `Network\n"
+					"Options...`.\n"
+					"\n"
+					"`NetMail Semaphore`: file Synchronet touches when new NetMail is queued,\n"
+					"to signal the FidoNet front-end / tosser to rescan and pack it out.\n"
+					"Command-line specifiers may be embedded.  Blank = no semaphore.\n"
+					"\n"
+					"`EchoMail Semaphore`: same idea for outbound EchoMail.\n"
+					"\n"
+					"`NetMail Directory`: directory used to import and export FTS-1 (`*.MSG`)\n"
+					"format NetMail messages exchanged with the tosser.\n"
+					"\n"
+					"`Allow Sending of NetMail`: master switch -- when `No`, users cannot send\n"
+					"FidoNet NetMail.\n"
+					"\n"
+					"`Allow File Attachments`: when `Yes`, users may attach files to outgoing\n"
+					"NetMail.\n"
+					"\n"
+					"`Send NetMail Using Alias`: when `Yes`, outgoing NetMail uses the sender's\n"
+					"BBS alias as their from-name; `No` uses their real name.  (Users with the\n"
+					"`O` restriction flag always send by alias.)\n"
+					"\n"
+					"`NetMail Defaults to Crash`: pre-check the \"Crash\" (send-immediately)\n"
+					"flag on new NetMail by default.  Mailer-specific; usually leave `No`\n"
+					"unless your mailer is dial-up / polled.\n"
+					"\n"
+					"`NetMail Defaults to Direct`: pre-check the \"Direct\" (skip routing,\n"
+					"deliver point-to-point) flag by default.\n"
+					"\n"
+					"`NetMail Defaults to Hold`: pre-check the \"Hold\" (wait for upstream to\n"
+					"poll, don't push) flag by default.\n"
+					"\n"
+					"`Kill NetMail After Sent`: delete the local copy of an outgoing NetMail\n"
+					"once the tosser has shipped it.\n"
+					"\n"
+					"`Cost to Send NetMail`: credits charged per outgoing NetMail.  `0` = free.\n"
+					"\n"
+					"`Choose NetMail Source Address`: (only shown if more than one System\n"
+					"Address is defined) when `Yes`, users with multiple AKAs may pick which\n"
+					"address an outgoing NetMail is sent from.\n"
 				;
 				i = uifc.list(WIN_ACT | WIN_MID | WIN_CHE, 0, 0, 68, &fnet_dflt, 0
 				              , "FidoNet EchoMail and NetMail", opt);
@@ -933,8 +1063,40 @@ void net_cfg()
 				uifc.helpbuf =
 					"`Internet E-mail:`\n"
 					"\n"
-					"This menu contains configuration options that pertain specifically to\n"
-					"Internet E-mail.\n"
+					"User-facing policy for outbound Internet (SMTP) e-mail sent by your BBS\n"
+					"users from the terminal-side mail menu.  These options control who may\n"
+					"send, what they may attach, what name they appear as, and what (if\n"
+					"anything) it costs them.  Server-side delivery is configured separately\n"
+					"under `Servers > Mail Server`.\n"
+					"\n"
+					"`System Address`: this system's Internet address (e.g. `bbs.example.com`).\n"
+					"Used as the host portion of outgoing addresses and in default e-mail\n"
+					"headers.\n"
+					"\n"
+					"`Inbound E-mail Semaphore`: optional filename touched when new Internet\n"
+					"mail arrives, signalling an external processor to rescan.  Leave blank\n"
+					"if no external processor is in use.  Command-line specifiers (`%h`,\n"
+					"`%i`, ...) may be embedded.\n"
+					"\n"
+					"`Outbound E-mail Semaphore`: optional filename touched whenever a user\n"
+					"posts a new outgoing Internet message, signalling external gateways to\n"
+					"pick it up.  Blank = no semaphore.\n"
+					"\n"
+					"`Allow Sending of E-mail`: master switch -- when `No`, users cannot send\n"
+					"Internet e-mail at all (regardless of the toggles below).\n"
+					"\n"
+					"`Allow File Attachments`: when `Yes`, users may attach files to outgoing\n"
+					"Internet e-mail.\n"
+					"\n"
+					"`Send E-mail Using Alias`: when `Yes`, outgoing e-mail uses the sender's\n"
+					"BBS alias as their from-name; when `No`, their real name.  (Users with\n"
+					"the `O` restriction flag always send by alias regardless.)\n"
+					"\n"
+					"`Kill E-mail After Sent`: delete the local copy of an outgoing message\n"
+					"once it has been successfully transmitted.\n"
+					"\n"
+					"`Cost to Send E-mail`: credits charged per outgoing Internet message.\n"
+					"`0` = free.\n"
 				;
 				i = uifc.list(WIN_ACT | WIN_MID | WIN_CHE, 0, 0, 60, &inet_dflt, 0
 				              , "Internet E-mail", opt);

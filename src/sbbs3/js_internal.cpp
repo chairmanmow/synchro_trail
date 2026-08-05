@@ -33,6 +33,7 @@ enum {
 	PROP_VERSION
 	, PROP_TERMINATED
 	, PROP_AUTO_TERMINATE
+	, PROP_TERMINATE_ON_DISCONNECT
 	, PROP_COUNTER
 	, PROP_TIME_LIMIT
 	, PROP_YIELD_INTERVAL
@@ -49,12 +50,26 @@ enum {
 	, PROP_KEEPGOING
 };
 
-JSBool js_IsTerminated(JSContext* cx, JSObject* obj)
+JSBool js_IsTerminated(JSContext* cx, JSObject* scope)
 {
 	js_callback_t* cb;
 	js_callback_t* top_cb;
+	JSObject*      js_obj;
+	jsval          val = JSVAL_VOID;
 
-	if ((cb = (js_callback_t*)JS_GetPrivate(cx, obj)) == NULL)
+	// The passed object is the execution scope, not necessarily the internal
+	// "js" object that carries the js_callback_t private data; walk the scope
+	// chain to find it (mirrors the lookup in js_execfile).
+	while (scope != NULL) {
+		if (JS_GetProperty(cx, scope, "js", &val) && val != JSVAL_VOID
+		    && JSVAL_IS_OBJECT(val) && JSVAL_TO_OBJECT(val) != NULL)
+			break;
+		scope = JS_GetParent(cx, scope);
+	}
+	if (scope == NULL)
+		return JS_FALSE;
+	js_obj = JSVAL_TO_OBJECT(val);
+	if ((cb = (js_callback_t*)JS_GetPrivate(cx, js_obj)) == NULL)
 		return JS_FALSE;
 	for (top_cb = cb; top_cb->bg && top_cb->parent_cb; top_cb = top_cb->parent_cb) {
 		if (top_cb->terminated && *top_cb->terminated)
@@ -94,6 +109,9 @@ static JSBool js_get(JSContext *cx, JSObject *obj, jsid id, jsval *vp)
 			break;
 		case PROP_AUTO_TERMINATE:
 			*vp = BOOLEAN_TO_JSVAL(cb->auto_terminate);
+			break;
+		case PROP_TERMINATE_ON_DISCONNECT:
+			*vp = BOOLEAN_TO_JSVAL(cb->terminate_on_disconnect);
 			break;
 		case PROP_COUNTER:
 			*vp = DOUBLE_TO_JSVAL((double)cb->counter);
@@ -161,6 +179,9 @@ static JSBool js_set(JSContext *cx, JSObject *obj, jsid id, JSBool strict, jsval
 		case PROP_AUTO_TERMINATE:
 			JS_ValueToBoolean(cx, *vp, &cb->auto_terminate);
 			break;
+		case PROP_TERMINATE_ON_DISCONNECT:
+			JS_ValueToBoolean(cx, *vp, &cb->terminate_on_disconnect);
+			break;
 		case PROP_COUNTER:
 			if (!JS_ValueToInt32(cx, *vp, (int32*)&cb->counter))
 				return JS_FALSE;
@@ -201,6 +222,9 @@ static jsSyncPropertySpec js_properties[] = {
 		, JSDOCSTR("JavaScript engine version information (AKA system.js_version) - <small>READ ONLY</small>")},
 	{   "auto_terminate",   PROP_AUTO_TERMINATE, JSPROP_ENUMERATE,   311
 		, JSDOCSTR("Set to <i>false</i> to disable the automatic termination of the script upon external request or user disconnection")},
+	{   "terminate_on_disconnect", PROP_TERMINATE_ON_DISCONNECT, JSPROP_ENUMERATE, 32200
+		, JSDOCSTR("Set to <i>false</i> to disable the automatic termination of the script when its client disconnects "
+		"(default: <i>true</i> in the Terminal, Web, and Services servers; not applicable elsewhere)")},
 	{   "terminated",       PROP_TERMINATED,    JSPROP_ENUMERATE,   311
 		, JSDOCSTR("Termination has been requested (stop execution as soon as possible)")},
 	{   "branch_counter",   PROP_COUNTER,       0,                  311
@@ -1128,6 +1152,7 @@ js_handle_events(JSContext *cx, js_callback_t *cb, volatile bool *terminated)
 	struct js_event_list * ev;
 	struct js_event_list * tev;
 	struct js_event_list * cev;
+	struct js_event_list * rev;
 	jsval                  rval = JSVAL_NULL;
 	jsrefcount             rc;
 	JSBool                 ret = JS_TRUE;
@@ -1156,6 +1181,7 @@ js_handle_events(JSContext *cx, js_callback_t *cb, volatile bool *terminated)
 		ev = NULL;
 		tev = NULL;
 		cev = NULL;
+		rev = NULL;
 #ifdef PREFER_POLL
 		fds = NULL;
 		sc = 0;
@@ -1184,9 +1210,18 @@ js_handle_events(JSContext *cx, js_callback_t *cb, volatile bool *terminated)
 		FD_ZERO(&rfds);
 		FD_ZERO(&wfds);
 #endif
+		for (ev = *head; ev; ev = ev->next) {
+			if (ev->type != JS_EVENT_SOCKET_READABLE && ev->type != JS_EVENT_SOCKET_READABLE_ONCE)
+				continue;
+			jssp = (js_socket_private_t*)JS_GetPrivate(cx, ev->cx);
+			if (js_socket_tls_readable(jssp)) {
+				rev = ev;
+				break;
+			}
+		}
 
 		rc = JS_SUSPENDREQUEST(cx);
-		if (cb->rq_head)
+		if (cb->rq_head || rev)
 			timeout = 0;
 		for (ev = *head; ev; ev = ev->next) {
 			switch (ev->type) {
@@ -1304,7 +1339,9 @@ js_handle_events(JSContext *cx, js_callback_t *cb, volatile bool *terminated)
 #endif
 			case 0:     // Timeout
 				JS_RESUMEREQUEST(cx, rc);
-				if (tev && tev->cx && tev->cb)
+				if (rev && rev->cx && rev->cb)
+					ev = rev;
+				else if (tev && tev->cx && tev->cb)
 					ev = tev;
 				else if (cev && cev->cx && cev->cb)
 					ev = cev;
@@ -1568,6 +1605,7 @@ void js_EvalOnExit(JSContext *cx, JSObject *obj, js_callback_t* cb)
 	jsval                    rval;
 	JSObject*                script;
 	BOOL                     auto_terminate = cb->auto_terminate;
+	BOOL                     terminate_on_disconnect = cb->terminate_on_disconnect;
 	JSObject *               glob = JS_GetGlobalObject(cx);
 	global_private_t *       pt;
 	str_list_t               list = NULL;
@@ -1611,6 +1649,7 @@ void js_EvalOnExit(JSContext *cx, JSObject *obj, js_callback_t* cb)
 	}
 
 	cb->auto_terminate = FALSE;
+	cb->terminate_on_disconnect = FALSE;
 
 	while ((p = strListPop(&list)) != NULL) {
 		if ((script = JS_CompileScript(cx, obj, p, strlen(p), NULL, 0)) != NULL) {
@@ -1625,6 +1664,8 @@ void js_EvalOnExit(JSContext *cx, JSObject *obj, js_callback_t* cb)
 
 	if (auto_terminate)
 		cb->auto_terminate = TRUE;
+	if (terminate_on_disconnect)
+		cb->terminate_on_disconnect = TRUE;
 }
 
 JSObject* js_CreateInternalJsObject(JSContext* cx, JSObject* parent, js_callback_t* cb, js_startup_t* startup)
@@ -1754,4 +1795,3 @@ js_CreateArrayOfStrings(JSContext* cx, JSObject* parent, const char* name, const
 
 	return JS_TRUE;
 }
-

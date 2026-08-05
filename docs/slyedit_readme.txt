@@ -1,6 +1,6 @@
                          SlyEdit message editor
-                              Version 1.94
-                        Release date: 2026-03-05
+                              Version 2.03
+                        Release date: 2026-06-30
 
                                   by
 
@@ -899,7 +899,13 @@ replace), you would use $1 to refer to the word "darn".  For example, for
 11. User settings
 =================
 Since version 1.32, SlyEdit has the ability for each user to configure some
-settings for themselves.  The user settings include the following:
+settings for themselves.  Note that SlyEdit settings are not saved or loaded
+for guest users, so anyone logging in as guest will always get the default
+SlyEdit settings, and guest users should always be asked for what SlyEdit mode
+they want to use upon running SlyEdit.
+
+The user settings include the following:
+- The SlyEdit mode: DCT, Ice, or Random
 - Whether or not to enable the option to use taglines
 - Whether or not to prompt for spell checking when saving a message
 - Whether or not to add the original author's initials to quote lines
@@ -1004,6 +1010,12 @@ message to lower-case and comparing them with the words in the dictionary.
 ===================
 Version  Date         Description
 -------  ----         -----------
+2.02     2026-04-27   Bug fix: When uploading a message (with /UPLOAD or /UL),
+                      use the uploaded message file as-is (don't interpret
+                      attribute codes, etc.)
+2.01     2026-03-18   For guest users, always use default settings (with no
+                      saved UI style/mode, in particular) and don't save user
+                      settings
 2.00     2026-03-05   SlyEdit has a new user setting (in the user settings menu,
                       opened with Ctrl-U), to specify which UI style to use
                       (Ice/DCT/Random), and if the user hasn't chosen, SlyEdit

@@ -952,6 +952,7 @@ MQTT.Connection.probateWill = function() {
 
 MQTT.Connection.expireSession = function() {
 	this.session_timeout = null;
+	this.removeAllSubscriptions();
 	delete this.broker.disconnected[this.client_id];
 };
 
@@ -960,6 +961,11 @@ MQTT.Connection.timeToDie = function() {
 	if (this.sock !== null) {
 		this.error(new Error('0x8D Keep Alive timeout'));
 	}
+};
+
+MQTT.Connection.prototype.removeAllSubscriptions = function() {
+	for (var filter in this.subscriptions)
+		this.subscriptions[filter].remove();
 };
 
 MQTT.Connection.prototype.tearDown = function() {
@@ -1002,6 +1008,8 @@ MQTT.Connection.prototype.tearDown = function() {
 		if (this.session_expiry < 0xFFFFFFFF) {
 			this.session_timeout = js.setTimeout(MQTT.Connection.expireSession, this.session_expiry * 1000, this);
 		}
+	} else {
+		this.removeAllSubscriptions();
 	}
 };
 
@@ -1093,15 +1101,19 @@ MQTT.Connection.prototype.handleCONNECT = function() {
 	this.rx_unacked = [];
 	this.client_id = pkt.client_id;
 
-	// Copy state from old connection
+	// Copy or clean up state from old connection
 	var i;
-	if (oldconn !== null && !pkt.connect_flags.clean_start) {
-		this.subscriptions = oldconn.subscriptions;
-		for (i in this.subscriptions)
-			this.subscriptions[i].conn = this;
-		this.tx_unacked = oldconn.tx_unacked;
-		this.tx_queued = oldconn.tx_queued;
-		this.rx_unacked = oldconn.rx_unacked;
+	if (oldconn !== null) {
+		if (pkt.connect_flags.clean_start) {
+			oldconn.removeAllSubscriptions();
+		} else {
+			this.subscriptions = oldconn.subscriptions;
+			for (i in this.subscriptions)
+				this.subscriptions[i].conn = this;
+			this.tx_unacked = oldconn.tx_unacked;
+			this.tx_queued = oldconn.tx_queued;
+			this.rx_unacked = oldconn.rx_unacked;
+		}
 	}
 
 	if (this.tx_unacked.length > 0) {
@@ -1293,12 +1305,12 @@ MQTT.Connection.prototype.handlePUBLISH = function() {
 					rval = pkt.retain;
 				qos = this.broker.topics[pkt.topic_name].subscribers[cid][sid].options.QoS;
 				if (rval) {
-					sidsr1.push(sid);
+					sidsr1.push(this.broker.topics[pkt.topic_name].subscribers[cid][sid].subscription_id);
 					if (qos > qosr1)
 						qosr1 = qos;
 				}
 				else {
-					sidsr0.push(sid);
+					sidsr0.push(this.broker.topics[pkt.topic_name].subscribers[cid][sid].subscription_id);
 					if (qos > qosr0)
 						qosr0 = qos;
 				}
@@ -1424,7 +1436,7 @@ MQTT.Connection.prototype.serviceTxQueue = function() {
 	catch (e) {
 		if (pkt !== null)
 			this.tx_queued.unshift(pkt);
-		log(LOG_WARNING, e.toSource());
+		log(LOG_WARNING, JSON.stringify(e));
 		this.error(e);
 		return;
 	}
@@ -1459,7 +1471,7 @@ MQTT.Connection.prototype.handlePacket = function() {
 		js.setImmediate(MQTT.Connection.nextPacket, this);
 	}
 	catch (e) {
-		log(LOG_WARNING, e.toSource());
+		log(LOG_WARNING, JSON.stringify(e));
 		this.error(e);
 		return;
 	}
@@ -1581,7 +1593,7 @@ MQTT.Connection.prototype.parseBytes = function() {
 			this.rx_callback(this);
 		}
 		catch (e) {
-			log(LOG_WARNING, e.toSource());
+			log(LOG_WARNING, JSON.stringify(e));
 			this.error(e);
 			return;
 		}
@@ -1713,9 +1725,9 @@ MQTT.Connection.Subscription = function(conn, topic_filter, options, subscriptio
 	// Add to each topic and send retained
 	for (i in conn.broker.topics) {
 		if (conn.broker.topics[i].name.search(this.re) === 0) {
-			if (conn.broker.topics[i][this.client_id] === undefined)
-				conn.broker.topics[i][this.client_id] = {};
-			conn.broker.topics[i][this.client_id][topic_filter] = this;
+			if (conn.broker.topics[i].subscribers[conn.client_id] === undefined)
+				conn.broker.topics[i].subscribers[conn.client_id] = {};
+			conn.broker.topics[i].subscribers[conn.client_id][topic_filter] = this;
 			if (conn.broker.topics[i].retained !== null) {
 				if (conn.broker.topics[i].retained.properties !== undefined &&
 				    conn.broker.topics[i].retained.properties[2] !== undefined &&
@@ -1739,13 +1751,17 @@ MQTT.Connection.Subscription = function(conn, topic_filter, options, subscriptio
 
 MQTT.Connection.Subscription.prototype.remove = function() {
 	var i;
-	var j;
 
-	// Remove from topics...
+	// Remove from topics
 	for (i in this.conn.broker.topics) {
-		if (this.conn.broker.topics[i][this.client_id] !== undefined) {
-			if (this.conn.broker.topics[i][this.client_id][this.topic_filter] !== undefined)
-				delete this.conn.broker.topics[i][this.client_id][this.topic_filter];
+		var subs = this.conn.broker.topics[i].subscribers;
+		if (subs[this.conn.client_id] !== undefined) {
+			if (subs[this.conn.client_id][this.topic_filter] !== undefined) {
+				delete subs[this.conn.client_id][this.topic_filter];
+				// Remove the client's subscriber entry if empty
+				if (Object.keys(subs[this.conn.client_id]).length === 0)
+					delete subs[this.conn.client_id];
+			}
 		}
 	}
 
@@ -2474,15 +2490,9 @@ MQTT.Packet.PUBLISH.prototype.serializeVariableHeader = function() {
 };
 
 MQTT.Packet.PUBLISH.prototype.serializePayload = function() {
-	var ret = '';
-	if (this.payload !== null) {
-		if (this.payload_format == 0)
-			ret += MQTT.encodeBinaryData(this.payload);
-		else
-			ret += MQTT.encodeUTF8String(this.payload);
-	}
-
-	return ret;
+	if (this.payload !== null)
+		return this.payload;
+	return '';
 };
 
 MQTT.Packet.PUBLISH.prototype.recv = function(conn) {
@@ -2528,8 +2538,10 @@ MQTT.Packet.PUBLISH.prototype.dupeForSubscriptions = function(conn, sids, qos) {
 	var sid;
 	if (ret.properties[24] !== undefined)
 		delete ret.properties[24];
-	for (sid in sids)
-		ret.addProperty(this.type, 11, sids[sid]);
+	for (sid in sids) {
+		if (sids[sid] !== null && sids[sid] !== 0)
+			ret.addProperty(this.type, 11, sids[sid]);
+	}
 	if (qos > 0) {
 		ret.packet_identifier = conn.getUnusedPID();
 		conn.tx_unacked.push(ret);
@@ -2635,7 +2647,7 @@ MQTT.Packet.PUBCOMP = function() {
 MQTT.Packet.PUBCOMP.prototype = Object.create(MQTT.Packet.prototype);
 MQTT.Packet.PUBCOMP.prototype.constructor = MQTT.Packet;
 
-MQTT.Packet.PUBCOMP.prototype.serializeVariableHeader = function() MQTT.Packet.PUBACK.prototype.serializeVariableHeader;
+MQTT.Packet.PUBCOMP.prototype.serializeVariableHeader = function() { return MQTT.Packet.PUBACK.prototype.serializeVariableHeader; };
 
 MQTT.Packet.PUBCOMP.prototype.serializePayload = MQTT.Packet.PUBACK.prototype.serializePayload;
 

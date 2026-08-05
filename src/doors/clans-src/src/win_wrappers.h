@@ -23,10 +23,8 @@
 #define S_IWRITE _S_IWRITE
 #endif
 
-// These are extensions that Microsoft (correctly) added a leading underscore to...
-#if !defined(__STDC_VERSION__) || __STDC_VERSION__ < 202311L
-char *strdup(const char *s);
-#endif
+// These are extensions that Microsoft (correctly) added a leading underscore to.
+#define strdup(str) _strdup(str)
 
 void display_win32_error();
 

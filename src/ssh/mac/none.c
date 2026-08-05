@@ -1,28 +1,34 @@
+#include <stdlib.h>
+#include <string.h>
+
+#include "deucessh-mac.h"
 #include "deucessh.h"
 
 static int
-generate(uint8_t *key, uint8_t *buf, size_t bufsz, uint8_t *outbuf, deuce_ssh_session_t sess)
+generate(const uint8_t *buf, size_t bufsz, uint8_t *outbuf, dssh_mac_ctx *ctx)
 {
 	return 0;
 }
 
 static void
-cleanup(deuce_ssh_session_t sess)
+cleanup(dssh_mac_ctx *ctx)
 {
-	return;
 }
 
-static struct deuce_ssh_mac none_mac = {
-	.next = NULL,
-	.generate = generate,
-	.cleanup = cleanup,
-	.digest_size = 0,
-	.key_size = 0,
-	.name = "none",
-};
-
-int
-register_none_mac(void)
+DSSH_PUBLIC int
+dssh_register_none_mac(void)
 {
-	return deuce_ssh_transport_register_mac(&none_mac);
+	static const char  name[] = "none";
+	struct dssh_mac_s *mac    = malloc(sizeof(*mac) + sizeof(name));
+
+	if (mac == NULL)
+		return DSSH_ERROR_ALLOC;
+	mac->next        = NULL;
+	mac->init        = NULL;
+	mac->generate    = generate;
+	mac->cleanup     = cleanup;
+	mac->digest_size = 0;
+	mac->key_size    = 0;
+	memcpy(mac->name, name, sizeof(name));
+	return dssh_transport_register_mac(mac);
 }

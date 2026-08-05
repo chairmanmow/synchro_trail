@@ -1,5 +1,6 @@
 /* Copyright (C), 2007 by Stephen Hurd */
 
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
@@ -7,12 +8,12 @@
 #include "conn.h"
 #include "gen_defs.h"
 #include "genwrap.h"
+#include "host_ui.h"
 #include "rlogin.h"
 #include "sockwrap.h"
 #include "telnet_io.h"
 #include "term.h"
 #include "threadwrap.h"
-#include "uifcinit.h"
 
 extern int telnet_log_level;
 bool telnet_deferred = false;
@@ -102,16 +103,17 @@ send_initial_state(void)
 void *
 telnet_rx_parse_cb(const void *buf, size_t inlen, size_t *olen)
 {
+	bool telnet_command;
+
         // telnet_interpret() can add up to one byte to inbuf ('\r')
 	void *ret = malloc(inlen + 1);
 
 	if (ret == NULL)
 		return ret;
-	if (telnet_interpret((BYTE *)buf, inlen, ret, olen) != ret) {
+	if (telnet_interpret((BYTE *)buf, inlen, ret, olen, &telnet_command) != ret)
 		memcpy(ret, buf, *olen);
-		if (telnet_deferred)
-			send_initial_state();
-	}
+	if (telnet_deferred && telnet_command)
+		send_initial_state();
 	return ret;
 }
 
@@ -133,10 +135,12 @@ telnet_tx_parse_cb(const void *buf, size_t len, size_t *olen)
 int
 telnet_connect(struct bbslist *bbs)
 {
-	if (!bbs->hidepopups)
-		init_uifc(true, true);
-
 	telnet_log_level = bbs->telnet_loglevel;
+
+	/* Explicit atomic init — conn_connect() memsets conn_api but
+	 * memset isn't a valid init for _Atomic fields, and stale state
+	 * from a prior session would misreport telnet BINARY. */
+	atomic_store(&conn_api.binary_mode, false);
 
 	rlogin_sock = conn_socket_connect(bbs, true);
 	if (rlogin_sock == INVALID_SOCKET)
@@ -180,7 +184,7 @@ telnet_connect(struct bbslist *bbs)
 		send_initial_state();
 
 	if (!bbs->hidepopups)
-		uifc.pop(NULL);
+		host_ui_status(NULL);
 
 	return 0;
 }

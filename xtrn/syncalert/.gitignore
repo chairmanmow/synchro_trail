@@ -1,0 +1,15 @@
+# Locally built door binary (not tracked; built via src/doors/syncconquer/
+# build.sh, deployed here via deploy.js).
+/syncalert
+/syncalert.exe
+
+assets/
+*.iso
+
+# Door runtime artifacts written into this dir on a dev/test run without
+# -home (the live door uses a per-user -home dir instead).
+syncalert.fill
+REDALERT.INI
+
+# Live sysop-edited config, seeded from syncalert.example.ini by install-xtrn.
+/syncalert.ini

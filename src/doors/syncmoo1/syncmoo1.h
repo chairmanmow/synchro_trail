@@ -1,0 +1,390 @@
+/* syncmoo1.h -- cross-module contract for the syncmoo1 door.
+ *
+ * DESIGN.md §4: a SINGLE header shared by every syncmoo1_*.c module (plus
+ * hw_term.c, the 1oom `hw` backend), so a function that crosses a module
+ * boundary has ONE declaration and a provenance comment saying which .c
+ * provides it and why -- unlike syncduke/syncconquer's per-file private
+ * headers. As later tasks add syncmoo1_input.c/_door.c/_config.c/_node.c,
+ * their cross-module entry points get added here too; Task 5 (this file)
+ * covers the terminal I/O module only.
+ *
+ * sm_geom_t (the image-rect type shared between the present path and the
+ * input module's mouse mapper) is already defined in syncmoo1_map.h (Task 4)
+ * -- pulled in below so every consumer of this header gets it too, instead
+ * of a second competing definition here.
+ */
+#ifndef SYNCMOO1_H
+#define SYNCMOO1_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "syncmoo1_map.h"   /* sm_geom_t */
+#include "audio_mgr.h"      /* termgfx: termgfx_audio_t */
+
+/* --- syncmoo1_io.c: terminal out-buffer, enter/probe/leave, sixel present --
+ *
+ * Consumed by hw_term.c (the 1oom hw backend): hw_video_draw_buf() calls
+ * sm_io_present() on every flip, hw_video_set_palette() feeds it a running
+ * 768-byte RGB888 palette. Task 6's input module reads sm_io_geom() for the
+ * SGR-mouse -> game-pixel mapping.
+ */
+
+/* One-time setup: adopt `sockfd` as the door's I/O descriptor (<0 falls back
+ * to stdout, fd 1 -- dev/tty use), set it non-blocking, ignore SIGPIPE,
+ * resolve the SYNCMOO1_SIXELOUT capture-mode override (see syncmoo1_io.c),
+ * and register sm_io_leave() via atexit(). Idempotent -- safe to call more
+ * than once (a later call is a no-op). Returns 0. */
+int sm_io_init(int sockfd);
+
+/* Encode `idx320x200` (320x200 8-bit palette indices, row-major) through
+ * `pal768` (256 RGB888 triples) as a DECSIXEL frame centered in the terminal
+ * canvas (a sane 640x400/80x25 default until the probe-reply parser narrows
+ * it), stage it, and flush it to the I/O descriptor. Lazily runs
+ * sm_io_enter() on the first call, so a caller need not sequence that by
+ * hand. The 768-byte palette is (re)defined in the sixel registers only when
+ * it actually changed since the last frame (memcmp) -- SyncTERM garbles its
+ * decoder if the registers are redefined every frame.
+ *
+ * Task 9 (DESIGN.md §3, §9): TWO gates run before any encode is attempted,
+ * so a static screen or a stalled client cost ~zero bytes/CPU instead of a
+ * straight encode+emit every call:
+ *   - De-dupe: if idx320x200 + pal768 + the current draw-position geometry
+ *     are all byte-identical to the last frame actually SENT, skip the
+ *     encode+emit entirely (memcmp port of syncduke_io.c:1081-1119). Bypassed
+ *     in SYNCMOO1_SIXELOUT capture mode -- each captured frame is meant to be
+ *     a standalone, self-contained decode target, not a member of a paced
+ *     live stream.
+ *   - DSR-ACK backpressure: a frame that IS sent appends ESC[6n and counts as
+ *     one in-flight frame (sm_io_pace_ack(), called from
+ *     syncmoo1_input.c's 'R' case, decrements it back down and feeds the
+ *     round-trip into termgfx's shared AIMD depth controller, pace.h). While
+ *     the in-flight count is already at the effective depth, sm_io_present()
+ *     DROPS this frame (no encode, no emit, no queuing) rather than growing
+ *     g_out further -- unless no DSR has come back for
+ *     SM_PACE_DEADLINE_MS, in which case the pipeline is reclaimed so a
+ *     terminal that never answers DSR can't wedge the door into a permanent
+ *     freeze. No CAP_FPS-style ceiling: 1oom is event-driven (DESIGN.md §3),
+ *     so the ONLY throttle is this ack-driven one. */
+void sm_io_present(const uint8_t *idx320x200, const uint8_t *pal768);
+
+/* A DSR round-trip (ESC[r;cR) that is a pace-ack for a present()-emitted
+ * frame, NOT the one-time startup grid-probe reply (see
+ * sm_io_take_grid_probe() for how the 'R' handler tells them apart).
+ * Decrements the in-flight counter and folds the round-trip into termgfx's
+ * shared RTT/AIMD state (pace.h), which re-settles the effective pipeline
+ * depth sm_io_present()'s backpressure gate checks. Called from
+ * syncmoo1_input.c's 'R' CSI case; a no-op-safe over-call (more acks than
+ * frames sent) just floors the in-flight counter at 0. */
+void sm_io_pace_ack(void);
+
+/* First-R-vs-pace-ack disambiguation for syncmoo1_input.c's 'R' CSI case
+ * (Task 9). sm_io_enter() ARMS an "grid probe outstanding" flag at the exact
+ * moment it emits the startup canvas/grid probe (termgfx_term_probe's
+ * ESC[999;999H + trailing ESC[6n). This accessor is a one-shot CHECK-AND-
+ * CLEAR: it returns 1 for the FIRST ESC[r;cR that arrives after the probe was
+ * sent (that reply is the grid answer -- the input handler routes it to
+ * sm_io_set_grid()), and 0 for every ESC[r;cR after that (each is a pace-ack
+ * -> sm_io_pace_ack()). Crucially the flag is consumed REGARDLESS of whether
+ * that first reply's params parse: a malformed/lost grid reply just means we
+ * keep the default grid, and -- because the flag was armed at probe-SEND time,
+ * not inferred from "first R ever" -- a later well-formed R (a genuine
+ * pace-ack) can never be mis-latched as the grid. Returns 1 at most once per
+ * armed probe; 0 if the probe was never sent or the flag was already taken. */
+int sm_io_take_grid_probe(void);
+
+/* Telemetry-only accessors (Task 9): the current in-flight DSR count and the
+ * AIMD-settled effective pipeline depth sm_io_present()'s backpressure gate
+ * compares it against. Not consumed anywhere in M1's normal flow -- for a
+ * future stats overlay and for out-of-process verification (the scratchpad
+ * harness). */
+int sm_io_pace_inflight(void);
+int sm_io_pace_depth(void);
+
+/* Terminal setup / teardown (DESIGN.md §9). Both idempotent (each runs its
+ * work exactly once, however many times it's called): sm_io_present() calls
+ * sm_io_enter() lazily on its first invocation; sm_io_init() registers
+ * sm_io_leave() via atexit() so a normal exit restores the BBS's terminal
+ * (sixel-scroll/autowrap/cursor, mouse tracking off) even if nothing else
+ * calls it explicitly. */
+void sm_io_enter(void);
+void sm_io_leave(void);
+
+/* Append `len` bytes to the staged, grow-only out-buffer (no I/O). */
+void sm_out_put(const void *buf, size_t len);
+
+/* Non-blocking drain of the staged out-buffer to the I/O descriptor (or, in
+ * SYNCMOO1_SIXELOUT capture mode, a truncate-write of the capture file).
+ * EAGAIN/EWOULDBLOCK/EINTR just leave the remainder pending for the next
+ * call (a slow client, not an error); a real write error hangs up the
+ * session. Returns 0. */
+int sm_io_out_flush(void);
+
+/* One-line transient notice on the RESERVED bottom row (the idle countdown).
+ * The row is held back from the image by sm_geom_fit_page(), so this can never
+ * paint over the picture. sm_io_notice_tick() erases it once its dwell is up
+ * and must be called once per frame; sm_io_notice_expire() retires it early. */
+void sm_io_notice(const char *text, int ms);
+void sm_io_notice_expire(void);
+void sm_io_notice_tick(void);
+
+/* Record inbound bytes into the SYNCMOO1_WIREDUMP capture, if one is open.
+ * Called by syncmoo1_input.c's read loop; a no-op (and free) otherwise. The
+ * outbound side is captured inside sm_out_put(), so the two interleave in the
+ * single dump file in the order the door produced/consumed them. See the
+ * record format in syncmoo1_io.c. */
+void sm_io_wiredump_in(const void *buf, size_t len);
+
+/* --- syncmoo1_input.c ------------------------------------------------------
+ * Nonzero once a probe reply has identified the far end as SyncTERM (the CTDA
+ * '<'/'=' marker, or a CTerm state report). Zero before any reply, so a caller
+ * must read "unknown" as "not SyncTERM" and take the conservative branch --
+ * which is what sm_io_present() does when deciding whether the terminal's sixel
+ * colour registers can be trusted to persist across images. */
+void sm_io_set_gfx_canvas(int w, int h);   /* XTSMGRAPHICS canvas: the max sixel the terminal draws */
+int sm_input_have_sixel(void);       /* 1 if the terminal advertised sixel (DA1 param 4 / CTDA cap 4) */
+int sm_input_is_syncterm(void);
+/* The three the no-graphics gate reads (termgfx/gfxgate.h). "answered" is
+ * whether the Q;JXL query came back at all, which is what separates "no JXL"
+ * from "not yet"; sm_input_jxl() is whether the answer was yes. */
+int sm_input_probe_replied(void);    /* 1 once the terminal answered device-attributes */
+int sm_input_jxl(void);              /* 1 if the terminal advertised the JXL tier */
+int sm_input_jxl_answered(void);
+void sm_input_vscale_arm(void);      /* arm the sixel vertical-scaling probe's CPR collector */
+int  sm_input_vscale_done(void);     /* 1 once the probe has answered */
+int  sm_input_sixel_vscale(void);    /* 1 if the terminal honors the sixel raster pan (vertical scale) */
+
+/* The image rect the last sm_io_present() drew (or the sane 640x400/80x25
+ * default before any frame has been drawn) -- Task 6's sm_map_mouse() reads
+ * this so a click maps against the SAME geometry the frame was drawn in.
+ * Never NULL; ew/eh are always > 0. */
+const sm_geom_t *sm_io_geom(void);
+
+/* The I/O descriptor sm_io_init() adopted (the door socket, or fd 1 in
+ * dev/tty use). Task 6's hw_event_handle() wiring reads this to know what to
+ * hand sm_input_pump(). */
+int sm_io_get_fd(void);
+/* The fd to READ from -- NOT sm_io_get_fd(), which is the write fd. They differ
+ * on a STDIO door (stdin 0, stdout 1); see syncmoo1_io.c. */
+int sm_io_in_fd(void);
+/* A STDIO door: the BBS gave us its pipes, not a socket. POSIX only. */
+int sm_io_init_fds(int in_fd, int out_fd);
+
+/* The session's termgfx audio manager (NULL before sm_io_enter()). syncmoo1_
+ * input.c feeds it inbound bytes so it can resolve the capability probe. */
+termgfx_audio_t *sm_io_audio(void);
+
+/* Probe-reply setters (Task 6, DESIGN.md Sec9): syncmoo1_input.c's CSI
+ * handler calls these as the startup probe replies land (ESC[14t canvas px,
+ * the ESC[6n->ESC[r;cR grid, DECRPM ?1016 SGR-Pixels confirmation), so
+ * sm_io_geom()'s image rect + real cell size -- and therefore sm_map_mouse()
+ * -- become probe-driven instead of the 640x400/80x25/8x16 default. Each
+ * recomputes the image rect immediately; a malformed/zero w/h/rows/cols is
+ * ignored (keeps the prior value) rather than corrupting the geometry. */
+void sm_io_set_canvas(int w, int h);
+void sm_io_set_grid(int rows, int cols);
+void sm_io_set_pixel_mode(int on);
+
+/* --- syncmoo1_input.c: socket read loop, ESC/CSI/APC state machine, key +
+ * mouse decode, capability-probe reply parsing --
+ *
+ * Consumed by hw_term.c: hw_event_handle() calls sm_input_pump(sm_io_get_fd())
+ * on every 1oom engine poll. Drains `sockfd` non-blocking, runs the bytes
+ * through the ESC/CSI/APC(DCS/OSC/PM) state machine, and injects the result
+ * into 1oom's global input state: keys via kbd_add_keypress() (kbd.h), mouse
+ * position/buttons/wheel via mouse_set_xy_from_hw()/mouse_set_buttons_from_hw()/
+ * mouse_set_scroll_from_hw() (mouse.h). Capability-probe CSI replies (ESC[14t,
+ * the grid ESC[r;cR, DECRPM ?1016 y, DA1/CTDA c, the JXL-cap n) are parsed
+ * here and fed into sm_io via the setters above rather than delivered as
+ * keys; APC/DCS/OSC/PM string replies (e.g. SyncTERM's C;L cache-list) are
+ * swallowed to their ST terminator so they never leak stray keystrokes.
+ * Returns 0 normally, <0 if the peer hung up or a real socket read error
+ * occurred (the caller should treat the door session as over). */
+int sm_input_pump(int sockfd);
+
+/* --- syncmoo1_door.c: DOOR32.SYS / -s<fd> dropfile, socket resolution,
+ * splash, argv sanitize, hangup (DESIGN.md §8) --
+ *
+ * Consumed by hw_term.c's main(): sm_door_setup() resolves the client comm
+ * descriptor and paints an instant splash BEFORE 1oom's own (slow, LBX-
+ * scanning) init runs, so sm_io_init() gets the REAL socket fd before the
+ * first present -- fixing the Task 5/6 "stdout fallback" carry-over (sm_io_
+ * init() previously only ever saw -1, since nothing resolved the door
+ * socket yet). hw_video_draw_buf() calls sm_door_check_time() every present
+ * tick to enforce the DOOR32 minutes-left session limit.
+ */
+
+/* One-time setup, called FIRST in main() (before sm_io_init()/main_1oom()):
+ * parses argv for -s<fd> / -t<seconds> / -name <alias> / a bare *door32.sys
+ * path (DOOR32.SYS: line 1 comm type, line 2 socket handle, line 7 alias,
+ * line 9 minutes-left), falling back to the SYNCMOO1_SOCK env var for a dev
+ * run with no DOOR32.SYS, then configures the resolved socket (non-blocking,
+ * TCP_NODELAY, SIGPIPE ignored) and paints an instant splash to it (or fd 1
+ * in dev/tty use, when no socket resolves) -- before 1oom's slow LBX-
+ * scanning init runs, so the user sees something immediately. Returns 0
+ * normally; nonzero (-help/--help/-?) means main() should return without
+ * starting the engine. */
+int sm_door_setup(int argc, char **argv);
+
+/* The resolved client comm descriptor (the DOOR32.SYS/-s<fd> socket), or -1
+ * if none resolved (dev/tty use) -- sm_io_init()'s argument in main(). */
+int sm_door_socket(void);
+/* DOOR32 comm type 0 / -stdio: the BBS gave us its pipes, not a socket. Read
+ * fd 0, write fd 1. POSIX only -- see sm_plat_stdio_ok(). */
+int sm_door_stdio(void);
+
+/* The user alias from DOOR32.SYS line 7 / -name, or "" if none given. */
+const char *sm_door_alias(void);
+
+/* The DOOR's own build-identity line -- version, git hash, build date, e.g.
+ * "v0.1  *9378ed4ee2  Jul 22 2026  synchro.net" -- for the 1oom main menu
+ * footer, which stock only names the ENGINE ("1oom v1.11.8"). The same
+ * version/git/date footer the sibling termgfx doors paint on their menus
+ * (SyncDOOM's m_menu.c, SyncDuke's menues.c, SyncRetro's main.c); the hash and
+ * date come from the generated git_hash.h.
+ *
+ * 1oom right-aligns its own string at x=315 on the one 320px-wide row left
+ * free below the title art, so only the left of that row is ours. `maxw` is
+ * how many pixels are free there: the line is built longest-first and drops
+ * its tail (the site, then the date, then the hash) until it fits the
+ * CURRENTLY SELECTED lbxfont, so a wider font can never overrun into 1oom's
+ * string. Pass 0 to skip fitting entirely. Returns a static buffer, valid
+ * until the next call -- draw-path use only, like the rest of the engine. */
+const char *sm_door_version_line(int maxw);
+
+/* The -home <dir> value (per-user config/save sandbox), or NULL if none was
+ * given -- unlike sm_door_alias() above, NULL (not "") on absence, so
+ * syncmoo1_config.c's sm_config_apply() can test it directly. Captured by
+ * sm_door_resolve() in the SAME pass that resolves -s<fd>/-name (DESIGN.md
+ * §8): sm_door_sanitize_argv() below only strips -home from argv, it does
+ * not save the value, so this getter is the only way the value survives
+ * past that strip. */
+const char *sm_door_home(void);
+
+/* The DOOR32.SYS/-t<seconds> session time limit in milliseconds, or 0 if
+ * none was given (no limit enforced). */
+uint32_t sm_door_time_limit_ms(void);
+
+/* Checked once per present tick (hw_term.c's hw_video_draw_buf()): if the
+ * DOOR32 session time limit has elapsed since sm_door_setup(), logs and
+ * exits cleanly (exit(), not sm_door_hangup() -- the socket is presumably
+ * still live, so the atexit-registered sm_io_leave() restores the BBS
+ * terminal same as any other clean quit). A no-op when no time limit was
+ * given. */
+void sm_door_check_time(void);
+
+/* Idle-USER detection. sm_door_idle_arm() must run AFTER sm_config_apply(),
+ * which is what reads the [idle] ini keys the threshold falls back to.
+ * sm_door_idle_wake() returns 1 when the input answered an on-screen countdown
+ * -- the caller must then CONSUME that input instead of handing it to the
+ * engine, or "press any key" also presses that key at the game.
+ * sm_door_check_idle() runs once per present, beside the time check. */
+void sm_door_idle_arm(void);
+int  sm_door_idle_wake(void);
+void sm_door_check_idle(void);
+
+/* Strip the door's own arguments (-s<digits>, -t<digits>, -name <alias>,
+ * -home <dir>, a bare *door32.sys path) from argv before 1oom's own
+ * options_parse() (main.c) sees it -- an unrecognized "-" argument makes
+ * options_parse() log an error and main_1oom() return early (options.c's
+ * options_parse_do()), so leaving these in would abort the door before the
+ * engine even starts. The -s/-t match is DIGIT-SUFFIX-ONLY, so 1oom's own
+ * -sfx/-skipintro/-savequit/etc. reach the engine untouched. -home's VALUE is
+ * captured separately by sm_door_resolve() (read back via sm_door_home()
+ * above) before this function strips the flag+value pair from argv --
+ * syncmoo1_config.c's sm_config_apply() (DESIGN.md §8) reads it from there,
+ * not from argv, since by the time sm_config_apply() runs (after this strip,
+ * per hw_term.c's main() call order) argv no longer carries it. Compacts in
+ * place, keeps argv[0], lowers *argc, and leaves any genuine 1oom option
+ * untouched. Call after sm_door_setup(), before main_1oom(). */
+void sm_door_sanitize_argv(int *argc, char **argv);
+
+/* Pre-fill the new-game emperor name with the player's BBS alias.
+ *
+ * 1oom's new-game name prompt (uinewgame.c's ui_new_game_name()) seeds its edit
+ * buffer from game_opt_new.pdata[0].playername and only invents a random name
+ * when that string is EMPTY. The engine already exposes a way to set it: the
+ * "-ngn <player> <name>" option (game.c's game_opt_set_new_name(), arity 2).
+ * So the door needs no engine change -- it appends that option to argv and the
+ * player sees their own handle as the default, still free to edit it.
+ *
+ * Returns a NEW argv array (malloc'd, NULL-terminated, *argc raised by 3) when
+ * an alias is known, else `argv` unchanged. Call AFTER sm_door_sanitize_argv()
+ * -- the flag is a genuine 1oom option and must survive the strip -- and before
+ * main_1oom(). The result is never freed: it lives for the process. */
+char **sm_door_argv_add_emperor_name(int *argc, char **argv);
+
+/* The single canonical hangup path: client socket dead (read/write error or
+ * EOF). Wired to both the read side (hw_term.c's hw_event_handle) and the
+ * write side (syncmoo1_io.c's flush), replacing the two earlier ad-hoc
+ * bare-_exit paths. Runs sm_io_leave() (bounded drain + BBS terminal-mode
+ * restore) first, then _exit(0) to skip the engine's other atexit handlers
+ * (which could block on the dead socket). `why` is logged to stderr (-> BBS
+ * log); may be NULL. */
+void sm_door_hangup(const char *why);
+
+/* --- syncmoo1_config.c: per-user -home sandbox + shared LBX data-path
+ * resolution (DESIGN.md §8 per-user sandbox, §15 assets) --
+ *
+ * Consumed by hw_term.c's main(), called AFTER sm_door_sanitize_argv() (so
+ * -home has already been captured by sm_door_resolve()/sm_door_home() above,
+ * since sanitize strips it from argv) and BEFORE sm_io_init()/main_1oom() (so
+ * the chdir below happens before main_1oom() ever reaches lbxfile_find_dir(),
+ * 1oom/src/main.c).
+ */
+
+/* One-time setup:
+ *   1. RESOLVE the shared, read-only MoO1 LBX data dir to an ABSOLUTE path
+ *      (isdir() + FULLPATH(), xpdev): the SYNCMOO1_LBX env var if it names
+ *      an existing directory, else the
+ *      door's own launch directory (cwd, which for a native door is the
+ *      program's SCFG start-up path when one is configured -- conventionally
+ *      xtrn/syncmoo1, where a sysop drops the data -- and otherwise just the
+ *      sbbs process's own cwd, ctrl_dir, which harmlessly holds no LBX
+ *      files). Absolutized, and resolved BEFORE step 2, so the
+ *      sandbox chdir can't break a relative path. The resolved dir is only
+ *      stashed here; sm_config_apply_data_path() (below) is what hands it to
+ *      1oom, later. Nothing is reimplemented of 1oom's own data search: an
+ *      unusable dir simply becomes the first candidate that fails, and
+ *      lbxfile_find_dir() (lbx.c) falls through to the rest of
+ *      os_get_paths_data() (XDG dirs, /usr/share/1oom, ...).
+ *   2. GUARANTEE: this door never writes anything under $HOME. If
+ *      sm_door_home() (above) is non-NULL: mkpath() it (dirwrap.h; creates
+ *      any missing path components), FULLPATH()-absolutize it, and hand it
+ *      to 1oom via os_set_path_user() (os.h) -- which is what 1oom prefixes
+ *      onto its config + save file paths (cfg.c's cfg_cfgname(),
+ *      game/game_save.c's slot/year fname builders), an ABSOLUTE path, NOT a
+ *      cwd-relative one. So this, not a chdir, is what actually isolates
+ *      each player's saves/config; a chdir() into the dir is also done
+ *      (harmless, contains any stray relative I/O) but is not the isolation
+ *      mechanism. If sm_door_home() is NULL (no -home given), the door's
+ *      own absolute current working directory is used instead -- NEVER
+ *      1oom's own $XDG_CONFIG_HOME/$HOME fallback (os/unix/os.c's
+ *      os_get_path_user()). Either way, os_set_path_user() is called
+ *      unconditionally, before anything in this process can call
+ *      os_get_path_user() and lazily cache that $HOME/XDG fallback into its
+ *      static -- so it never runs. Storage lands under -home when given,
+ *      otherwise cwd; read-only game data still comes from the -data dir
+ *      (step 1 above), which is unaffected by any of this.
+ * Step 1 runs before step 2 (see the absolutize note) so the data-path
+ * resolution can never be affected by the sandbox chdir, regardless of
+ * whether SYNCMOO1_LBX was given as a relative path.
+ *
+ * Returns 0 on success (including no -home given -- the user path still gets
+ * set, just to cwd instead). A failed mkpath()/chdir() into -home is logged
+ * to stderr and returns -1, but is not
+ * itself treated as fatal by main() -- matching this door's general
+ * "degrades, doesn't abort" posture elsewhere (e.g.
+ * sm_door_configure_socket()'s best-effort setsockopt/fcntl calls). */
+int sm_config_apply(void);
+
+/* Hand the data dir resolved by sm_config_apply() to 1oom (os_set_path_data()).
+ * Called from hw_init() -- NOT from main() -- because that is the one point in
+ * main_1oom()'s startup that lies after options_parse_early()'s cfg_load()
+ * (whose remembered "data_path" would otherwise overwrite ours) and before
+ * options_parse() applies 1oom's own "-data" (which should, and does, win).
+ * See syncmoo1_config.c for the full ordering rationale. No-op if
+ * sm_config_apply() resolved no dir. */
+void sm_config_apply_data_path(void);
+
+#endif /* SYNCMOO1_H */

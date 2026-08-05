@@ -31,6 +31,7 @@
 #include "datewrap.h"
 #include "date_str.h"
 #include "smblib.h"
+#include "getmail.h"
 #include "getstats.h"
 #include "msgdate.h"
 #include "scfglib.h"
@@ -97,7 +98,7 @@ int matchuser(scfg_t* cfg, const char *name, bool sysop_alias)
 	    (!stricmp(name, "SYSOP") || !stricmp(name, "POSTMASTER") || !stricmp(name, cfg->sys_id)))
 		return 1;
 
-	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
+	useridx_filename(cfg, str, sizeof str);
 	if ((stream = fnopen(&file, str, O_RDONLY)) == NULL)
 		return 0;
 	length = filelength(file);
@@ -298,6 +299,14 @@ bool del_lastuser(scfg_t* cfg)
 	}
 	int result = chsize(file, (long)length - USER_RECORD_LINE_LEN);
 	close(file);
+	if (result != 0)
+		return false;
+	int count = ((long)length - USER_RECORD_LINE_LEN) / USER_RECORD_LINE_LEN;
+	char path[MAX_PATH + 1];
+	if ((file = nopen(useridx_filename(cfg, path, sizeof path), O_RDWR)) == -1)
+		return false;
+	result = chsize(file, count * USER_INDEX_RECORD_LEN);
+	close(file);
 	return result == 0;
 }
 
@@ -344,6 +353,24 @@ bool lockuserdat(int file, int user_number)
 	return attempt < LOOP_USERDAT;
 }
 
+/* Like lockuserdat() but takes a shared (read) lock, so multiple readers of the
+   same user record proceed concurrently (conflicting only with a writer).  Used
+   for read-only access (getuserdat), so user-record reads don't serialize - a
+   severe contention source when the user base is on a network (SMB) share. */
+bool rdlockuserdat(int file, int user_number)
+{
+	if (!VALID_USER_NUMBER(user_number))
+		return false;
+
+	off_t    offset = userdatoffset(user_number);
+	unsigned attempt = 0;
+	while (attempt < LOOP_USERDAT && rdlock(file, offset, USER_RECORD_LINE_LEN) == -1) {
+		attempt++;
+		FILE_RETRY_DELAY(attempt, LOCK_RETRY_DELAY);
+	}
+	return attempt < LOOP_USERDAT;
+}
+
 bool unlockuserdat(int file, int user_number)
 {
 	if (!VALID_USER_NUMBER(user_number))
@@ -384,7 +411,10 @@ int readuserdat(scfg_t* cfg, int user_number, char* userdat, size_t size, int in
 		return USER_SEEK_ERROR;
 	}
 
-	if (!lockuserdat(file, user_number)) {
+	/* Read-only access takes a shared lock (concurrent readers OK); when the
+	   lock is left held for a subsequent write (leave_locked), it must be an
+	   exclusive lock. */
+	if (!(leave_locked ? lockuserdat(file, user_number) : rdlockuserdat(file, user_number))) {
 		if (file != infile)
 			close(file);
 		return USER_LOCK_ERROR;
@@ -894,7 +924,7 @@ char* username(scfg_t* cfg, int usernumber, char *name)
 		name[0] = 0;
 		return name;
 	}
-	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
+	useridx_filename(cfg, str, sizeof str);
 	if (flength(str) < 1L) {
 		name[0] = 0;
 		return name;
@@ -935,7 +965,7 @@ int putusername(scfg_t* cfg, int number, const char *name)
 	if (!VALID_CFG(cfg) || name == NULL || !VALID_USER_NUMBER(number))
 		return USER_INVALID_ARG;
 
-	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
+	useridx_filename(cfg, str, sizeof str);
 	if ((file = nopen(str, O_RDWR | O_CREAT)) == -1)
 		return USER_OPEN_ERROR;
 	length = filelength(file);
@@ -1695,7 +1725,7 @@ char* node_activity(scfg_t* cfg, node_t* node, char* str, size_t size, int num)
 					xtrnnum = node->aux - 1;
 			}
 			if (xtrnnum_is_valid(cfg, xtrnnum))
-				snprintf(str, size, "%s external program %s"
+				snprintf(str, size, "%s %s"
 				         , cfg->text != NULL ? cfg->text[NodeActivityRunningXtrn] : "running"
 				         , cfg->xtrn[xtrnnum]->name);
 			else if (xtrncode != NULL)
@@ -3629,7 +3659,7 @@ int newuserdat(scfg_t* cfg, user_t* user)
 	if (!VALID_CFG(cfg) || user == NULL)
 		return USER_INVALID_ARG;
 
-	SAFEPRINTF(str, "%suser/" USER_INDEX_FILENAME, cfg->data_dir);
+	useridx_filename(cfg, str, sizeof str);
 	if (fexist(str)) {
 		if ((stream = fnopen(&file, str, O_RDONLY)) == NULL) {
 			return USER_OPEN_ERROR;
@@ -3700,6 +3730,9 @@ int newuserdat(scfg_t* cfg, user_t* user)
 
 	SAFEPRINTF2(str, "%suser/ptrs/%04u.ixb", cfg->data_dir, user->number); /* legacy msg ptrs */
 	remove(str);
+
+	/* Delete any mail to/from the previous (deleted) user of this record */
+	delusermail(cfg, user->number);
 
 	/* Update daily statistics database (for system and node) */
 
@@ -3803,6 +3836,23 @@ size_t user_field_len(enum user_field fnum)
 
 		default:            return 0;
 	}
+}
+
+/****************************************************************************/
+/* Determine if specified user can or cannot access a specified xtrn prog   */
+/****************************************************************************/
+bool user_can_access_xtrn(scfg_t* cfg, int xtrn_num, user_t* user, client_t* client)
+{
+	if (!VALID_CFG(cfg))
+		return false;
+	if (!xtrnnum_is_valid(cfg, xtrn_num))
+		return false;
+	if (!chk_ar(cfg, cfg->xtrnsec[cfg->xtrn[xtrn_num]->sec]->ar, user, client))
+		return false;
+	if (!chk_ar(cfg, cfg->xtrn[xtrn_num]->ar, user, client))
+		return false;
+
+	return true;
 }
 
 /****************************************************************************/
@@ -4355,6 +4405,8 @@ long loginAttemptListCount(link_list_t* list)
 
 	if (!listLock(list))
 		return -1;
+	/* link_list mutex is recursive (link_list.h:99) — re-lock by listCountNodes is safe */
+	// coverity[LOCK:SUPPRESS]
 	count = listCountNodes(list);
 	listUnlock(list);
 	return count;
@@ -4370,8 +4422,53 @@ long loginAttemptListClear(link_list_t* list)
 
 	if (!listLock(list))
 		return -1;
+	/* link_list mutex is recursive (link_list.h:99) — re-lock by inner ops is safe */
+	// coverity[LOCK:SUPPRESS]
 	count = listCountNodes(list);
+	// coverity[LOCK:SUPPRESS]
 	count -= listFreeNodes(list);
+	listUnlock(list);
+	return count;
+}
+
+/****************************************************************************/
+/* Removes any list entry whose address matches the supplied IP string		*/
+/* (numeric IPv4 or IPv6). Returns the number of entries removed, or		*/
+/* a negative value on failure.												*/
+/****************************************************************************/
+long loginAttemptListClearAddr(link_list_t* list, const char* ip_addr)
+{
+	union xp_sockaddr addr;
+	list_node_t*      node;
+	list_node_t*      next;
+	long              count = 0;
+
+	if (list == NULL || ip_addr == NULL || *ip_addr == '\0')
+		return -1;
+	if (inet_ptoaddr(ip_addr, &addr, sizeof(addr)) == NULL)
+		return -1;
+	if (!listLock(list))
+		return -1;
+	for (node = list->first; node != NULL; node = next) {
+		login_attempt_t* attempt = node->data;
+		next = node->next;
+		if (attempt == NULL || attempt->addr.addr.sa_family != addr.addr.sa_family)
+			continue;
+		switch (addr.addr.sa_family) {
+			case AF_INET:
+				if (memcmp(&attempt->addr.in.sin_addr, &addr.in.sin_addr, sizeof(addr.in.sin_addr)) != 0)
+					continue;
+				break;
+			case AF_INET6:
+				if (memcmp(&attempt->addr.in6.sin6_addr, &addr.in6.sin6_addr, sizeof(addr.in6.sin6_addr)) != 0)
+					continue;
+				break;
+			default:
+				continue;
+		}
+		listRemoveNode(list, node, /* freeData: */ true);
+		count++;
+	}
 	listUnlock(list);
 	return count;
 }
@@ -4430,6 +4527,8 @@ void loginSuccess(link_list_t* list, const union xp_sockaddr* addr)
 		return;
 	listLock(list);
 	if ((node = login_attempted(list, addr)) != NULL)
+		/* link_list mutex is recursive (link_list.h:99) — re-lock by listRemoveNode is safe */
+		// coverity[LOCK:SUPPRESS]
 		listRemoveNode(list, node, /* freeData: */ true);
 	listUnlock(list);
 }
@@ -4469,6 +4568,8 @@ ulong loginFailure(link_list_t* list, const union xp_sockaddr* addr, const char*
 	count = attempt->count - attempt->dupes;
 	if (node == NULL) {
 		attempt->first = attempt->time;
+		/* link_list mutex is recursive (link_list.h:99) — re-lock by listPushNodeData is safe */
+		// coverity[LOCK:SUPPRESS]
 		listPushNodeData(list, attempt, sizeof(login_attempt_t));
 	}
 	listUnlock(list);
@@ -4936,7 +5037,9 @@ bool user_set_bool_property(scfg_t* scfg, int user_number, const char* section, 
 #endif /* !NO_SOCKET_SUPPORT */
 
 /****************************************************************************/
-/* Returns user number or 0 on failure or "user not found".					*/
+/* Returns the number of the active user matching 'inname' (by alias or		*/
+/* real name), or 0 on failure or "user not found". Inactive accounts are	*/
+/* not matched (mail is not deliverable to them).							*/
 /****************************************************************************/
 int lookup_user(scfg_t* cfg, link_list_t* list, const char *inname)
 {
@@ -4952,7 +5055,7 @@ int lookup_user(scfg_t* cfg, link_list_t* list, const char *inname)
 		for (user.number = 1; ; user.number++) {
 			if (fgetuserdat(cfg, &user, userdat) != 0)
 				break;
-			if (user.misc & DELETED)
+			if (!user_is_active(&user))
 				continue;
 			listPushNodeData(list, &user, sizeof(user));
 		}

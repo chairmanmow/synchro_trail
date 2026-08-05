@@ -32,6 +32,9 @@ extern "C" {
 bool    allocerr(char* error, size_t maxerrlen, const char* fname, const char *item, size_t size);
 char*   readline(long *offset, char *str, int maxlen, FILE *stream);
 
+void read_sub_ini_section(scfg_t* cfg, str_list_t ini, const char* section, sub_t* sub, const char* code);
+void read_dir_ini_section(scfg_t* cfg, str_list_t ini, const char* section, dir_t* dir, const char* code);
+
 DLLEXPORT bool  read_node_cfg(scfg_t* cfg, char* error, size_t);
 DLLEXPORT bool  read_main_cfg(scfg_t* cfg, char* error, size_t);
 DLLEXPORT bool  read_xtrn_cfg(scfg_t* cfg, char* error, size_t);
@@ -85,6 +88,7 @@ DLLEXPORT char *    sub_newsgroup_name(scfg_t*, sub_t*, char*, size_t);
 DLLEXPORT char *    sub_area_tag(scfg_t*, sub_t*, char*, size_t);
 DLLEXPORT char *    dir_area_tag(scfg_t*, dir_t*, char*, size_t);
 DLLEXPORT char *    dir_vpath(scfg_t*, dir_t* dir, char* path, size_t);
+DLLEXPORT bool      dir_is_locked(scfg_t*, int dirnum);
 
 uint nearest_sysfaddr_index(scfg_t*, faddr_t*);
 faddr_t* nearest_sysfaddr(scfg_t*, faddr_t*);

@@ -2,16 +2,13 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <errno.h>
 
-#include "bbslist.h"
 #include "ciolib.h"
-#include "filepick.h"
 #include "fonts.h"
 #include "gen_defs.h"
 #include "ini_file.h"
 #include "syncterm.h"
-#include "uifc.h"
-#include "uifcinit.h"
 
 void
 free_font_files(struct font_files *ff)
@@ -30,7 +27,7 @@ free_font_files(struct font_files *ff)
 	free(ff);
 }
 
-void
+bool
 save_font_files(struct font_files *fonts)
 {
 	FILE      *inifile;
@@ -42,15 +39,19 @@ save_font_files(struct font_files *fonts)
 	int        i;
 
 	if (safe_mode)
-		return;
+		return false;
 	get_syncterm_filename(inipath, sizeof(inipath), SYNCTERM_PATH_INI, false);
 	if ((inifile = fopen(inipath, "r")) != NULL) {
 		ini_file = iniReadFile(inifile);
 		fclose(inifile);
 	}
-	else {
+	else if (errno == ENOENT) {
 		ini_file = strListInit();
 	}
+	else
+		return false;
+	if (ini_file == NULL)
+		return false;
 
 	fontnames = iniGetSectionList(ini_file, "Font:");
 
@@ -62,7 +63,12 @@ save_font_files(struct font_files *fonts)
 
 	if (fonts != NULL) {
 		for (i = 0; fonts[i].name && fonts[i].name[0]; i++) {
-			sprintf(newfont, "Font:%s", fonts[i].name);
+			if (snprintf(newfont, sizeof(newfont), "Font:%s",
+			    fonts[i].name) >= (int)sizeof(newfont)) {
+				strListFree(&fontnames);
+				strListFree(&ini_file);
+				return false;
+			}
 			if (fonts[i].path8x8)
 				iniSetString(&ini_file, newfont, "Path8x8", fonts[i].path8x8, &ini_style);
 			if (fonts[i].path8x14)
@@ -73,65 +79,98 @@ save_font_files(struct font_files *fonts)
 				iniSetString(&ini_file, newfont, "Path12x20", fonts[i].path12x20, &ini_style);
 		}
 	}
+	bool success = false;
 	if ((inifile = fopen(inipath, "w")) != NULL) {
-		iniWriteFile(inifile, ini_file);
-		fclose(inifile);
-	}
-	else {
-		uifc.helpbuf = "There was an error writing the INI file.\nCheck permissions and try again.\n";
-		uifc.msg("Cannot write to the .ini file!");
-		check_exit(false);
+		success = iniWriteFile(inifile, ini_file);
+		if (fclose(inifile) != 0)
+			success = false;
 	}
 
 	strListFree(&fontnames);
 	strListFree(&ini_file);
+	return success;
+}
+
+static bool
+read_font_path(FILE *inifile, const char *section, const char *key,
+    char **result)
+{
+	char fontpath[MAX_PATH + 1];
+	char *value = iniReadSString(inifile, section, key, NULL, fontpath,
+	    sizeof(fontpath));
+	if (value == NULL) {
+		*result = NULL;
+		return true;
+	}
+	*result = strdup(fontpath);
+	return *result != NULL;
 }
 
 struct font_files *
-
-read_font_files(int *count)
+read_font_files(int *count, bool *success)
 {
 	FILE              *inifile;
 	char               inipath[MAX_PATH + 1];
-	char               fontpath[MAX_PATH + 1];
 	char              *fontid;
 	str_list_t         fonts;
 	struct font_files *ret = NULL;
 	struct font_files *tmp;
 
 	*count = 0;
+	*success = false;
 	get_syncterm_filename(inipath, sizeof(inipath), SYNCTERM_PATH_INI, false);
-	if ((inifile = fopen(inipath, "r")) == NULL)
+	if ((inifile = fopen(inipath, "r")) == NULL) {
+		*success = errno == ENOENT;
 		return ret;
+	}
 	fonts = iniReadSectionList(inifile, "Font:");
 	while ((fontid = strListRemove(&fonts, 0)) != NULL) {
 		if (!fontid[5]) {
 			free(fontid);
 			continue;
 		}
+		if (*count >= 256 - CONIO_FIRST_FREE_FONT) {
+			free(fontid);
+			goto fail;
+		}
 		(*count)++;
 		tmp = (struct font_files *)realloc(ret, sizeof(struct font_files) * (*count + 1));
 		if (tmp == NULL) {
-			(*count)--;
 			free(fontid);
-			continue;
+			goto fail;
 		}
 		ret = tmp;
-		ret[*count].name = NULL;
+		memset(&ret[*count - 1], 0, sizeof(ret[*count - 1]));
+		memset(&ret[*count], 0, sizeof(ret[*count]));
 		ret[*count - 1].name = strdup(fontid + 5);
-		if ((ret[*count - 1].path8x8 = iniReadSString(inifile, fontid, "Path8x8", NULL, fontpath, sizeof(fontpath))) != NULL)
-			ret[*count - 1].path8x8 = strdup(fontpath);
-		if ((ret[*count - 1].path8x14 = iniReadSString(inifile, fontid, "Path8x14", NULL, fontpath, sizeof(fontpath))) != NULL)
-			ret[*count - 1].path8x14 = strdup(fontpath);
-		if ((ret[*count - 1].path8x16 = iniReadSString(inifile, fontid, "Path8x16", NULL, fontpath, sizeof(fontpath))) != NULL)
-			ret[*count - 1].path8x16 = strdup(fontpath);
-		if ((ret[*count - 1].path12x20 = iniReadSString(inifile, fontid, "Path12x20", NULL, fontpath, sizeof(fontpath))) != NULL)
-			ret[*count - 1].path12x20 = strdup(fontpath);
+		if (ret[*count - 1].name == NULL) {
+			free(fontid);
+			goto fail;
+		}
+		if (!read_font_path(inifile, fontid, "Path8x8",
+		    &ret[*count - 1].path8x8) ||
+		    !read_font_path(inifile, fontid, "Path8x14",
+		    &ret[*count - 1].path8x14) ||
+		    !read_font_path(inifile, fontid, "Path8x16",
+		    &ret[*count - 1].path8x16) ||
+		    !read_font_path(inifile, fontid, "Path12x20",
+		    &ret[*count - 1].path12x20)) {
+			free(fontid);
+			goto fail;
+		}
 		free(fontid);
 	}
 	fclose(inifile);
 	strListFree(&fonts);
+	*success = true;
 	return ret;
+
+fail:
+	fclose(inifile);
+	strListFree(&fonts);
+	free_font_files(ret);
+	*count = 0;
+	return NULL;
 }
 
 void
@@ -143,22 +182,21 @@ load_font_files(void)
 	struct font_files *ff;
 	FILE              *fontfile;
 	char              *fontdata;
+	bool               success;
 
-	ff = read_font_files(&count);
-	for (i = 0; i < count; i++) {
-		if (conio_fontdata[nextfont].eight_by_sixteen)
-			FREE_AND_NULL(conio_fontdata[nextfont].eight_by_sixteen);
-		if (conio_fontdata[nextfont].eight_by_fourteen)
-			FREE_AND_NULL(conio_fontdata[nextfont].eight_by_fourteen);
-		if (conio_fontdata[nextfont].eight_by_eight)
-			FREE_AND_NULL(conio_fontdata[nextfont].eight_by_eight);
-		if (conio_fontdata[nextfont].twelve_by_twenty)
-			FREE_AND_NULL(conio_fontdata[nextfont].twelve_by_twenty);
-		if (conio_fontdata[nextfont].desc)
-			FREE_AND_NULL(conio_fontdata[nextfont].desc);
-		if (ff[i].name)
-			conio_fontdata[nextfont].desc = strdup(ff[i].name);
-		else
+	ff = read_font_files(&count, &success);
+	if (!success)
+		return;
+	for (i = CONIO_FIRST_FREE_FONT; i < 256; i++) {
+		FREE_AND_NULL(conio_fontdata[i].eight_by_sixteen);
+		FREE_AND_NULL(conio_fontdata[i].eight_by_fourteen);
+		FREE_AND_NULL(conio_fontdata[i].eight_by_eight);
+		FREE_AND_NULL(conio_fontdata[i].twelve_by_twenty);
+		FREE_AND_NULL(conio_fontdata[i].desc);
+	}
+	for (i = 0; i < count && nextfont < 256; i++) {
+		if (ff[i].name == NULL ||
+		    (conio_fontdata[nextfont].desc = strdup(ff[i].name)) == NULL)
 			continue;
 		if (ff[i].path8x8 && ff[i].path8x8[0]) {
 			if ((fontfile = fopen(ff[i].path8x8, "rb")) != NULL) {
@@ -208,7 +246,9 @@ load_font_files(void)
 	}
 	free_font_files(ff);
 
-	for (i = 0; conio_fontdata[i].desc != NULL; i++) {
+	for (i = 0; i < 257; i++)
+		font_names[i] = NULL;
+	for (i = 0; i < 256 && conio_fontdata[i].desc != NULL; i++) {
 		font_names[i] = conio_fontdata[i].desc;
 		if (!strcmp(conio_fontdata[i].desc, "Codepage 437 English"))
 			default_font = i;
@@ -234,190 +274,4 @@ find_font_id(char *name)
 		}
 	}
 	return ret;
-}
-
-void
-font_management(void)
-{
-	int                i, j;
-	int                cur = 0;
-	int                bar = 0;
-	int                fcur = 0;
-	int                fbar = 0;
-	int                count = 0;
-	struct font_files *fonts;
-	char              *opt[256];
-	char               opts[6][80];
-	struct font_files *tmp;
-	char               str[128];
-
-	fonts = read_font_files(&count);
-	opts[4][0] = 0;
-
-	for (; !quitting;) {
-		uifc.helpbuf = "`Font Management`\n\n"
-		    "Allows you to add and remove font files to/from the default font set.\n\n"
-		    "`INS` Adds a new font.\n"
-		    "`DEL` Removes an existing font.\n\n"
-		    "Selecting a font allows you to set the files for all three font sizes:\n\n"
-		    "`8x8`  Used for screen modes with 35 or more lines and all C64/C128 modes\n"
-		    "`8x14` Used for screen modes with 28 and 34 lines\n"
-		    "`8x16` Used for screen modes with 30 lines or fewer than 28 lines.";
-		if (fonts) {
-			for (j = 0; fonts[j].name && fonts[j].name[0]; j++)
-				opt[j] = fonts[j].name;
-			opt[j] = "";
-		}
-		else {
-			opts[0][0] = 0;
-			opt[0] = opts[0];
-		}
-		i = uifc.list(WIN_SAV | WIN_INS | WIN_INSACT | WIN_DEL | WIN_XTR | WIN_ACT,
-		        0,
-		        0,
-		        0,
-		        &cur,
-		        &bar,
-		        "Font Management",
-		        opt);
-		if (i == -1) {
-			check_exit(false);
-			save_font_files(fonts);
-			free_font_files(fonts);
-			return;
-		}
-		for (; !quitting;) {
-			char  *fontmask;
-			int    show_filepick = 0;
-			char **path;
-
-			if (i & MSK_DEL) {
-				if (fonts) {
-					FREE_AND_NULL(fonts[cur].name);
-					FREE_AND_NULL(fonts[cur].path8x8);
-					FREE_AND_NULL(fonts[cur].path8x14);
-					FREE_AND_NULL(fonts[cur].path8x16);
-					FREE_AND_NULL(fonts[cur].path12x20);
-					memmove(&(fonts[cur]), &(fonts[cur + 1]),
-					    sizeof(struct font_files) * (count - cur));
-					count--;
-				}
-				break;
-			}
-			if (i & MSK_INS) {
-				str[0] = 0;
-				uifc.helpbuf = "Enter the name of the font as you want it to appear in menus.";
-				if (uifc.input(WIN_SAV | WIN_MID, 0, 0, "Font Name", str, 50, 0) == -1) {
-					check_exit(false);
-					break;
-				}
-				count++;
-				tmp = (struct font_files *)realloc(fonts, sizeof(struct font_files) * (count + 1));
-				if (tmp == NULL) {
-					uifc.msg("realloc() failure, cannot add font.");
-					check_exit(false);
-					count--;
-					break;
-				}
-				fonts = tmp;
-				memmove(fonts + cur + 1, fonts + cur, sizeof(struct font_files) * (count - cur));
-				memset(&(fonts[count]), 0, sizeof(fonts[count]));
-				fonts[cur].name = strdup(str);
-				fonts[cur].path8x8 = NULL;
-				fonts[cur].path8x14 = NULL;
-				fonts[cur].path8x16 = NULL;
-				fonts[cur].path12x20 = NULL;
-			}
-			for (i = 0; i < 5; i++)
-				opt[i] = opts[i];
-			uifc.helpbuf = "`Font Details`\n\n"
-			    "`8x8`  Used for screen modes with 35 or more lines and all C64/C128 modes\n"
-			    "`8x14` Used for screen modes with 28 and 34 lines\n"
-			    "`8x16` Used for screen modes with 30 lines or fewer than 28 lines.\n"
-			    "`12x20` Used for Prestel mode.";
-			sprintf(opts[0], "Name: %.50s", fonts[cur].name ? fonts[cur].name : "<undefined>");
-			sprintf(opts[1], "8x8   %.50s", fonts[cur].path8x8 ? fonts[cur].path8x8 : "<undefined>");
-			sprintf(opts[2], "8x14  %.50s", fonts[cur].path8x14 ? fonts[cur].path8x14 : "<undefined>");
-			sprintf(opts[3], "8x16  %.50s", fonts[cur].path8x16 ? fonts[cur].path8x16 : "<undefined>");
-			sprintf(opts[4], "12x20 %.50s", fonts[cur].path12x20 ? fonts[cur].path12x20 : "<undefined>");
-			opts[5][0] = 0;
-			i = uifc.list(WIN_SAV | WIN_ACT | WIN_INS | WIN_INSACT | WIN_DEL | WIN_RHT | WIN_BOT,
-			        0,
-			        0,
-			        0,
-			        &fcur,
-			        &fbar,
-			        "Font Details",
-			        opt);
-			if (i == -1) {
-				check_exit(false);
-				break;
-			}
-			switch (i) {
-				case 0:
-					SAFECOPY(str, fonts[cur].name);
-					uifc.helpbuf = "Enter the name of the font as you want it to appear\nin menus.";
-					if (uifc.input(WIN_SAV | WIN_MID, 0, 0, "Font Name", str, 50, K_EDIT) == -1) {
-						check_exit(false);
-					}
-					else {
-						FREE_AND_NULL(fonts[cur].name);
-						fonts[cur].name = strdup(str);
-						show_filepick = 0;
-					}
-					break;
-				case 1:
-					sprintf(str, "8x8 %.50s", fonts[cur].name);
-					path = &(fonts[cur].path8x8);
-					fontmask = "*.f8";
-					show_filepick = 1;
-					break;
-				case 2:
-					sprintf(str, "8x14 %.50s", fonts[cur].name);
-					path = &(fonts[cur].path8x14);
-					fontmask = "*.f14";
-					show_filepick = 1;
-					break;
-				case 3:
-					sprintf(str, "8x16 %.50s", fonts[cur].name);
-					path = &(fonts[cur].path8x16);
-					fontmask = "*.f16";
-					show_filepick = 1;
-					break;
-				case 4:
-					sprintf(str, "12x20 %.50s", fonts[cur].name);
-					path = &(fonts[cur].path12x20);
-					fontmask = "*.f20";
-					show_filepick = 1;
-					break;
-			}
-			if (show_filepick && !safe_mode) {
-				int               result;
-				struct file_pick  fpick;
-				struct vmem_cell *savbuf;
-				struct text_info  ti;
-
-				gettextinfo(&ti);
-				savbuf = alloca((ti.screenheight - 2U) * ti.screenwidth * sizeof(*savbuf));
-				if (savbuf == NULL) {
-					uifc.helpbuf = "malloc() has failed.  Available Memory is dangerously low.";
-					uifc.msg("malloc() failure.");
-					check_exit(false);
-					continue;
-				}
-				vmem_gettext(1, 2, ti.screenwidth, ti.screenheight - 1, savbuf);
-				result = filepick(&uifc, str, &fpick, ".", fontmask, UIFC_FP_ALLOWENTRY);
-				if ((result != -1) && (fpick.files > 0)) {
-					FREE_AND_NULL(*path);
-					*(path) = strdup(fpick.selected[0]);
-				}
-				else {
-					check_exit(false);
-				}
-				filepick_free(&fpick);
-				vmem_puttext(1, 2, ti.screenwidth, ti.screenheight - 1, savbuf);
-			}
-		}
-	}
-	free_font_files(fonts);
 }

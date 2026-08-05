@@ -1,5 +1,6 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <mmsystem.h>
 
 #include <math.h>
 #include <stdbool.h>
@@ -186,6 +187,16 @@ gdi_mouse_thread(void *data)
 	while(wch != NULL) {
 		if(mouse_wait())
 			gdi_add_key(CIO_KEY_MOUSE);
+	}
+}
+
+static void
+gdi_key_thread(void *data)
+{
+	SetThreadName("GDI Key");
+	while(wch != NULL) {
+		if(ciokey_wait())
+			gdi_add_key(CIO_KEY_KEY_EVENT);
 	}
 }
 
@@ -518,13 +529,21 @@ win_to_pos(LPARAM lParam, struct gdi_mouse_pos *p)
 	return ret;
 }
 
+static int
+gdi_kbmodifiers(void)
+{
+	return ((GetKeyState(VK_SHIFT) < 0) ? CIOLIB_KMOD_SHIFT : 0)
+	     | ((GetKeyState(VK_CONTROL) < 0) ? CIOLIB_KMOD_CTRL : 0)
+	     | ((GetKeyState(VK_MENU) < 0) ? CIOLIB_KMOD_ALT : 0);
+}
+
 static LRESULT
 gdi_handle_mouse_button(LPARAM lParam, int event)
 {
 	struct gdi_mouse_pos p;
 
 	if (win_to_pos(lParam, &p))
-		ciomouse_gotevent(event, p.tx, p.ty, p.px, p.py);
+		ciomouse_gotevent(event, p.tx, p.ty, p.px, p.py, gdi_kbmodifiers());
 	return 0;
 }
 
@@ -532,9 +551,9 @@ static LRESULT
 gdi_handle_mouse_wheel(int16_t distance, LPARAM lParam)
 {
 	if (distance > 0) // Forward
-		ciomouse_gotevent(CIOLIB_BUTTON_PRESS(4), -1, -1 ,-1 ,-1);
+		ciomouse_gotevent(CIOLIB_BUTTON_PRESS(4), -1, -1 ,-1 ,-1, gdi_kbmodifiers());
 	else
-		ciomouse_gotevent(CIOLIB_BUTTON_PRESS(5), -1, -1 ,-1 ,-1);
+		ciomouse_gotevent(CIOLIB_BUTTON_PRESS(5), -1, -1 ,-1 ,-1, gdi_kbmodifiers());
 	return 0;
 }
 
@@ -694,6 +713,14 @@ gdi_handle_wm_dpichanged(WPARAM wParam, RECT *r)
 	return 0;
 }
 
+#define WMOD_CTRL     1
+#define WMOD_LCTRL    2
+#define WMOD_RCTRL    4
+#define WMOD_SHIFT    8
+#define WMOD_LSHIFT  16
+#define WMOD_RSHIFT  32
+static uint8_t mods = 0;
+
 static LRESULT CALLBACK
 gdi_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 	POINT p;
@@ -740,6 +767,28 @@ gdi_WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 			return gdi_handle_mouse_button(lParam, CIOLIB_BUTTON_RELEASE(3));
 		case WM_ACTIVATE:
 			return gdi_handle_activate(hwnd, wParam);
+		case WM_KILLFOCUS:
+			// WM_KILLFOCUS/WM_SETFOCUS are sent (not posted),
+			// so they come directly here, bypassing
+			// magic_message (ticket 226).
+			mods = 0;
+			ciokey_focus_lost();
+			return 0;
+		case WM_SETFOCUS:
+			mods = 0;
+			if (GetAsyncKeyState(VK_CONTROL) < 0)
+				mods |= WMOD_CTRL;
+			if (GetAsyncKeyState(VK_LCONTROL) < 0)
+				mods |= WMOD_LCTRL;
+			if (GetAsyncKeyState(VK_RCONTROL) < 0)
+				mods |= WMOD_RCTRL;
+			if (GetAsyncKeyState(VK_SHIFT) < 0)
+				mods |= WMOD_SHIFT;
+			if (GetAsyncKeyState(VK_LSHIFT) < 0)
+				mods |= WMOD_LSHIFT;
+			if (GetAsyncKeyState(VK_RSHIFT) < 0)
+				mods |= WMOD_RSHIFT;
+			return 0;
 		case WM_GETMINMAXINFO:
 			return handle_wm_getminmaxinfo((MINMAXINFO *)lParam);
 		case WM_SETCURSOR:
@@ -797,16 +846,9 @@ gdi_snap(bool grow)
 	assert_rwlock_unlock(&vstatlock);
 }
 
-#define WMOD_CTRL     1
-#define WMOD_LCTRL    2
-#define WMOD_RCTRL    4
-#define WMOD_SHIFT    8
-#define WMOD_LSHIFT  16
-#define WMOD_RSHIFT  32
 static bool
 magic_message(MSG msg)
 {
-	static uint8_t mods = 0;
 	uint8_t set = 0;
 
 	/* Note that some messages go directly to gdi_WndProc(), so we can't
@@ -818,6 +860,11 @@ magic_message(MSG msg)
 		case WM_KEYUP:
 		case WM_SYSKEYDOWN:
 		case WM_SYSKEYUP:
+		{
+			uint16_t evdev = win32_evdev_key(msg.wParam, (msg.lParam >> 16) & 0xff,
+			    (msg.lParam & (1 << 24)) ? ENHANCED_KEY : 0);
+			if (evdev != 0)
+				ciokey_gotevent(evdev, msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN);
 			switch (msg.wParam) {
 				case VK_CONTROL:
 					set = WMOD_CTRL;
@@ -942,6 +989,7 @@ magic_message(MSG msg)
 				}
 			}
 			break;
+		}
 	}
 
 	return false;
@@ -1047,6 +1095,7 @@ gdi_kbhit(void)
 	return (avail > 0);
 }
 
+#if WINVER >= _WIN32_WINNT_WIN8
 static int
 kbwaitGot(uint8_t ch, DWORD got)
 {
@@ -1079,6 +1128,7 @@ gdi_kbwait(int ms)
 	Sleep(1);
 	return 0;
 }
+#endif
 
 int
 gdi_getch(void)
@@ -1095,7 +1145,7 @@ gdi_getch(void)
 void
 gdi_beep(void)
 {
-	MessageBeep(MB_ICONWARNING);
+	PlaySoundW((LPCWSTR)SND_ALIAS_SYSTEMHAND, NULL, SND_ALIAS_ID | SND_ASYNC | SND_SENTRY);
 }
 
 void
@@ -1336,11 +1386,12 @@ gdi_init(int mode)
 	CloseHandle(init_sem);
 	if (init_success) {
 		_beginthread(gdi_mouse_thread, 0, NULL);
+		_beginthread(gdi_key_thread, 0, NULL);
 		gdi_textmode(ciolib_initial_mode);
 
 		cio_api.mode=CIOLIB_MODE_GDI;
 		FreeConsole();
-		cio_api.options |= CONIO_OPT_SET_TITLE | CONIO_OPT_SET_NAME | CONIO_OPT_SET_ICON | CONIO_OPT_EXTERNAL_SCALING;
+		cio_api.options |= CONIO_OPT_SET_TITLE | CONIO_OPT_SET_NAME | CONIO_OPT_SET_ICON | CONIO_OPT_EXTERNAL_SCALING | CONIO_OPT_KEY_EVENTS;
 		return(0);
 	}
 	CloseHandle(rch);

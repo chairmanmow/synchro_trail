@@ -25,6 +25,7 @@
 #include "ars_defs.h"
 #include "findstr.h"
 #include "ini_file.h"
+#include "dirwrap.h"     // MKDIR
 #include "sockwrap.h"    // IPPORT_MQTT
 #include "str_util.h"
 
@@ -288,6 +289,7 @@ bool read_main_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	/*****************/
 	section = iniGetParsedSection(sections, "mqtt", /* cut: */ true);
 	cfg->mqtt.enabled = iniGetBool(section, NULL, "enabled", false);
+	cfg->mqtt.internal_broker = iniGetBool(section, NULL, "InternalBroker", false);
 	cfg->mqtt.verbose = iniGetBool(section, NULL, "verbose", true);
 	SAFECOPY(cfg->mqtt.username, iniGetString(section, NULL, "username", "", value));
 	SAFECOPY(cfg->mqtt.password, iniGetString(section, NULL, "password", "", value));
@@ -413,6 +415,53 @@ bool read_main_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 	return result;
 }
 
+void read_sub_ini_section(scfg_t* cfg, str_list_t ini, const char* section, sub_t* sub, const char* code)
+{
+	char value[INI_MAX_VALUE_LEN];
+
+	SAFECOPY(sub->code_suffix, code);
+	SAFECOPY(sub->lname, iniGetString(ini, section, "description", code, value));
+	SAFECOPY(sub->sname, iniGetString(ini, section, "name", code, value));
+	SAFECOPY(sub->qwkname, iniGetString(ini, section, "qwk_name", code, value));
+	SAFECOPY(sub->data_dir, iniGetString(ini, section, "data_dir", "", value));
+
+	SAFECOPY(sub->arstr, iniGetString(ini, section, "ars", "", value));
+	SAFECOPY(sub->read_arstr, iniGetString(ini, section, "read_ars", "", value));
+	SAFECOPY(sub->post_arstr, iniGetString(ini, section, "post_ars", "", value));
+	SAFECOPY(sub->op_arstr, iniGetString(ini, section, "operator_ars", "", value));
+	SAFECOPY(sub->mod_arstr, iniGetString(ini, section, "moderated_ars", "", value));
+
+	arstr(NULL, sub->arstr, cfg, sub->ar);
+	arstr(NULL, sub->read_arstr, cfg, sub->read_ar);
+	arstr(NULL, sub->post_arstr, cfg, sub->post_ar);
+	arstr(NULL, sub->op_arstr, cfg, sub->op_ar);
+	arstr(NULL, sub->mod_arstr, cfg, sub->mod_ar);
+
+	sub->misc = iniGetUInteger(ini, section, "settings", 0);
+	if ((sub->misc & (SUB_FIDO | SUB_INET)) && !(sub->misc & SUB_QNET))
+		sub->misc |= SUB_NOVOTING;
+
+	SAFECOPY(sub->tagline, iniGetString(ini, section, "qwknet_tagline", "", value));
+	SAFECOPY(sub->origline, iniGetString(ini, section, "fidonet_origin", "", value));
+	SAFECOPY(sub->post_sem, iniGetString(ini, section, "post_sem", "", value));
+	SAFECOPY(sub->newsgroup, iniGetString(ini, section, "newsgroup", "", value));
+	SAFECOPY(sub->area_tag, iniGetString(ini, section, "area_tag", "", value));
+
+	sub->faddr = smb_atofaddr(NULL, iniGetString(ini, section, "fidonet_addr", "", value));
+	sub->maxmsgs = iniGetInteger(ini, section, "max_msgs", 0);
+	sub->maxcrcs = iniGetInteger(ini, section, "max_crcs", 0);
+	sub->maxage = iniGetInteger(ini, section, "max_age", 0);
+	sub->ptridx = iniGetInteger(ini, section, "ptridx", 0);
+
+	sub->qwkconf = iniGetUInt16(ini, section, "qwk_conf", 0);
+	sub->pmode = iniGetUInteger(ini, section, "print_mode", 0);
+	sub->n_pmode = iniGetUInteger(ini, section, "print_mode_neg", 0);
+	if (!(sub->pmode & P_NOXATTRS)) {
+		sub->pmode |= (cfg->sys_misc & SM_XATTR_SUPPORT) << P_XATTR_SHIFT;
+		sub->pmode |= P_NOXATTRS; // mark as "upgraded" to new scheme
+	}
+}
+
 /****************************************************************************/
 /* Reads in msgs.ini and initializes the associated variables				*/
 /****************************************************************************/
@@ -513,42 +562,10 @@ bool read_msgs_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 			return allocerr(error, maxerrlen, fname, "sub", sizeof(sub_t));
 		section = iniGetParsedSection(sections, name, /* cut: */ true);
 		memset(cfg->sub[i], 0, sizeof(sub_t));
-		SAFECOPY(cfg->sub[i]->code_suffix, code);
 
 		cfg->sub[i]->subnum = i;
 		cfg->sub[i]->grp = grpnum;
-		SAFECOPY(cfg->sub[i]->lname, iniGetString(section, NULL, "description", code, value));
-		SAFECOPY(cfg->sub[i]->sname, iniGetString(section, NULL, "name", code, value));
-		SAFECOPY(cfg->sub[i]->qwkname, iniGetString(section, NULL, "qwk_name", code, value));
-		SAFECOPY(cfg->sub[i]->data_dir, iniGetString(section, NULL, "data_dir", "", value));
-
-		SAFECOPY(cfg->sub[i]->arstr, iniGetString(section, NULL, "ars", "", value));
-		SAFECOPY(cfg->sub[i]->read_arstr, iniGetString(section, NULL, "read_ars", "", value));
-		SAFECOPY(cfg->sub[i]->post_arstr, iniGetString(section, NULL, "post_ars", "", value));
-		SAFECOPY(cfg->sub[i]->op_arstr, iniGetString(section, NULL, "operator_ars", "", value));
-		SAFECOPY(cfg->sub[i]->mod_arstr, iniGetString(section, NULL, "moderated_ars", "", value));
-
-		arstr(NULL, cfg->sub[i]->arstr, cfg, cfg->sub[i]->ar);
-		arstr(NULL, cfg->sub[i]->read_arstr, cfg, cfg->sub[i]->read_ar);
-		arstr(NULL, cfg->sub[i]->post_arstr, cfg, cfg->sub[i]->post_ar);
-		arstr(NULL, cfg->sub[i]->op_arstr, cfg, cfg->sub[i]->op_ar);
-		arstr(NULL, cfg->sub[i]->mod_arstr, cfg, cfg->sub[i]->mod_ar);
-
-		cfg->sub[i]->misc = iniGetUInteger(section, NULL, "settings", 0);
-		if ((cfg->sub[i]->misc & (SUB_FIDO | SUB_INET)) && !(cfg->sub[i]->misc & SUB_QNET))
-			cfg->sub[i]->misc |= SUB_NOVOTING;
-
-		SAFECOPY(cfg->sub[i]->tagline, iniGetString(section, NULL, "qwknet_tagline", "", value));
-		SAFECOPY(cfg->sub[i]->origline, iniGetString(section, NULL, "fidonet_origin", "", value));
-		SAFECOPY(cfg->sub[i]->post_sem, iniGetString(section, NULL, "post_sem", "", value));
-		SAFECOPY(cfg->sub[i]->newsgroup, iniGetString(section, NULL, "newsgroup", "", value));
-		SAFECOPY(cfg->sub[i]->area_tag, iniGetString(section, NULL, "area_tag", "", value));
-
-		cfg->sub[i]->faddr = smb_atofaddr(NULL, iniGetString(section, NULL, "fidonet_addr", "", value));
-		cfg->sub[i]->maxmsgs = iniGetInteger(section, NULL, "max_msgs", 0);
-		cfg->sub[i]->maxcrcs = iniGetInteger(section, NULL, "max_crcs", 0);
-		cfg->sub[i]->maxage = iniGetInteger(section, NULL, "max_age", 0);
-		cfg->sub[i]->ptridx = iniGetInteger(section, NULL, "ptridx", 0);
+		read_sub_ini_section(cfg, section, NULL, cfg->sub[i], code);
 #ifdef SBBS
 		for (uint j = 0; j < i; j++)
 			if (cfg->sub[i]->ptridx == cfg->sub[j]->ptridx) {
@@ -558,15 +575,6 @@ bool read_msgs_cfg(scfg_t* cfg, char* error, size_t maxerrlen)
 				return false;
 			}
 #endif
-
-
-		cfg->sub[i]->qwkconf = iniGetUInt16(section, NULL, "qwk_conf", 0);
-		cfg->sub[i]->pmode = iniGetUInteger(section, NULL, "print_mode", 0);
-		cfg->sub[i]->n_pmode = iniGetUInteger(section, NULL, "print_mode_neg", 0);
-		if (!(cfg->sub[i]->pmode & P_NOXATTRS)) {
-			cfg->sub[i]->pmode |= (cfg->sys_misc & SM_XATTR_SUPPORT) << P_XATTR_SHIFT;
-			cfg->sub[i]->pmode |= P_NOXATTRS; // mark as "upgraded" to new scheme
-		}
 		++cfg->total_subs;
 	}
 	iniFreeStringList(sub_list);
@@ -737,41 +745,96 @@ void free_msgs_cfg(scfg_t* cfg)
 	cfg->total_phubs = 0;
 }
 
+/* Strip a trailing slash/backslash from path in-place. */
+static char* trim_trailing_slash(char* path)
+{
+	char* p = lastchar(path);
+	if (*p == '\\' || *p == '/')
+		*p = '\0';
+	return path;
+}
+
+/* Faster variant of md() for the make_data_dirs() hot path.
+   The common case (directory already exists from a prior boot)
+   becomes a single MKDIR() syscall returning EEXIST instead of
+   stat() + isdir(), which on Windows avoids the file-attribute
+   fetch and Defender's "file opened" introspection that stat()
+   triggers. We trust EEXIST without re-stat'ing — the cost is
+   that a non-directory file at this path won't be diagnosed
+   here; the BBS will report it later when it tries to open
+   files inside the supposed directory. Callers who need that
+   diagnostic should keep using md(). */
+static int md_fast(const char* inpath)
+{
+	char path[MAX_PATH + 1];
+
+	if (inpath[0] == 0)
+		return EINVAL;
+
+	SAFECOPY(path, inpath);
+	trim_trailing_slash(path);
+
+	if (MKDIR(path) == 0)
+		return 0;
+	if (errno == EEXIST)
+		return 0;
+	/* Parent missing or other failure — fall back to mkpath() via md(). */
+	return md(inpath);
+}
+
 /************************************************************/
 /* Create data and sub-dirs off data if not already created */
 /************************************************************/
 void make_data_dirs(scfg_t* cfg)
 {
-	char str[MAX_PATH + 1];
+	char       str[MAX_PATH + 1];
+	str_list_t seen_data_dirs = strListInit();
 
-	md(cfg->data_dir);
+	md_fast(cfg->data_dir);
 	SAFEPRINTF(str, "%ssubs", cfg->data_dir);
-	md(str);
+	md_fast(str);
 	SAFEPRINTF(str, "%sdirs", cfg->data_dir);
-	md(str);
+	if (md_fast(str) == 0) {
+		/* Seed the dedup set: dir[i]->data_dir defaults to this path
+		   (see load_cfg.c:308), so most entries in the loop below
+		   would otherwise re-stat the directory we just created.
+		   Only seed on success — if creation failed, let the loop
+		   retry per entry instead of skipping silently. */
+		strListPush(&seen_data_dirs, str);
+	}
 	SAFEPRINTF(str, "%stext", cfg->data_dir);
-	md(str);
+	md_fast(str);
 	SAFEPRINTF(str, "%smsgs", cfg->data_dir);
-	md(str);
+	md_fast(str);
 	SAFEPRINTF(str, "%suser", cfg->data_dir);
-	md(str);
+	md_fast(str);
 	SAFEPRINTF(str, "%sqnet", cfg->data_dir);
-	md(str);
+	md_fast(str);
 	SAFEPRINTF(str, "%sfile", cfg->data_dir);
-	md(str);
+	md_fast(str);
 
-	md(cfg->logs_dir);
+	md_fast(cfg->logs_dir);
 	SAFEPRINTF(str, "%slogs", cfg->logs_dir);
-	md(str);
+	md_fast(str);
 
 	if (cfg->mods_dir[0])
-		md(cfg->mods_dir);
+		md_fast(cfg->mods_dir);
 
 	for (int i = 0; i < cfg->total_dirs; i++) {
-		md(cfg->dir[i]->data_dir);
+		/* prep_dir() (load_cfg.c:520) always leaves a trailing slash;
+		   drop it so the lookup matches the seed string. */
+		char key[MAX_PATH + 1];
+		SAFECOPY(key, cfg->dir[i]->data_dir);
+		trim_trailing_slash(key);
+		if (strListFind(seen_data_dirs, key, /* case_sensitive: */ false) < 0) {
+			if (md_fast(cfg->dir[i]->data_dir) == 0)
+				strListPush(&seen_data_dirs, key);
+		}
 		if (cfg->dir[i]->misc & DIR_FCHK)
-			md(cfg->dir[i]->path);
+			md_fast(cfg->dir[i]->path);
 	}
+
+	strListFree(&seen_data_dirs);
 }
 
 int getdirnum(scfg_t* cfg, const char* code)
@@ -1099,4 +1162,14 @@ char* dir_vpath(scfg_t* cfg, dir_t* dir, char* path, size_t size)
 		snprintf(path, size, "%s/%s"
 		              , cfg->lib[dir->lib]->vdir, dir->vdir);
 	return path;
+}
+
+/****************************************************************************/
+/****************************************************************************/
+bool dir_is_locked(scfg_t* cfg, int dirnum)
+{
+	smb_t smb;
+	if (!smb_init_dir(cfg, &smb, dirnum))
+		return false;
+	return smb_islocked(&smb);
 }

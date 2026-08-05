@@ -20,6 +20,7 @@
  ****************************************************************************/
 
 #include "sbbs.h"
+#include "boolsrch.h"
 #include "utf8.h"
 #include "petdefs.h"
 #include "sauce.h"
@@ -36,13 +37,15 @@
 /* like fgets(), excepts discards all carriage-returns						*/
 /* and if cols is non-zero, stops reading when displayed width >= cols		*/
 /****************************************************************************/
-char* sbbs_t::fgetline(char* s, int size, int cols, FILE* stream, int mode)
+char* sbbs_t::fgetline(char* s, size_t size, int cols, FILE* stream, int mode)
 {
-	int len = 0;
+	size_t len = 0;
 
+	if (size == 0)
+		return NULL;
 	memset(s, 0, size);
 
-	while (len < size) {
+	while (len + 1 < size) {
 		int ch = fgetc(stream);
 		if (ch == EOF)
 			break;
@@ -51,7 +54,7 @@ char* sbbs_t::fgetline(char* s, int size, int cols, FILE* stream, int mode)
 		s[len++] = ch;
 		if (ch == '\n')
 			break;
-		if (cols && len >= cols && (int)term->bstrlen(s, mode) >= cols) {
+		if (cols && len >= (size_t)cols && (int)term->bstrlen(s, mode) >= cols) {
 			ch = fgetc(stream);
 			if (ch == '\r')
 				ch = fgetc(stream);
@@ -77,7 +80,8 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 	char* p;
 	int   file;
 	BOOL  rip = FALSE;
-	int   l, length, savcon = console;
+	off_t l, length;
+	auto  savcon = console;
 	FILE *stream;
 
 	if (*inpath == '\0')
@@ -88,7 +92,7 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 		if (strncmp(fpath, cfg.text_dir, strlen(cfg.text_dir)) == 0) {
 			char modpath[MAX_PATH + 1];
 			snprintf(modpath, sizeof modpath, "%stext/%s", cfg.mods_dir, fpath + strlen(cfg.text_dir));
-			if(fexistcase(modpath))
+			if (fexistcase(modpath))
 				SAFECOPY(fpath, modpath);
 		}
 	}
@@ -131,18 +135,18 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 		return false;
 	}
 
-	length = (int)filelength(file);
+	length = filelength(file);
 	if (length < 1) {
 		fclose(stream);
 		if (length < 0) {
-			errormsg(WHERE, ERR_CHK, fpath, length);
+			errormsg(WHERE, ERR_CHK, fpath, (int)length);
 			return false;
 		}
 		return true;
 	}
 
-	struct sauce_charinfo sauce{};
-	if (sauce_fread_charinfo(stream, /* type */nullptr, &sauce)) {
+	struct sauce_charinfo sauce {};
+	if (sauce_fread_charinfo(stream, /* type */ nullptr, &sauce)) {
 		mode |= P_CPM_EOF;
 		if (org_cols == 0 && sauce.width >= TERM_COLS_MIN && sauce.width <= TERM_COLS_MAX) {
 			org_cols = sauce.width;
@@ -156,15 +160,15 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 	}
 
 	if ((mode & P_OPENCLOSE) && length <= PRINTFILE_MAX_FILE_LEN) {
-		if ((buf = (char*)malloc(length + 1L)) == NULL) {
+		if ((buf = (char*)malloc((size_t)length + 1L)) == NULL) {
 			fclose(stream);
-			errormsg(WHERE, ERR_ALLOC, fpath, length + 1L);
+			errormsg(WHERE, ERR_ALLOC, fpath, (int)length + 1L);
 			return false;
 		}
-		l = fread(buf, 1, length, stream);
+		l = fread(buf, 1, (size_t)length, stream);
 		fclose(stream);
 		if (l != length)
-			errormsg(WHERE, ERR_READ, fpath, length);
+			errormsg(WHERE, ERR_READ, fpath, (int)length);
 		else {
 			buf[l] = 0;
 			if ((mode & P_UTF8) && (term->charset() != CHARSET_UTF8))
@@ -180,11 +184,14 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 		uint             orgcon = console;
 
 		attr_sp = 0;    /* clear any saved attributes */
-		off_t* offset = nullptr;
-		size_t line=0;
-		size_t lines=0;
-		char key = 0;
-		int kmode = K_UPPER;
+		off_t*           offset = nullptr;
+		size_t           line = 0;
+		size_t           lines = 0;
+		size_t           last_match = SIZE_MAX; // line of most recent search match (for 'n'/'N' continuation)
+		char             key = 0;
+		char             find_str[128] = {0};
+		bool_expr_t*     find_expr = NULL; // compiled boolean expression for '/' search
+		int              kmode = 0; // case-sensitive: 'n' (next match) and 'N' (previous match)
 		if ((sys_status & SS_USERON) && !(useron.misc & (NOPAUSESPIN)) && cfg.spinning_pause_prompt)
 			kmode |= K_SPIN;
 
@@ -200,108 +207,278 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 
 		if (length > PRINTFILE_MAX_LINE_LEN)
 			length = PRINTFILE_MAX_LINE_LEN;
-		if ((buf = (char*)malloc(length + 1L)) == NULL) {
+		if ((buf = (char*)malloc((size_t)length + 1L)) == NULL) {
 			fclose(stream);
-			errormsg(WHERE, ERR_ALLOC, fpath, length + 1L);
+			errormsg(WHERE, ERR_ALLOC, fpath, (int)length + 1L);
 			return false;
 		}
 
 		uint lncntr = 0; // term->lncntr doesn't increment for initial blank lines
 		ansiParser.reset();
-		int cols = (mode & P_SEEK) ? term->cols : 0;
+		int  cols = (mode & P_SEEK) ? term->cols : 0;
 		while (!feof(stream) && !msgabort()) {
 			off_t o = ftello(stream);
-			if (fgetline(buf, length + 1, cols, stream, mode) == NULL)
-				break;
-			truncnl(buf);
-			if ((mode & P_SEEK) && line == lines) {
-				++lines;
-				if ((offset = static_cast<off_t *>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
-					errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
+			bool  at_eof = false;
+			if (fgetline(buf, (size_t)length + 1, cols, stream, mode) == NULL) {
+				if (!(mode & P_SEEK))
 					break;
-				}
-				offset[line] = o;
+				// P_SEEK at EOF: fall through to the prompt (don't exit silently and don't
+				// reposition the screen — 'less'-style: leave content where it is).
+				at_eof = true;
 			}
-			if ((mode & P_UTF8) && (term->charset() != CHARSET_UTF8))
-				utf8_normalize_str(buf);
-			if (putmsgfrag(buf, mode, org_cols, obj) != '\0') // early-EOF?
-				break;
-			if (term->bstrlen(buf, mode) < 1 || term->column > 0)
-				term->newline();
-			++lncntr;
-			if ((mode & P_SEEK) && (lncntr == term->rows - 1 || key == TERM_KEY_DOWN || key == '\r')) {
-				lncntr = 0;
-				int curatr = term->curatr;
-				double progress = (double)filelength(file) / ftell(stream);
-				bprintf(P_ATCODES, text[SeekPrompt], (int)(progress ? (100.0 / progress) : 0));
-				auto nextline = line;
-				key = getkey(kmode);
-				if (key == no_key() || key == quit_key())
-					sys_status |= SS_ABORT;
-				attr(curatr);
-				term->carriage_return();
-				term->cleartoeol();
-				switch (key) {
-					case TERM_KEY_HOME:
-						nextline = 0;
-						break;
-					case TERM_KEY_UP:
-						if (line <= term->rows - 1)
-							nextline = 0;
-						else
-							nextline = line - (term->rows - 1);
-						break;
-					case 'B':
-					case TERM_KEY_PAGEUP:
-						if (line <= ((term->rows - 1) * 2) - 1)
-							nextline = 0;
-						else
-							nextline = line - (((term->rows - 1) * 2) - 1);
-						break;
-					case TERM_KEY_END:
-					{
-						if (lines < 1)
-							break;
-						bputs(text[SeekingFile]);
-						if (fseeko(stream, offset[lines - 1], SEEK_SET) != 0) {
-							errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[lines - 1]));
-							break;
-						}
-						if (fgetline(buf, length + 1, cols, stream, mode) == NULL)
-							break;
-						size_t lastline = lines - 1;
-						while (!feof(stream) && !msgabort()) {
-							o = ftello(stream);
-							if (fgetline(buf, length + 1, cols, stream, mode) == NULL)
-								break;
-							++lastline;
-							if (lastline >= lines) {
-								++lines;
-								if ((offset = static_cast<off_t*>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
-									errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
-									break;
-								}
-								offset[lastline] = o;
-							}
-						}
-						bputs(text[SeekingFileDone]);
-						if (lines <= term->rows - 1)
-							nextline = 0;
-						else
-							nextline = lines - (term->rows - 1);
+			if (!at_eof) {
+				truncnl(buf);
+				if ((mode & P_SEEK) && line == lines) {
+					++lines;
+					if ((offset = static_cast<off_t *>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
+						errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
 						break;
 					}
-					case TERM_KEY_PAGEDN:
-						if (feof(stream))
-							continue;
-						// Fall-through
-					default:
-					case TERM_KEY_DOWN:
-						nextline = line + 1;
-						break;
+					offset[line] = o;
 				}
+				if ((mode & P_UTF8) && (term->charset() != CHARSET_UTF8))
+					utf8_normalize_str(buf);
+				if (putmsgfrag(buf, mode, org_cols, obj) != '\0') // early-EOF?
+					break;
+				if (term->bstrlen(buf, mode) < 1 || term->column > 0)
+					term->newline();
+				++lncntr;
+			}
+			if ((mode & P_SEEK) && (at_eof || lncntr == term->rows - 1 || key == TERM_KEY_DOWN || key == '\r')) {
+				size_t nextline = line;
+				bool   reprompt;
+				do {
+					reprompt = false;
+					lncntr = 0;
+					nextline = line;
+					int    curatr = term->curatr;
+					double progress = (double)filelength(file) / ftell(stream);
+					bprintf(P_ATCODES, text[SeekPrompt], (int)(progress ? (100.0 / progress) : 0), getfname(fpath));
+					key = getkey(kmode);
+					// 'N' is reserved here for backward search ('less'-style); only quit_key aborts.
+					// toupper() lets users press 'q' or 'Q' to quit (no longer using K_UPPER on getkey()).
+					if (toupper(key) == quit_key())
+						sys_status |= SS_ABORT;
+					attr(curatr);
+					term->carriage_return();
+					term->cleartoeol();
+					switch (key) {
+						case TERM_KEY_HOME:
+							nextline = 0;
+							break;
+						case TERM_KEY_UP:
+							if (line <= term->rows - 1)
+								nextline = 0;
+							else
+								nextline = line - (term->rows - 1);
+							break;
+						case 'b':
+						case 'B':
+						case TERM_KEY_PAGEUP:
+							if (line <= ((term->rows - 1) * 2) - 1)
+								nextline = 0;
+							else
+								nextline = line - (((term->rows - 1) * 2) - 1);
+							break;
+						case TERM_KEY_END:
+						{
+							if (lines < 1)
+								break;
+							bputs(text[SeekingFile]);
+							if (fseeko(stream, offset[lines - 1], SEEK_SET) != 0) {
+								errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[lines - 1]));
+								break;
+							}
+							if (fgetline(buf, (size_t)length + 1, cols, stream, mode) == NULL)
+								break;
+							size_t lastline = lines - 1;
+							while (!feof(stream) && !msgabort()) {
+								o = ftello(stream);
+								if (fgetline(buf, (size_t)length + 1, cols, stream, mode) == NULL)
+									break;
+								++lastline;
+								if (lastline >= lines) {
+									++lines;
+									if ((offset = static_cast<off_t*>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
+										errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
+										break;
+									}
+									offset[lastline] = o;
+								}
+							}
+							bputs(text[SeekingFileDone]);
+							if (lines <= term->rows - 1)
+								nextline = 0;
+							else
+								nextline = lines - (term->rows - 1);
+							break;
+						}
+						case '/':
+						case 'n':    // 'less'-style: next match (search forward)
+						{
+							if (key == '/') {
+								bool_expr_t* new_expr = get_search_string(find_str, sizeof(find_str) - 1, K_LINE | K_NOCRLF);
+								// K_NOCRLF leaves the cursor at end of input; clear the prompt line.
+								term->carriage_return();
+								term->cleartoeol();
+								if (new_expr == NULL) {
+									find_str[0] = '\0';
+									bool_expr_free(find_expr);
+									find_expr = NULL;
+									reprompt = true;
+									break;
+								}
+								bool_expr_free(find_expr);
+								find_expr = new_expr;
+							}
+							if (find_expr == NULL) {
+								reprompt = true;
+								break;
+							}
+							// '/' starts a fresh search from the start of the file. 'n' continues
+							// from the line right after the previous match (less-style), so matches
+							// still visible on screen above the prompt are reachable. Falls back to
+							// line+1 if there's no prior match (e.g., user navigated manually since).
+							if (key == '/')
+								last_match = SIZE_MAX;
+							size_t scan_line = (key == '/') ? 0
+							                 : (last_match != SIZE_MAX) ? last_match + 1
+							                                            : line + 1;
+							bputs(text[SeekingFile]);
+							off_t  saved_pos = ftello(stream);
+							bool   found = false;
+							if (scan_line < lines && fseeko(stream, offset[scan_line], SEEK_SET) != 0) {
+								errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[scan_line]));
+								break;
+							}
+							while (!feof(stream) && !msgabort()) {
+								off_t scan_o = ftello(stream);
+								if (fgetline(buf, (size_t)length + 1, cols, stream, mode) == NULL)
+									break;
+								if (scan_line >= lines) {
+									++lines;
+									if ((offset = static_cast<off_t*>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
+										errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
+										break;
+									}
+									offset[scan_line] = scan_o;
+								}
+								if (bool_expr_match(find_expr, buf)) {
+									found = true;
+									nextline = scan_line;
+									break;
+								}
+								++scan_line;
+							}
+							bputs(text[SeekingFileDone]);
+							if (offset == nullptr)
+								break;
+							if (found) {
+								// Peek forward up to rows-1 lines past the match to see if it's
+								// in the last page of the file. If so, position the display so
+								// the screen shows the last full page (match near the bottom)
+								// instead of just match + EOF (which leaves leftover content
+								// above). Otherwise, match goes at the top of the screen ('less'
+								// behavior).
+								size_t target = scan_line;
+								bool   near_eof = false;
+								for (size_t i = 1; i < (size_t)(term->rows - 1); i++) {
+									off_t peek_o = ftello(stream);
+									if (fgetline(buf, (size_t)length + 1, cols, stream, mode) == NULL) {
+										near_eof = true;
+										break;
+									}
+									size_t peek_line = scan_line + i;
+									if (peek_line >= lines) {
+										++lines;
+										if ((offset = static_cast<off_t*>(realloc_or_free(offset, lines * sizeof *offset))) == nullptr) {
+											errormsg(WHERE, ERR_ALLOC, fpath, lines * sizeof *offset);
+											break;
+										}
+										offset[peek_line] = peek_o;
+									}
+								}
+								if (offset == nullptr)
+									break;
+								if (near_eof && lines > (size_t)(term->rows - 1))
+									target = lines - (term->rows - 1);
+								if (fseeko(stream, offset[target], SEEK_SET) != 0) {
+									errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[target]));
+									break;
+								}
+								clearerr(stream);
+								nextline = target;
+								last_match = scan_line;
+							} else {
+								// Not found: restore file position, show message, and re-prompt
+								// (don't advance the file display — 'less'-style).
+								if (saved_pos >= 0)
+									(void)fseeko(stream, saved_pos, SEEK_SET);
+								clearerr(stream);
+								bputs(text[FindStringNotFound]);
+								reprompt = true;
+							}
+							break;
+						}
+						case 'N':    // 'less'-style: previous match (search backward)
+						{
+							if (find_str[0] == '\0') {
+								reprompt = true;
+								break;
+							}
+							bputs(text[SeekingFile]);
+							off_t  saved_pos = ftello(stream);
+							bool   found = false;
+							// Search backward starting from before the previous match (less-style),
+							// so 'N' steps through visible matches above the prompt.
+							// offset[0..line] is populated (we've scrolled through those lines).
+							size_t scan_start = (last_match != SIZE_MAX && last_match <= line) ? last_match : line;
+							for (size_t i = scan_start; i > 0; ) {
+								--i;
+								if (fseeko(stream, offset[i], SEEK_SET) != 0) {
+									errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[i]));
+									break;
+								}
+								if (fgetline(buf, (size_t)length + 1, cols, stream, mode) == NULL)
+									break;
+								if (strcasestr(buf, find_str) != NULL) {
+									found = true;
+									nextline = i;
+									last_match = i;
+									break;
+								}
+							}
+							bputs(text[SeekingFileDone]);
+							if (!found) {
+								if (saved_pos >= 0)
+									(void)fseeko(stream, saved_pos, SEEK_SET);
+								clearerr(stream);
+								bputs(text[FindStringNotFound]);
+								reprompt = true;
+							}
+							break;
+						}
+						case '?':    // Display help (key listing); re-prompt afterward
+							bputs(text[SeekHelp]);
+							reprompt = true;
+							break;
+						case TERM_KEY_PAGEDN:
+							if (feof(stream)) {
+								// Already at EOF: stay (re-prompt) instead of advancing
+								reprompt = true;
+								break;
+							}
+						// Fall-through
+						default:
+						case TERM_KEY_DOWN:
+							nextline = line + 1;
+							break;
+					}
+				} while (reprompt && offset != nullptr && !msgabort());
 				if (offset == nullptr)
 					break;
+				if (key != '/' && key != 'n' && key != 'N' && key != '?')
+					last_match = SIZE_MAX;  // user navigated manually; clear search anchor
 				if ((key == TERM_KEY_END || nextline != line + 1) && nextline < lines) {
 					if (fseeko(stream, offset[nextline], 0) != 0) {
 						errormsg(WHERE, ERR_SEEK, fpath, static_cast<int>(offset[nextline]));
@@ -310,7 +487,7 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 				}
 				line = nextline;
 			}
-			else
+			else if (!at_eof)
 				++line;
 		}
 		if (ansiParser.current_state() != ansiState_none)
@@ -319,6 +496,7 @@ bool sbbs_t::printfile(const char* inpath, int mode, int org_cols, JSObject* obj
 		free(buf);
 		fclose(stream);
 		free(offset);
+		bool_expr_free(find_expr);
 		if (!(mode & P_SAVEATR)) {
 			console = orgcon;
 			attr(tmpatr);
@@ -432,9 +610,7 @@ bool sbbs_t::printtail(const char* fname, int lines, int mode, int org_cols, JSO
 /****************************************************************************/
 bool sbbs_t::menu(const char *code, int mode, JSObject* obj)
 {
-	char        path[MAX_PATH + 1];
-	const char *next = "msg";
-	const char *last = "asc";
+	char path[MAX_PATH + 1];
 
 	if (*useron.lang != '\0' && strchr(code, '/') == NULL) {
 		snprintf(path, sizeof path, "%s/%s", useron.lang, code);
@@ -449,27 +625,56 @@ bool sbbs_t::menu(const char *code, int mode, JSObject* obj)
 	if (menu_file[0])
 		SAFECOPY(path, menu_file);
 	else {
-		do {
-			if ((term->supports(RIP)) && menu_exists(code, "rip", path))
-				break;
-			if ((term->supports(ANSI) && (!term->supports(COLOR))) && menu_exists(code, "mon", path))
-				break;
-			if ((term->supports(ANSI)) && menu_exists(code, "ans", path))
-				break;
-			if ((term->charset() == CHARSET_PETSCII) && menu_exists(code, "seq", path))
-				break;
-			if (term->charset() == CHARSET_ASCII) {
-				next = "asc";
-				last = "msg";
+		/* Resolve the entire terminal-type extension priority within the menu
+		   subdirectory (if any) before falling back to the default menu dir, and
+		   within the mods dir before the stock text dir, so a customized
+		   lower-priority menu file isn't preempted by a stock higher-priority
+		   file (issue #1182). */
+		bool found = false;
+		for (const char* subdir = menu_dir; !found; subdir = "") {
+			for (int tier = 0; !found && tier < 2; tier++) {
+				bool        mods = (tier == 0);
+				const char *next = "msg";
+				const char *last = "asc";
+				do {
+					if (term->supports(RIP) && menu_exists_in(code, "rip", subdir, mods, path)) {
+						found = true;
+						break;
+					}
+					if (term->supports(ANSI) && !term->supports(COLOR) && menu_exists_in(code, "mon", subdir, mods, path)) {
+						found = true;
+						break;
+					}
+					if (term->supports(ANSI) && menu_exists_in(code, "ans", subdir, mods, path)) {
+						found = true;
+						break;
+					}
+					if (term->charset() == CHARSET_PETSCII && menu_exists_in(code, "seq", subdir, mods, path)) {
+						found = true;
+						break;
+					}
+					if (term->charset() == CHARSET_ASCII) {
+						next = "asc";
+						last = "msg";
+					}
+					if (menu_exists_in(code, next, subdir, mods, path)) {
+						found = true;
+						break;
+					}
+					if (menu_exists_in(code, last, subdir, mods, path)) {
+						found = true;
+						break;
+					}
+				} while (0);
 			}
-			if (menu_exists(code, next, path))
+			if (found)
 				break;
-			if (!menu_exists(code, last, path)) {
+			if (isfullpath(code) || *subdir == '\0') {
 				if (!(mode & P_NOERROR))
 					errormsg(WHERE, ERR_CHK, path);
 				return false;
 			}
-		} while (0);
+		}
 	}
 
 	mode |= P_OPENCLOSE | P_CPM_EOF;
@@ -479,50 +684,69 @@ bool sbbs_t::menu(const char *code, int mode, JSObject* obj)
 }
 
 //****************************************************************************
+// Prompt the user for a boolean-search query, compile it, and return the
+// resulting expression for the caller to use (and later free). Handles:
+//   - '?' alone:        display textsrch.msg help menu, re-prompt
+//   - syntax error:     print the error, show the help menu, re-prompt
+//   - empty input/abort: return NULL
+// On success, str contains the input string (e.g. for log/display use) and
+// the returned bool_expr_t* is non-NULL. kmode is the getstr() flag set.
+//****************************************************************************
+bool_expr_t* sbbs_t::get_search_string(char* str, size_t maxlen, int kmode)
+{
+	while (online && !(sys_status & SS_ABORT)) {
+		bputs(text[SearchStringPrompt]);
+		if (getstr(str, maxlen, kmode) == 0)
+			return NULL;
+		if (strcmp(str, "?") == 0) {
+			menu("textsrch");
+			continue;
+		}
+		char*        errmsg = NULL;
+		bool_expr_t* expr   = bool_expr_compile(str, &errmsg);
+		if (expr != NULL) {
+			free(errmsg);
+			return expr;
+		}
+		bprintf(text[InvalidSearchExpression],
+		        errmsg != NULL ? errmsg : "(?)");
+		free(errmsg);
+		menu("textsrch");
+	}
+	return NULL;
+}
+
+//****************************************************************************
 // Check (return true) if a menu file exists with specified type/extension
 // 'path' buffer must be at least (MAX_PATH + 1) bytes in size
 //****************************************************************************
-bool sbbs_t::menu_exists(const char *code, const char* ext, char* path)
+// Check (return true) if a menu file with the specified extension exists within
+// the specified menu sub-directory (subdir may be ""), with no default-dir
+// fallback.  When 'mods' is true, look under the mods dir instead of the stock
+// text dir (again, with no fallback).  Sets 'path' to the matching file on
+// success.
+bool sbbs_t::menu_exists_in(const char *code, const char* ext, const char* subdir, bool mods, char* path)
 {
-	char pathbuf[MAX_PATH + 1];
-	if (path == NULL)
-		path = pathbuf;
-
-	if (menu_file[0]) {
-		strncpy(path, menu_file, MAX_PATH);
-		return fexistcase(path) ? true : false;
-	}
-
-	/* Either <menu>.asc or <menu>.msg or <menu>.ans is required */
-	if (ext == NULL)
-		return menu_exists(code, "asc", path)
-		       || menu_exists(code, "msg", path)
-		       || menu_exists(code, "ans", path);
-
 	char prefix[MAX_PATH];
-	if (isfullpath(code))
+	if (isfullpath(code)) {
+		if (mods)
+			return false;
 		SAFECOPY(prefix, code);
-	else {
-		char subdir[MAX_PATH + 1];
-		SAFECOPY(subdir, menu_dir);
-		backslash(subdir);
+	} else {
+		if (mods && cfg.mods_dir[0] == '\0')
+			return false;
+		char sub[MAX_PATH + 1];
+		SAFECOPY(sub, subdir);
+		backslash(sub);
 		if (*code == '.')
-			*subdir = '\0';
-		SAFEPRINTF3(prefix, "%smenu/%s%s", cfg.text_dir, subdir, code);
-		FULLPATH(path, prefix, MAX_PATH);
+			*sub = '\0';
+		if (mods)
+			SAFEPRINTF3(prefix, "%stext/menu/%s%s", cfg.mods_dir, sub, code);
+		else
+			SAFEPRINTF3(prefix, "%smenu/%s%s", cfg.text_dir, sub, code);
+		if (FULLPATH(path, prefix, MAX_PATH) == NULL) // CID 648908
+			return false;
 		SAFECOPY(prefix, path);
-		if (cfg.mods_dir[0] != '\0') {
-			char modprefix[MAX_PATH + 1];
-			char modpath[MAX_PATH + 1];
-			snprintf(modprefix, sizeof modprefix, "%stext/menu/%s%s", cfg.mods_dir, subdir, code);
-			snprintf(modpath, sizeof modpath, "%s.%s", modprefix, ext);
-			FULLPATH(path, modpath, MAX_PATH);
-			SAFECOPY(modpath, path);
-			if (fexist(modpath)) {
-				FULLPATH(path, modprefix, MAX_PATH);
-				SAFECOPY(prefix, path);
-			}
-		}
 	}
 	// Display specified EXACT width file
 	safe_snprintf(path, MAX_PATH, "%s.%ucol.%s", prefix, term->cols, ext);
@@ -532,10 +756,10 @@ bool sbbs_t::menu_exists(const char *code, const char* ext, char* path)
 	glob_t g = {0};
 	safe_snprintf(path, MAX_PATH, "%s.c*.%s", prefix, ext);
 	if (globi(path, GLOB_NOESCAPE | GLOB_MARK, NULL, &g) == 0) {
-		char*  p;
-		char   term[MAX_PATH + 1];
+		char*    p;
+		char     term[MAX_PATH + 1];
 		safe_snprintf(term, sizeof(term), ".%s", ext);
-		size_t skip = safe_snprintf(path, MAX_PATH, "%s.c", prefix);
+		size_t   skip = safe_snprintf(path, MAX_PATH, "%s.c", prefix);
 		unsigned max = 0;
 		for (size_t i = 0; i < g.gl_pathc; i++) {
 			unsigned long c = strtoul(g.gl_pathv[i] + skip, &p, 10);
@@ -553,6 +777,39 @@ bool sbbs_t::menu_exists(const char *code, const char* ext, char* path)
 
 	safe_snprintf(path, MAX_PATH, "%s.%s", prefix, ext);
 	return fexistcase(path) ? true : false;
+}
+
+bool sbbs_t::menu_exists(const char *code, const char* ext, char* path)
+{
+	char pathbuf[MAX_PATH + 1];
+	if (path == NULL)
+		path = pathbuf;
+
+	if (menu_file[0]) {
+		strncpy(path, menu_file, MAX_PATH);
+		return fexistcase(path) ? true : false;
+	}
+
+	/* If a menu subdirectory is in effect, search it exhaustively (all required
+	   extensions) before falling back to the default menu dir, and search the
+	   mods dir exhaustively before the stock text dir, so a customized
+	   lower-priority extension isn't preempted by a stock file of a
+	   higher-priority extension (issue #1182). */
+	for (const char* subdir = menu_dir; ; subdir = "") {
+		for (int tier = 0; tier < 2; tier++) {
+			bool mods = (tier == 0);
+			if (ext == NULL) {
+				/* Either <menu>.asc or <menu>.msg or <menu>.ans is required */
+				if (menu_exists_in(code, "asc", subdir, mods, path)
+				    || menu_exists_in(code, "msg", subdir, mods, path)
+				    || menu_exists_in(code, "ans", subdir, mods, path))
+					return true;
+			} else if (menu_exists_in(code, ext, subdir, mods, path))
+				return true;
+		}
+		if (isfullpath(code) || *subdir == '\0')
+			return false;
+	}
 }
 
 /****************************************************************************/

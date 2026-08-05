@@ -34,8 +34,8 @@
 /* Constants */
 /*************/
 
-#define VERSION     "3.21"  // Version: Major.minor as 4-char string
-#define REVISION    'd'     // Revision: lowercase letter
+#define VERSION     "3.22"  // Version: Major.minor as 4-char string
+#define REVISION    'a'     // Revision: lowercase letter
 #define VERSION_INT ((DEC_CHAR_TO_INT(VERSION[0]) * 100) + (DEC_CHAR_TO_INT(VERSION[2]) * 10) + DEC_CHAR_TO_INT(VERSION[3]))  // Version as increasing 3-decimal-digit integer value
 #define VERSION_NUM (((VERSION_INT) * 100) + (tolower(REVISION) - 'a')) // Version and revision as a 5-decimal-digit integer value
 #define VERSION_HEX (((VERSION_INT / 100) * 0x10000)  + (((VERSION_INT % 100) / 10) * 0x1000) + ((VERSION_INT % 10) * 0x100) + (tolower(REVISION) - 'a'))
@@ -66,7 +66,7 @@
 #define JAVASCRIPT_GC_INTERVAL      100
 #define JAVASCRIPT_LOAD_PATH        "load"
 #define JAVASCRIPT_LOAD_PATH_LIST   "load_path_list"
-#define JAVASCRIPT_OPTIONS          0x810   // JSOPTION_JIT | JSOPTION_COMPILE_N_GO
+#define JAVASCRIPT_OPTIONS          0x10    // JSOPTION_COMPILE_N_GO (JSOPTION_JIT/TraceMonkey omitted -- see issue #1143)
 
 #define JSVAL_NULL_OR_VOID(val)     (JSVAL_IS_NULL(val) || JSVAL_IS_VOID(val))
 
@@ -403,7 +403,7 @@ typedef enum {                       // Values for xtrn_t.event
 #define SWAP            (1 << 8)      // Swap for this door
 #define FREETIME        (1 << 9)      // Free time while in this door
 #define QUICKBBS        (1 << 10)     // QuickBBS style editor
-#define EXPANDLF        (1 << 11)     // Expand LF to CRLF editor (deprecated)
+#define XTRN_BIN        (1 << 11)     // Binary I/O: no charset/LF translation (== EX_BIN); was EXPANDLF
 #define QUOTEALL        (1 << 12)     // Automatically quote all of msg
 #define QUOTENONE       (1 << 13)     // Automatically quote none of msg
 #define XTRN_NATIVE     (1 << 14)     // Native application (EX_NATIVE)
@@ -769,7 +769,7 @@ enum {                            // readmail and delmailidx which types
 #define EX_POPEN    (1 << 7)      // Leave COM port open	(*legacy*)
 #define EX_OFFLINE  (1 << 8)      // Run this program offline
 #define EX_BG       (1 << 10)     // Back-ground/detached process
-#define EX_BIN      (1 << 11)     // Binary mode (no Unix LF to CRLF)
+#define EX_BIN      XTRN_BIN       // Binary mode: no charset/LF translation (shares the misc bit)
 #define EX_NATIVE   XTRN_NATIVE     // Native (not MS-DOS) application
 #define EX_CHKTIME  XTRN_CHKTIME    // Check time left
 #define EX_NOECHO   XTRN_NOECHO     // Don't echo stdin to stdout
