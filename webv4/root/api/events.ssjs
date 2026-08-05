@@ -28,12 +28,16 @@ function emit(obj) {
     last_send = time();
 }
 
+var _isGuest = (user.number < 1 || user.alias === settings.guest);
+var _guestAllowed = { nodelist: true, forum: true };
+
 const callbacks = {};
 if (file_isdir(settings.web_lib + 'events')) {
     if (Array.isArray(http_request.query.subscribe)) {
         http_request.query.subscribe.forEach(function (e) {
-            const base = file_getname(e).replace(file_getext(e), '');
-            const script = settings.web_lib + 'events/' + base + '.js';
+            var base = file_getname(e).replace(file_getext(e), '');
+            if (_isGuest && !_guestAllowed[base]) return;
+            var script = settings.web_lib + 'events/' + base + '.js';
             try {
                 if (file_exists(script)) callbacks[e] = load({}, script);
             } catch (err) {
@@ -50,6 +54,7 @@ while (client.socket.is_connected) {
             callbacks[e].cycle();
         } catch (err) {
             log(LOG_ERR, 'Callback ' + e + ' failed: ' + err);
+            _disposeCallback(e);
             delete callbacks[e];
         }
     });
@@ -57,3 +62,17 @@ while (client.socket.is_connected) {
     mswait(1000);
     ping();
 }
+
+// The SSE client dropped (browsers rarely say goodbye): give every event
+// module a deterministic chance to release its resources. Without this, a
+// module's JSON-service/socket connection leaks inside the long-lived web
+// server and its chat subscriptions ghost forever.
+function _disposeCallback(e) {
+    try {
+        if (typeof callbacks[e].dispose === 'function') callbacks[e].dispose();
+        else if (typeof callbacks[e].disconnect === 'function') callbacks[e].disconnect();
+    } catch (err) {
+        log(LOG_ERR, 'Callback ' + e + ' dispose failed: ' + err);
+    }
+}
+Object.keys(callbacks).forEach(_disposeCallback);
