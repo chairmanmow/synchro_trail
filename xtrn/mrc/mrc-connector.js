@@ -135,8 +135,15 @@ function client_accept() {
         client_close(c, { error: 'Invalid password' });
         return;
     }
+    /*
+     * `username` remains the real Synchronet account used above for local
+     * authentication. Newer clients may supply a separate public MRC name so
+     * site tags can prevent network-wide nickname collisions. Older clients
+     * omit it and retain the original behavior.
+     */
+    const network_username = sanitize_name(msg.network_username || msg.username) || sanitize_name(msg.username);
     clients[c.descriptor] = {
-        username: sanitize_name(msg.username),
+        username: network_username,
         socket : c,
         ping: 0,
         alias: msg.alias.replace(/\s/g, '_')
