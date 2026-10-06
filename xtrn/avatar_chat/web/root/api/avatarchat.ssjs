@@ -500,7 +500,6 @@ function summarizePublicChannel(client, channelName, sinceTimestamp, ownAlias, c
     var index = 0;
     var lastTimestamp = 0;
     var newCount = 0;
-    var users = {};
     var whoCount = 0;
 
     for (index = 0; index < history.length; index += 1) {
@@ -527,8 +526,7 @@ function summarizePublicChannel(client, channelName, sinceTimestamp, ownAlias, c
     }
 
     try {
-        users = client.who('chat', 'channels.' + channelName + '.messages') || {};
-        whoCount = getKeys(users).length;
+        whoCount = buildWhoUsers(client, channelName).length;
     } catch (_whoError) {
         whoCount = 0;
     }
@@ -640,8 +638,19 @@ function loadPrivateHistory(client, ownAlias, targetName, targetSystem, config) 
 }
 
 function buildOwnNick() {
-    var avatarLib = load({}, 'avatar_lib.js');
-    var avatarObj = avatarLib.read_localuser(user.number) || {};
+    var avatarLib = null;
+    var avatarObj = {};
+
+    try {
+        avatarLib = load({}, 'avatar_lib.js');
+        if (avatarLib && typeof avatarLib.read_localuser === 'function') {
+            avatarObj = avatarLib.read_localuser(user.number) || {};
+        } else if (avatarLib && typeof avatarLib.read === 'function') {
+            avatarObj = avatarLib.read(user.number, user.alias, null, null) || {};
+        }
+    } catch (_avatarError) {
+        avatarObj = {};
+    }
 
     return {
         name: user.alias,
@@ -661,6 +670,94 @@ function buildPrivateMessage(sender, recipient, text, timestamp) {
             to: recipient
         }
     };
+}
+
+/* --- shared read builders, also used by `sync` to bundle the per-poll reads
+       into a single JSONClient connection --- */
+
+function buildWhoUsers(client, channel) {
+    var users = [];
+    var whoResult = client.who('chat', 'channels.' + channel + '.messages') || {};
+    var seen = {};
+    var key;
+
+    for (key in whoResult) {
+        if (!Object.prototype.hasOwnProperty.call(whoResult, key)) {
+            continue;
+        }
+
+        var entry = whoResult[key];
+        var nickObj = normalizeNick(entry && entry.nick && typeof entry.nick === 'object' ? entry.nick : null);
+        var nickName = nickObj && nickObj.name ? nickObj.name : String(entry && entry.nick ? entry.nick : key);
+        var systemName = nickObj && nickObj.host ? nickObj.host : String(entry && entry.system ? entry.system : '');
+        var qwkid = nickObj && nickObj.qwkid ? nickObj.qwkid : '';
+        var identityKey = '$' + normalizeUpper(nickName) + '|' + normalizeUpper(qwkid || systemName);
+        var userNumber = 0;
+        var existingIndex = seen[identityKey];
+
+        if (nickName.length) {
+            try { userNumber = system.matchuser(nickName) || 0; } catch (_matchUserError) {}
+        }
+
+        if (typeof existingIndex === 'number') {
+            if (!users[existingIndex].avatar && nickObj && nickObj.avatar) {
+                users[existingIndex].avatar = nickObj.avatar;
+            }
+            if (!users[existingIndex].qwkid && qwkid) {
+                users[existingIndex].qwkid = qwkid;
+            }
+            if (!users[existingIndex].userNumber && userNumber) {
+                users[existingIndex].userNumber = userNumber;
+            }
+            continue;
+        }
+
+        seen[identityKey] = users.length;
+        users.push({
+            nick: nickName,
+            system: systemName,
+            userNumber: userNumber,
+            avatar: nickObj && nickObj.avatar ? nickObj.avatar : undefined,
+            qwkid: qwkid || undefined
+        });
+    }
+
+    return users;
+}
+
+function buildPublicHistory(client, channel, count, ownAlias) {
+    var history = getRecentHistory(client, 'channels.' + channel + '.history', count);
+    var messages = [];
+    var index = 0;
+
+    for (index = 0; index < history.length; index += 1) {
+        if (isPrivateMessage(history[index])) {
+            continue;
+        }
+        messages.push(formatChatMessage(history[index], ownAlias));
+    }
+
+    return messages;
+}
+
+function buildChannelSummaries(client, since, ownAlias, config) {
+    var names = listPublicChannelNames(client, config);
+    var summaries = [];
+    var index = 0;
+
+    for (index = 0; index < names.length; index += 1) {
+        summaries.push(summarizePublicChannel(client, names[index], since, ownAlias, config));
+    }
+
+    summaries.sort(function (a, b) {
+        return (b.lastTimestamp || 0) - (a.lastTimestamp || 0);
+    });
+
+    return summaries;
+}
+
+function flagDefaultsOn(name) {
+    return hasRequestParam(name) ? getRequestValue(name, '1') !== '0' : true;
 }
 
 var config = loadAvatarChatConfig();
@@ -716,37 +813,9 @@ switch (action) {
         }
 
         reply = withClient(config, function (client) {
-            var users = [];
-            var whoResult = client.who('chat', 'channels.' + whoChannel + '.messages') || {};
-            var key;
-
-            for (key in whoResult) {
-                if (!Object.prototype.hasOwnProperty.call(whoResult, key)) {
-                    continue;
-                }
-
-                var entry = whoResult[key];
-                var nickObj = normalizeNick(entry && entry.nick && typeof entry.nick === 'object' ? entry.nick : null);
-                var nickName = nickObj && nickObj.name ? nickObj.name : String(entry && entry.nick ? entry.nick : key);
-                var systemName = nickObj && nickObj.host ? nickObj.host : String(entry && entry.system ? entry.system : '');
-                var userNumber = 0;
-
-                if (nickName.length) {
-                    try { userNumber = system.matchuser(nickName) || 0; } catch (_matchUserError) {}
-                }
-
-                users.push({
-                    nick: nickName,
-                    system: systemName,
-                    userNumber: userNumber,
-                    avatar: nickObj && nickObj.avatar ? nickObj.avatar : undefined,
-                    qwkid: nickObj && nickObj.qwkid ? nickObj.qwkid : undefined
-                });
-            }
-
             return {
                 channel: whoChannel,
-                users: users,
+                users: buildWhoUsers(client, whoChannel),
                 serverTime: Date.now()
             };
         });
@@ -997,6 +1066,87 @@ switch (action) {
                 timestamp: packet.time,
                 serverTime: Date.now()
             };
+        });
+        break;
+
+    case 'sync':
+        /* Combined poll: everything the reconcile loop needs in ONE JSONClient
+           connection instead of one per sub-request. Each section can be turned
+           off with <name>=0; `history` is opt-IN (pass history=1). */
+        var syncChannel = getChannel(config);
+        var syncSince = getRequestTimestamp('since');
+        var syncWantChannels = flagDefaultsOn('channels');
+        var syncWantWho = flagDefaultsOn('who');
+        var syncWantPrivate = flagDefaultsOn('private');
+        var syncWantHistory = hasRequestParam('history') && getRequestValue('history', '0') !== '0';
+        var syncWantPresence = hasRequestParam('presence') && getRequestValue('presence', '0') !== '0';
+        var syncWantMotd = hasRequestParam('motd') && getRequestValue('motd', '0') !== '0';
+        var syncHistoryCount = 60;
+
+        if (hasRequestParam('count')) {
+            var syncRequestedCount = parseInt(getRequestValue('count', ''), 10);
+            if (!isNaN(syncRequestedCount) && syncRequestedCount > 0 && syncRequestedCount <= Math.max(60, config.maxHistory)) {
+                syncHistoryCount = syncRequestedCount;
+            }
+        }
+
+        reply = withClient(config, function (client) {
+            var ownAlias = user.number > 0 ? user.alias : '';
+            var isAuthed = user.number > 0 && !(settings.guest && user.alias === settings.guest);
+            var out = { channel: syncChannel, serverTime: Date.now() };
+
+            if (syncWantChannels) {
+                out.channels = buildChannelSummaries(client, syncSince, ownAlias, config);
+            }
+            if (syncWantWho) {
+                out.who = { channel: syncChannel, users: buildWhoUsers(client, syncChannel) };
+            }
+            if (syncWantHistory) {
+                out.history = { channel: syncChannel, messages: buildPublicHistory(client, syncChannel, syncHistoryCount, ownAlias) };
+            }
+            if (syncWantPrivate && isAuthed) {
+                out.private = { threads: summarizePrivateThreads(client, user.alias, syncSince, config) };
+            }
+            if (syncWantMotd) {
+                var motdLatest = loadLatestMotdMessage(client, config);
+                var motdFormatted = motdLatest ? formatChatMessage(motdLatest, ownAlias) : null;
+                out.motd = {
+                    previewText: motdFormatted ? trimText(motdFormatted.text) : '',
+                    timestamp: motdFormatted && motdFormatted.timestamp ? motdFormatted.timestamp : 0
+                };
+            }
+            if (syncWantPresence) {
+                /* who-users across occupied public rooms (+ the active one), all on
+                   this one connection - replaces the client's per-room who fan-out. */
+                var presenceNames = [];
+                var presenceSeen = {};
+                var presenceUsers = [];
+                var pi = 0;
+
+                function presenceAdd(nm) {
+                    var key = String(nm || '').toUpperCase();
+                    if (!nm || presenceSeen[key]) { return; }
+                    presenceSeen[key] = true;
+                    presenceNames.push(nm);
+                }
+
+                if (out.channels) {
+                    for (pi = 0; pi < out.channels.length; pi += 1) {
+                        if ((out.channels[pi].userCount || 0) > 0) { presenceAdd(out.channels[pi].name); }
+                    }
+                } else {
+                    var allPresenceNames = listPublicChannelNames(client, config);
+                    for (pi = 0; pi < allPresenceNames.length; pi += 1) { presenceAdd(allPresenceNames[pi]); }
+                }
+                presenceAdd(syncChannel);
+
+                for (pi = 0; pi < presenceNames.length; pi += 1) {
+                    presenceUsers = presenceUsers.concat(buildWhoUsers(client, presenceNames[pi]));
+                }
+                out.presence = presenceUsers;
+            }
+
+            return out;
         });
         break;
 

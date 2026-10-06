@@ -152,6 +152,7 @@ interface AvatarLibrary {
     height: number;
   };
   read(usernum?: number, username?: string, netaddr?: string | null, bbsid?: string | null): AvatarObject | false | null | undefined;
+  read_localuser?(usernum?: number): AvatarObject | false | null | undefined;
   read_netuser?(username?: string, netaddr?: string | null): AvatarObject | false | null | undefined;
 }
 

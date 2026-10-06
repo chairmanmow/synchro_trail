@@ -38,6 +38,16 @@ export function buildNoticeMessage(text: string, timestamp?: number): ChatMessag
   };
 }
 
+function mergeNickAvatar(target: ChatNick | null, source: ChatNick | null | undefined): void {
+  const sourceAvatar = source && source.avatar ? trimText(String(source.avatar)) : "";
+
+  if (!target || target.avatar || !sourceAvatar.length) {
+    return;
+  }
+
+  target.avatar = sourceAvatar;
+}
+
 export function groupMessages(messages: ChatMessage[], ownAlias: string): MessageGroup[] {
   const groups: MessageGroup[] = [];
   const ownAliasUpper = ownAlias.toUpperCase();
@@ -79,6 +89,7 @@ export function groupMessages(messages: ChatMessage[], ownAlias: string): Messag
       lastBubble.side === side &&
       lastBubble.speakerName.toUpperCase() === speakerUpper
     ) {
+      mergeNickAvatar(lastBubble.nick, message.nick);
       lastBubble.messages.push({
         text: message.str || "",
         time: message.time

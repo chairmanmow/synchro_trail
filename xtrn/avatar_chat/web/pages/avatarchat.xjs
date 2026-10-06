@@ -3598,34 +3598,38 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
         });
     }
 
+    function applyRoomSummaries(summaries, serverTime) {
+        summaries = Array.isArray(summaries) ? summaries : [];
+        serverTime = serverTime || Date.now();
+        var nextRooms = [];
+
+        summaries.forEach(function (summary) {
+            var room = ensureRoomSummary(summary.name);
+            room.userCount = summary.userCount || 0;
+            room.lastTimestamp = summary.lastTimestamp || 0;
+            room.newCount = summary.newCount || 0;
+
+            if (!realtimeHealthy && (summary.newCount || 0) > 0 && !(activeView.type === 'channel' && normalizeUpper(activeView.name) === normalizeUpper(summary.name))) {
+                unreadChannels[normalizeUpper(summary.name)] = (unreadChannels[normalizeUpper(summary.name)] || 0) + summary.newCount;
+            }
+
+            if (activeView.type === 'channel' && normalizeUpper(activeView.name) === normalizeUpper(summary.name)) {
+                unreadChannels[normalizeUpper(summary.name)] = 0;
+            }
+
+            nextRooms.push(room);
+        });
+
+        rooms = nextRooms.length ? nextRooms : [ensureRoomSummary(currentPublicChannel)];
+        ensureRoomSummary(currentPublicChannel);
+        lastRoomPollAt = serverTime;
+        renderRoomList();
+    }
+
     function loadRoomSummaries(silent) {
         var url = apiBase + '?action=channels';
         return fetchJSON(url + (lastRoomPollAt > 0 ? '&since=' + encodeURIComponent(String(lastRoomPollAt)) : '')).then(function (response) {
-            var summaries = response && Array.isArray(response.channels) ? response.channels : [];
-            var serverTime = response && response.serverTime ? response.serverTime : Date.now();
-            var nextRooms = [];
-
-            summaries.forEach(function (summary) {
-                var room = ensureRoomSummary(summary.name);
-                room.userCount = summary.userCount || 0;
-                room.lastTimestamp = summary.lastTimestamp || 0;
-                room.newCount = summary.newCount || 0;
-
-                if (!realtimeHealthy && (summary.newCount || 0) > 0 && !(activeView.type === 'channel' && normalizeUpper(activeView.name) === normalizeUpper(summary.name))) {
-                    unreadChannels[normalizeUpper(summary.name)] = (unreadChannels[normalizeUpper(summary.name)] || 0) + summary.newCount;
-                }
-
-                if (activeView.type === 'channel' && normalizeUpper(activeView.name) === normalizeUpper(summary.name)) {
-                    unreadChannels[normalizeUpper(summary.name)] = 0;
-                }
-
-                nextRooms.push(room);
-            });
-
-            rooms = nextRooms.length ? nextRooms : [ensureRoomSummary(currentPublicChannel)];
-            ensureRoomSummary(currentPublicChannel);
-            lastRoomPollAt = serverTime;
-            renderRoomList();
+            applyRoomSummaries(response && response.channels, response && response.serverTime);
             return true;
         }).catch(function (_error) {
             if (!silent) {
@@ -3645,54 +3649,7 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
 
         var url = apiBase + '?action=private';
         return fetchJSON(url + (lastPrivatePollAt > 0 ? '&since=' + encodeURIComponent(String(lastPrivatePollAt)) : '')).then(function (response) {
-            var threads = response && Array.isArray(response.threads) ? response.threads : [];
-            var serverTime = response && response.serverTime ? response.serverTime : Date.now();
-            var nextThreads = [];
-            var seen = {};
-
-            threads.forEach(function (summary) {
-                var thread = upsertPrivateThread(summary);
-                var key = buildThreadKey(thread.name, thread.system || '');
-
-                if (!realtimeHealthy && (summary.newCount || 0) > 0 && !(activeView.type === 'private' && key === currentPrivateThreadKey())) {
-                    unreadPrivate[key] = (unreadPrivate[key] || 0) + summary.newCount;
-                }
-
-                if (activeView.type === 'private' && key === currentPrivateThreadKey()) {
-                    unreadPrivate[key] = 0;
-                }
-
-                if (!seen[key]) {
-                    seen[key] = true;
-                    nextThreads.push(thread);
-                }
-            });
-
-            if (activeView.type === 'private') {
-                upsertPrivateThread({
-                    name: activeView.name,
-                    system: activeView.system || '',
-                    avatar: activeView.avatar || undefined,
-                    lastTimestamp: 0,
-                    preview: ''
-                });
-                if (!nextThreads.length || !nextThreads.some(function (thread) {
-                    return buildThreadKey(thread.name, thread.system || '') === currentPrivateThreadKey();
-                })) {
-                    nextThreads.push({
-                        name: activeView.name,
-                        system: activeView.system || '',
-                        avatar: activeView.avatar || undefined,
-                        lastTimestamp: 0,
-                        preview: ''
-                    });
-                }
-            }
-
-            privateThreads = nextThreads;
-            lastPrivatePollAt = serverTime;
-            renderPrivateList();
-            renderHeaderBar();
+            applyPrivateThreads(response && response.threads, response && response.serverTime);
             return true;
         }).catch(function (_error) {
             if (!silent) {
@@ -3702,15 +3659,69 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
         });
     }
 
+    function applyPrivateThreads(threads, serverTime) {
+        threads = Array.isArray(threads) ? threads : [];
+        serverTime = serverTime || Date.now();
+        var nextThreads = [];
+        var seen = {};
+
+        threads.forEach(function (summary) {
+            var thread = upsertPrivateThread(summary);
+            var key = buildThreadKey(thread.name, thread.system || '');
+
+            if (!realtimeHealthy && (summary.newCount || 0) > 0 && !(activeView.type === 'private' && key === currentPrivateThreadKey())) {
+                unreadPrivate[key] = (unreadPrivate[key] || 0) + summary.newCount;
+            }
+
+            if (activeView.type === 'private' && key === currentPrivateThreadKey()) {
+                unreadPrivate[key] = 0;
+            }
+
+            if (!seen[key]) {
+                seen[key] = true;
+                nextThreads.push(thread);
+            }
+        });
+
+        if (activeView.type === 'private') {
+            upsertPrivateThread({
+                name: activeView.name,
+                system: activeView.system || '',
+                avatar: activeView.avatar || undefined,
+                lastTimestamp: 0,
+                preview: ''
+            });
+            if (!nextThreads.length || !nextThreads.some(function (thread) {
+                return buildThreadKey(thread.name, thread.system || '') === currentPrivateThreadKey();
+            })) {
+                nextThreads.push({
+                    name: activeView.name,
+                    system: activeView.system || '',
+                    avatar: activeView.avatar || undefined,
+                    lastTimestamp: 0,
+                    preview: ''
+                });
+            }
+        }
+
+        privateThreads = nextThreads;
+        lastPrivatePollAt = serverTime;
+        renderPrivateList();
+        renderHeaderBar();
+    }
+
+    function applyMotd(response) {
+        motdState.text = trimText(response && response.previewText ? response.previewText : '');
+        motdState.timestamp = response && response.timestamp ? response.timestamp : 0;
+        renderHeaderBar();
+    }
+
     function loadMotd(silent) {
         return fetchJSON(apiBase + '?action=motd').then(function (response) {
             if (response && response.error) {
                 throw new Error(String(response.error));
             }
-
-            motdState.text = trimText(response && response.previewText ? response.previewText : '');
-            motdState.timestamp = response && response.timestamp ? response.timestamp : 0;
-            renderHeaderBar();
+            applyMotd(response);
             return true;
         }).catch(function () {
             if (!silent) {
@@ -3728,25 +3739,29 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
             if (response && response.error) {
                 throw new Error(String(response.error));
             }
-            if (
-                requestToken !== historyRequestToken ||
-                activeView.type !== 'channel' ||
-                normalizeUpper(currentPublicChannel) !== normalizeUpper(requestedChannel)
-            ) {
-                return false;
-            }
-            messages = normalizeMessages(response && Array.isArray(response.messages) ? response.messages : []);
-            cacheAvatarsFromMessages(messages);
-            unreadChannels[normalizeUpper(requestedChannel)] = 0;
-            renderMessages();
-            if (!realtimeHealthy && reconnectAttemptCount > 0 && !silent) {
-                setStatus('warning', 'Realtime updates are not fully healthy, but the current room refreshed successfully.', true);
-            }
-            return true;
+            return applyPublicHistory(response, requestedChannel, requestToken, silent);
         }).catch(function (_error) {
             setStatus('error', explainServiceError(), true);
             return false;
         });
+    }
+
+    function applyPublicHistory(response, requestedChannel, requestToken, silent) {
+        if (
+            requestToken !== historyRequestToken ||
+            activeView.type !== 'channel' ||
+            normalizeUpper(currentPublicChannel) !== normalizeUpper(requestedChannel)
+        ) {
+            return false;
+        }
+        messages = normalizeMessages(response && Array.isArray(response.messages) ? response.messages : []);
+        cacheAvatarsFromMessages(messages);
+        unreadChannels[normalizeUpper(requestedChannel)] = 0;
+        renderMessages();
+        if (!realtimeHealthy && reconnectAttemptCount > 0 && !silent) {
+            setStatus('warning', 'Realtime updates are not fully healthy, but the current room refreshed successfully.', true);
+        }
+        return true;
     }
 
     function loadPrivateHistory(silent) {
@@ -3810,28 +3825,39 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
             if (response && response.error) {
                 throw new Error(String(response.error));
             }
-            if (
-                requestToken !== usersRequestToken ||
-                normalizeUpper(currentPublicChannel) !== normalizeUpper(requestedChannel)
-            ) {
-                return false;
-            }
-            users = response && Array.isArray(response.users) ? response.users : [];
-            if (normalizeUpper(usersPanelRoom) === normalizeUpper(requestedChannel)) {
-                panelUsers = users.slice();
-                renderUsers();
-            }
-            updateUserCountButton();
-            if (!realtimeHealthy && reconnectAttemptCount > 0 && !silent) {
-                setStatus('warning', 'Realtime updates are not fully healthy, but the roster refreshed successfully.', true);
-            }
-            return true;
+            return applyUsers(response && response.users, requestedChannel, requestToken, silent);
         }).catch(function (_error) {
             if (!silent) {
                 setStatus('error', explainServiceError(), true);
             }
             return false;
         });
+    }
+
+    function applyUsers(usersArr, requestedChannel, requestToken, silent) {
+        if (
+            requestToken !== usersRequestToken ||
+            normalizeUpper(currentPublicChannel) !== normalizeUpper(requestedChannel)
+        ) {
+            return false;
+        }
+        users = Array.isArray(usersArr) ? usersArr : [];
+        if (normalizeUpper(usersPanelRoom) === normalizeUpper(requestedChannel)) {
+            panelUsers = users.slice();
+            renderUsers();
+        }
+        updateUserCountButton();
+        if (!realtimeHealthy && reconnectAttemptCount > 0 && !silent) {
+            setStatus('warning', 'Realtime updates are not fully healthy, but the roster refreshed successfully.', true);
+        }
+        return true;
+    }
+
+    function applyPresence(combined, silent) {
+        rebuildOnlinePresence(Array.isArray(combined) ? combined : []);
+        if (!realtimeHealthy && reconnectAttemptCount > 0 && !silent) {
+            setStatus('warning', 'Realtime updates are not fully healthy, but private chat presence refreshed successfully.', true);
+        }
     }
 
     function loadPresenceMap(silent) {
@@ -3862,10 +3888,7 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
                 }
             });
 
-            rebuildOnlinePresence(combined);
-            if (!realtimeHealthy && reconnectAttemptCount > 0 && !silent) {
-                setStatus('warning', 'Realtime updates are not fully healthy, but private chat presence refreshed successfully.', true);
-            }
+            applyPresence(combined, silent);
             return true;
         }).catch(function () {
             if (!silent) {
@@ -3924,29 +3947,69 @@ var avatarChatMotdManager = avatarChatCanManageMotd(avatarChatWebConfig);
     }
 
     function reconcileState(forceUsers) {
-        return loadRoomSummaries(true).then(function () {
-            var work = [
-                loadPrivateThreads(true),
-                loadActiveHistory(true),
-                loadPresenceMap(true),
-                loadMotd(true)
-            ];
-            var usersPanelOpen = !!(usersModal && usersModal.classList.contains('is-open'));
+        // One combined ?action=sync request per tick instead of the old fan-out
+        // (channels + private + history + presence(one who PER room) + motd + who).
+        // The server bundles them over a single JSONClient connection. A roster
+        // modal open on a non-active room, and an open DM's history, are the only
+        // pieces still fetched separately.
+        var isPrivateView = activeView.type === 'private';
+        var requestedChannel = currentPublicChannel;
+        var historyToken = ++historyRequestToken;
+        var usersToken = ++usersRequestToken;
 
-            usersRefreshTick += 1;
-            if (usersPanelOpen && normalizeUpper(usersPanelRoom) !== normalizeUpper(currentPublicChannel)) {
-                work.push(loadUsersPanelRoom(usersPanelRoom, true));
-            }
-            if (forceUsers || (usersPanelOpen && normalizeUpper(usersPanelRoom) === normalizeUpper(currentPublicChannel)) || usersRefreshTick >= 2) {
-                usersRefreshTick = 0;
-                work.push(loadUsers(true));
-            }
+        var usersPanelOpen = !!(usersModal && usersModal.classList.contains('is-open'));
+        usersRefreshTick += 1;
+        var wantUsers = forceUsers || (usersPanelOpen && normalizeUpper(usersPanelRoom) === normalizeUpper(currentPublicChannel)) || usersRefreshTick >= 2;
+        if (wantUsers) {
+            usersRefreshTick = 0;
+        }
 
-            return Promise.all(work).then(function () {
-                return true;
-            }).catch(function () {
+        var since = Math.min(lastRoomPollAt || 0, lastPrivatePollAt || 0);
+        var url = apiBase + '?action=sync'
+            + '&channel=' + encodeURIComponent(requestedChannel)
+            + '&who=' + (wantUsers ? '1' : '0')
+            + '&presence=1'
+            + '&motd=1'
+            + '&history=' + (isPrivateView ? '0' : '1')
+            + (since > 0 ? '&since=' + encodeURIComponent(String(since)) : '');
+
+        return fetchJSON(url).then(function (response) {
+            if (!response || response.error) {
                 return false;
-            });
+            }
+
+            applyRoomSummaries(response.channels, response.serverTime);
+
+            if (response.private) {
+                applyPrivateThreads(response.private.threads, response.serverTime);
+            } else if (!pageConfig.canUseRealtime) {
+                applyPrivateThreads([], response.serverTime);
+            }
+
+            if (response.motd) {
+                applyMotd(response.motd);
+            }
+            if (response.presence) {
+                applyPresence(response.presence, true);
+            }
+            if (wantUsers && response.who) {
+                applyUsers(response.who.users, requestedChannel, usersToken, true);
+            }
+            if (!isPrivateView && response.history) {
+                applyPublicHistory(response.history, requestedChannel, historyToken, true);
+            }
+
+            var extra = [];
+            if (usersPanelOpen && normalizeUpper(usersPanelRoom) !== normalizeUpper(currentPublicChannel)) {
+                extra.push(loadUsersPanelRoom(usersPanelRoom, true));
+            }
+            if (isPrivateView) {
+                extra.push(loadActiveHistory(true));
+            }
+            if (extra.length) {
+                return Promise.all(extra).then(function () { return true; }).catch(function () { return false; });
+            }
+            return true;
         }).catch(function () {
             return false;
         });

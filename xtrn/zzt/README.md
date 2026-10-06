@@ -90,7 +90,7 @@ Classic world `.HI` files are still read as fallback and written as compatibilit
 
 ### Optional `ZZT.INI` Overrides
 
-Create `/sbbs/xtrn/zzt/ZZT.INI` (or `zzt.ini`) to override defaults:
+Edit `/sbbs/xtrn/zzt/zzt.ini` (or use `ZZT.INI`) to override defaults:
 
 ```ini
 HIGH_SCORE_JSON=/path/to/shared/highscores.json
@@ -105,9 +105,9 @@ ANSI_MUSIC_FOREGROUND=OFF
 
 `ANSI_MUSIC` values:
 
-- `AUTO` (default): emit only when a CTerm-compatible client is detected (`console.cterm_version` present, e.g. SyncTERM).
+- `AUTO` (default): emit ANSI music for terminal sessions. There is **no** CTerm/`cterm_version` autodetection -- it proved unreliable (not every music-capable terminal answers the Device Attributes query, so detection silently muted real music terminals). Web/custom-bridge sessions are the only ones auto-suppressed, via the reliable bridge handshake.
 - `OFF`: never emit ANSI music escapes.
-- `ON`: always emit ANSI music escapes.
+- `ON`: always emit ANSI music escapes (same as `AUTO` for terminals, but also forces it on for bridge sessions).
 
 `ANSI_MUSIC_INTRODUCER` values:
 
@@ -120,7 +120,15 @@ ANSI_MUSIC_FOREGROUND=OFF
 - `OFF` (default): emit background ANSI music (`B` mode for `CSI |`/`CSI M`) to avoid blocking gameplay.
 - `ON`: emit foreground ANSI music (`F` mode), which may block until notes complete.
 
-ANSI music is emitted for queued ZZT sound patterns (including OOP `#PLAY` and built-in sound effects). Keep this in `AUTO` unless your terminal/client mix requires a forced mode.
+ANSI music is emitted for queued ZZT sound patterns (including OOP `#PLAY` and built-in sound effects).
+
+### In-game music test (per-player)
+
+ANSI music is **on by default** for terminal sessions -- no prompt, no detection. For the rare terminal that renders the escapes as garbage instead of playing them, players can turn it off themselves:
+
+- The title screen has an **`M` key** ("Music test"): it plays a short tune and asks **"Did you hear music?"**. `Y` keeps music on, `N` turns it off. The choice is stored per user (`music.ini` in the player's save dir) and applied on every future visit.
+- Sessions on the custom-sound web bridge (the `web/` fTelnet page) already have reliable sampled audio, so ANSI music is left off for them automatically.
+- A sysop who sets `ANSI_MUSIC=ON` or `OFF` explicitly in the ini overrides everything (the per-player default only applies in `AUTO`).
 
 ## Help Resource Data (`ZZT.DAT`)
 

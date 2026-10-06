@@ -1,12 +1,12 @@
 // Avatar Chat - Auto-generated, do not edit directly.
-// Built: 2026-03-25T22:59:12.277Z
+// Built: 2026-07-25T12:34:42.711Z
 load("sbbsdefs.js");
 load("key_defs.js");
 load("frame.js");
 load("json-client.js");
 load("json-chat.js");
 (function() {
-  // repo/xtrn/avatar_chat/build/util/text.js
+  // build/util/text.js
   function clamp(value, minimum, maximum) {
     if (value < minimum) {
       return minimum;
@@ -162,7 +162,7 @@ load("json-chat.js");
     return s;
   }
 
-  // repo/xtrn/avatar_chat/build/domain/chat-model.js
+  // build/domain/chat-model.js
   function normalizeChannelName(name, fallback) {
     var trimmed = trimText(name);
     if (trimmed.length) {
@@ -184,6 +184,13 @@ load("json-chat.js");
       str: text,
       time: timestamp || (/* @__PURE__ */ new Date()).getTime()
     };
+  }
+  function mergeNickAvatar(target, source) {
+    var sourceAvatar = source && source.avatar ? trimText(String(source.avatar)) : "";
+    if (!target || target.avatar || !sourceAvatar.length) {
+      return;
+    }
+    target.avatar = sourceAvatar;
   }
   function groupMessages(messages, ownAlias) {
     var groups = [];
@@ -216,6 +223,7 @@ load("json-chat.js");
       speakerUpper = speakerName.toUpperCase();
       side = speakerUpper === ownAliasUpper ? "right" : "left";
       if (lastBubble && lastBubble.kind === "bubble" && lastBubble.side === side && lastBubble.speakerName.toUpperCase() === speakerUpper) {
+        mergeNickAvatar(lastBubble.nick, message.nick);
         lastBubble.messages.push({
           text: message.str || "",
           time: message.time
@@ -237,7 +245,7 @@ load("json-chat.js");
     return groups;
   }
 
-  // repo/xtrn/avatar_chat/build/domain/bitmap.js
+  // build/domain/bitmap.js
   var LENGTH_BASE = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258];
   var LENGTH_EXTRA = [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0];
   var DISTANCE_BASE = [1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577];
@@ -605,7 +613,7 @@ load("json-chat.js");
     return inflateRaw(bytes, position);
   }
 
-  // repo/xtrn/avatar_chat/build/domain/private-messages.js
+  // build/domain/private-messages.js
   function normalizePrivateNick(nick) {
     var name = trimText(String(nick && nick.name ? nick.name : ""));
     var avatar = nick && nick.avatar ? trimText(String(nick.avatar)) : "";
@@ -658,7 +666,7 @@ load("json-chat.js");
     return sender;
   }
 
-  // repo/xtrn/avatar_chat/build/domain/ui.js
+  // build/domain/ui.js
   var ACTION_BAR_ACTIONS = [
     { id: "who", label: "/who" },
     { id: "img", label: "/img" },
@@ -669,7 +677,7 @@ load("json-chat.js");
     { id: "exit", label: "Esc exit" }
   ];
 
-  // repo/xtrn/avatar_chat/build/input/input-buffer.js
+  // build/input/input-buffer.js
   var InputBuffer = (
     /** @class */
     function() {
@@ -783,7 +791,7 @@ load("json-chat.js");
     }()
   );
 
-  // repo/xtrn/avatar_chat/build/render/avatar.js
+  // build/render/avatar.js
   var routeMapCache = null;
   function resolveAvatarDimensions(avatarLib) {
     if (avatarLib && avatarLib.defs) {
@@ -987,7 +995,7 @@ load("json-chat.js");
     }
   }
 
-  // repo/xtrn/avatar_chat/build/render/modal-renderer.js
+  // build/render/modal-renderer.js
   var BOX_TOP_LEFT = "\xDA";
   var BOX_TOP_RIGHT = "\xBF";
   var BOX_BOTTOM_LEFT = "\xC0";
@@ -1354,7 +1362,7 @@ load("json-chat.js");
     renderHelpModal(modalFrame, modal);
   }
 
-  // repo/xtrn/avatar_chat/build/render/transcript-renderer.js
+  // build/render/transcript-renderer.js
   function measureBubbleWidth(rows) {
     var width = 0;
     var index = 0;
@@ -1569,7 +1577,7 @@ load("json-chat.js");
     return renderState;
   }
 
-  // repo/xtrn/avatar_chat/build/app/avatar-chat-app.js
+  // build/app/avatar-chat-app.js
   var INPUT_ESCAPE_SEQUENCE_MAP = {
     "\x1B[A": KEY_UP,
     "\x1B[B": KEY_DOWN,
@@ -1693,6 +1701,7 @@ load("json-chat.js");
             this.render();
           }
         } finally {
+          this.closeChatConnection();
           this.destroyFrames();
           console.clear(BG_BLACK | LIGHTGRAY);
           console.home();
@@ -1704,7 +1713,11 @@ load("json-chat.js");
           return void 0;
         }
         try {
-          avatarObj = this.avatarLib.read(user.number, user.alias, null, null) || null;
+          if (typeof this.avatarLib.read_localuser === "function") {
+            avatarObj = this.avatarLib.read_localuser(user.number) || null;
+          } else {
+            avatarObj = this.avatarLib.read(user.number, user.alias, null, null) || null;
+          }
         } catch (_error) {
           avatarObj = null;
         }
@@ -1716,7 +1729,7 @@ load("json-chat.js");
       AvatarChatApp2.prototype.connect = function() {
         var desiredChannels = this.getJoinedPublicChannelNames();
         var desiredCurrent = this.currentChannel;
-        var client;
+        var client = null;
         var index = 0;
         try {
           client = new JSONClient(this.config.host, this.config.port);
@@ -1747,6 +1760,7 @@ load("json-chat.js");
               this.chat.join(channelName);
             }
           }
+          this.deduplicateChannelRosters();
           this.loadPrivateHistory();
           this.syncPublicChannelUnreadCounts(false);
           this.syncChannelOrder();
@@ -1764,8 +1778,25 @@ load("json-chat.js");
           this.lastError = "";
           this.resetRenderSignatures();
         } catch (error) {
-          this.chat = null;
+          this.closeChatConnection(client);
           this.scheduleReconnect("Connection failed: " + String(error));
+        }
+      };
+      AvatarChatApp2.prototype.closeChatConnection = function(fallbackClient) {
+        var chat = this.chat;
+        var client = chat && chat.client ? chat.client : fallbackClient || null;
+        this.chat = null;
+        if (chat) {
+          try {
+            chat.disconnect();
+          } catch (_unsubscribeError) {
+          }
+        }
+        if (client) {
+          try {
+            client.disconnect();
+          } catch (_disconnectError) {
+          }
         }
       };
       AvatarChatApp2.prototype.cycleChat = function() {
@@ -1774,17 +1805,14 @@ load("json-chat.js");
         }
         try {
           this.chat.cycle();
+          this.deduplicateChannelRosters();
           this.syncPublicChannelUnreadCounts(true);
           this.syncPrivateHistory();
           this.syncChannelOrder();
           this.refreshMotd(false);
           this.trimHistories();
         } catch (error) {
-          try {
-            this.chat.disconnect();
-          } catch (_disconnectError) {
-          }
-          this.chat = null;
+          this.closeChatConnection();
           this.scheduleReconnect("Connection lost: " + String(error));
         }
       };
@@ -1844,6 +1872,8 @@ load("json-chat.js");
         if (!peerNick) {
           return;
         }
+        this.processMessageAvatar(message);
+        this.hydrateEmbeddedAvatar(peerNick);
         if (!this.rememberPrivateMessage(message)) {
           return;
         }
@@ -2065,6 +2095,35 @@ load("json-chat.js");
       };
       AvatarChatApp2.prototype.isOwnMessage = function(message) {
         return !!(message && message.nick && message.nick.name && this.isOwnNickName(message.nick.name));
+      };
+      AvatarChatApp2.prototype.rememberEmbeddedAvatar = function(nick) {
+        var name = nick && nick.name ? trimText(String(nick.name)) : "";
+        var avatar = nick && nick.avatar ? trimText(String(nick.avatar)) : "";
+        if (!name.length || !avatar.length) {
+          return;
+        }
+        this.embeddedAvatars[name.toUpperCase()] = avatar;
+      };
+      AvatarChatApp2.prototype.hydrateEmbeddedAvatar = function(nick) {
+        var name = nick && nick.name ? trimText(String(nick.name)) : "";
+        var avatar = "";
+        if (!nick || !name.length || nick.avatar) {
+          return;
+        }
+        avatar = this.embeddedAvatars[name.toUpperCase()] || "";
+        if (avatar.length) {
+          nick.avatar = avatar;
+        }
+      };
+      AvatarChatApp2.prototype.processMessageAvatar = function(message) {
+        if (!message || !message.nick) {
+          return;
+        }
+        if (message.nick.avatar) {
+          this.rememberEmbeddedAvatar(message.nick);
+          return;
+        }
+        this.hydrateEmbeddedAvatar(message.nick);
       };
       AvatarChatApp2.prototype.buildPrivateBitmapNoticeText = function(message) {
         var sender = "";
@@ -2393,12 +2452,7 @@ load("json-chat.js");
           }
           for (index = 0; index < channel.messages.length; index += 1) {
             var message = channel.messages[index];
-            if (message && message.nick && message.nick.avatar) {
-              var avatarData = String(message.nick.avatar).replace(/^\s+|\s+$/g, "");
-              if (avatarData.length) {
-                this.embeddedAvatars[message.nick.name.toUpperCase()] = avatarData;
-              }
-            }
+            this.processMessageAvatar(message);
             if (!message || !this.rememberPublicChannelMessage(channel.name, message)) {
               continue;
             }
@@ -2850,11 +2904,7 @@ load("json-chat.js");
           case "CLOSE":
           case "DISCONNECT":
             if (this.chat) {
-              try {
-                this.chat.disconnect();
-              } catch (_disconnectError) {
-              }
-              this.chat = null;
+              this.closeChatConnection();
               this.scheduleReconnect("Disconnected.");
             }
             return;
@@ -3299,7 +3349,7 @@ load("json-chat.js");
         var seen = {};
         var channel = this.currentChannel.length ? this.getChannelByName(this.currentChannel) : null;
         var index = 0;
-        this.addRosterEntry(entries, seen, user.alias, system.name, { name: user.alias, host: system.name, ip: user.ip_address, qwkid: system.qwk_id }, true);
+        this.addRosterEntry(entries, seen, user.alias, system.name, { name: user.alias, host: system.name, ip: user.ip_address, qwkid: system.qwk_id, avatar: this.getOwnAvatarData() }, true);
         if (channel && channel.users) {
           for (index = 0; index < channel.users.length; index += 1) {
             var rawEntry = channel.users[index];
@@ -3656,6 +3706,38 @@ load("json-chat.js");
           }
         }
         return null;
+      };
+      AvatarChatApp2.prototype.deduplicateChannelRosters = function() {
+        var channelKey = "";
+        if (!this.chat) {
+          return;
+        }
+        for (channelKey in this.chat.channels) {
+          if (!Object.prototype.hasOwnProperty.call(this.chat.channels, channelKey)) {
+            continue;
+          }
+          var channel = this.chat.channels[channelKey];
+          var uniqueUsers = [];
+          var seen = {};
+          var index = 0;
+          if (!channel || !channel.users) {
+            continue;
+          }
+          for (index = 0; index < channel.users.length; index += 1) {
+            var rawEntry = channel.users[index];
+            var rosterEntry = this.extractRosterEntry(rawEntry);
+            if (!rawEntry || !rosterEntry) {
+              continue;
+            }
+            var identity = rosterEntry.name.toUpperCase() + "|" + rosterEntry.bbs.toUpperCase();
+            if (seen[identity]) {
+              continue;
+            }
+            seen[identity] = true;
+            uniqueUsers.push(rawEntry);
+          }
+          channel.users = uniqueUsers;
+        }
       };
       AvatarChatApp2.prototype.ensureFrames = function() {
         var width = console.screen_columns;
@@ -4600,7 +4682,7 @@ load("json-chat.js");
     }()
   );
 
-  // repo/xtrn/avatar_chat/build/io/config.js
+  // build/io/config.js
   var DEFAULT_IDLE = {
     enabled: true,
     idleTimeoutSeconds: 180,
@@ -4765,7 +4847,7 @@ load("json-chat.js");
     return config;
   }
 
-  // repo/xtrn/avatar_chat/build/main.js
+  // build/main.js
   function loadIdleAnimationModules() {
     try {
       js.global.CanvasAnimations = load(js.exec_dir + "lib/canvas-animations.js");

@@ -232,6 +232,10 @@ function disconnect() {
     mailboxSubscribed = false;
 }
 
+function dispose() {
+    disconnect();
+}
+
 function processPublicUpdate(packet) {
     var oper = String(packet.oper).toUpperCase();
     var payload = packet.data || {};
